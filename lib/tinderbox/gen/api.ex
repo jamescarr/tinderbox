@@ -39,10 +39,7 @@ defmodule Tinderbox.Gen.Api do
     igniter
     |> Storage.apply(opts)
     |> mount_json_api(json_api_router, demo_domain)
-    |> Igniter.add_notice(
-      "Next: docker compose up -d --wait && cp .env.example .env && source .env && " <>
-        "mix ash.setup && mix phx.server"
-    )
+    |> Igniter.add_notice(Gen.next_steps(:api, opts))
   end
 
   defp require_phoenix!(igniter) do
@@ -100,27 +97,68 @@ defmodule Tinderbox.Gen.Api do
   # Phoenix resolves module references inside such a scope *relative to that
   # alias* — `forward "/", MyAppWeb.AshJsonApiRouter` would become
   # `MyAppWeb.MyAppWeb.AshJsonApiRouter`.
-  defp mount_json_api(igniter, json_api_router, demo_domain) do
-    {igniter, routers} = Igniter.Libs.Phoenix.list_routers(igniter)
-
-    case routers do
-      [] ->
+  @doc false
+  def mount_json_api(igniter, json_api_router, demo_domain) do
+    case Igniter.Libs.Phoenix.list_routers(igniter) do
+      {igniter, []} ->
         igniter
 
-      routers ->
-        igniter
-        |> add_domain_to_router(json_api_router, demo_domain)
-        |> Igniter.Libs.Phoenix.append_to_scope(
-          "/api",
-          "forward \"/\", #{inspect(json_api_router)}",
-          router: List.first(routers),
-          with_pipelines: [:api],
-          # Appended *after* the installer's `/api/json` scope: `forward "/"` in
-          # a scope matches every path under its prefix, so mounting `/api` first
-          # would make the installer's swagger UI scope unreachable (and the
-          # router would fail to compile with warnings-as-errors).
-          placement: :after
-        )
+      {igniter, [router | _]} ->
+        igniter = add_domain_to_router(igniter, json_api_router, demo_domain)
+        {igniter, mounted?} = mounted?(igniter, router, json_api_router)
+
+        if mounted? do
+          igniter
+        else
+          Igniter.Libs.Phoenix.append_to_scope(
+            igniter,
+            "/api",
+            "forward \"/\", #{inspect(json_api_router)}",
+            router: router,
+            with_pipelines: [:api],
+            # Appended *after* the installer's `/api/json` scope: `forward "/"` in
+            # a scope matches every path under its prefix, so mounting `/api` first
+            # would make the installer's swagger UI scope unreachable (and the
+            # router would fail to compile with warnings-as-errors).
+            placement: :after
+          )
+        end
+    end
+  end
+
+  # True when an alias-free `scope "/api"` already forwards to the router.
+  # `append_to_scope/4` does not look before it adds, so without this a re-run
+  # stacks a second `forward` that can never match — the same
+  # warnings-as-errors failure the ordering above exists to avoid.
+  defp mounted?(igniter, phoenix_router, json_api_router) do
+    case Igniter.Project.Module.find_module(igniter, phoenix_router) do
+      {:ok, {igniter, _source, zipper}} ->
+        found? =
+          with {:ok, zipper} <- Igniter.Code.Common.move_to_do_block(zipper),
+               {:ok, zipper} <-
+                 Igniter.Code.Function.move_to_function_call_in_current_scope(
+                   zipper,
+                   :scope,
+                   [2],
+                   &Igniter.Code.Function.argument_equals?(&1, 0, "/api")
+                 ),
+               {:ok, zipper} <- Igniter.Code.Common.move_to_do_block(zipper),
+               {:ok, _zipper} <-
+                 Igniter.Code.Function.move_to_function_call_in_current_scope(
+                   zipper,
+                   :forward,
+                   2,
+                   &Igniter.Code.Function.argument_equals?(&1, 1, json_api_router)
+                 ) do
+            true
+          else
+            _ -> false
+          end
+
+        {igniter, found?}
+
+      {:error, igniter} ->
+        {igniter, false}
     end
   end
 
@@ -136,9 +174,9 @@ defmodule Tinderbox.Gen.Api do
           with {:ok, zipper} <-
                  Igniter.Code.Module.move_to_use(zipper, ash_json_api_router_plug()),
                {:ok, zipper} <- Igniter.Code.Function.move_to_nth_argument(zipper, 1),
-               {:ok, zipper} <- Igniter.Code.Keyword.get_key(zipper, :domains) do
-            # `prepend_new_to_list/3` already returns `{:ok, zipper} | :error`.
-            Igniter.Code.List.prepend_new_to_list(zipper, domain)
+               {:ok, zipper} <- Igniter.Code.Keyword.get_key(zipper, :domains),
+               {:ok, zipper} <- Igniter.Code.List.prepend_new_to_list(zipper, domain) do
+            {:ok, zipper}
           else
             _ ->
               {:warning,

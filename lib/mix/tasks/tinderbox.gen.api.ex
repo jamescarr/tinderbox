@@ -27,8 +27,8 @@ defmodule Mix.Tasks.Tinderbox.Gen.Api do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix tinderbox.gen.api",
-      schema: [demo: :boolean, yes: :boolean],
-      defaults: [demo: true],
+      schema: [demo: :boolean, yes: :boolean, compose: :boolean, mise: :boolean],
+      defaults: [demo: true, compose: true, mise: true],
       composes: ["ash.install", "ash_postgres.install", "ash_json_api.install"],
       installs: [
         {:ash, "~> 3.33"},

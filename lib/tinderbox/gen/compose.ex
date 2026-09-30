@@ -7,29 +7,37 @@ defmodule Tinderbox.Gen.Compose do
   worker stack needs. The application itself is *not* a compose service: it runs
   on the host under `mix`, so every endpoint is published on `localhost`.
 
-  All file content is rendered from `priv/templates`; this module only computes
-  the assigns. Called by `mix tinderbox.gen.compose`.
+  The compose file is rendered from `priv/templates`; `.env.example` comes from
+  `Tinderbox.Env`, the same data `Tinderbox.Gen.Mise` puts in `.mise.toml`.
+  `.env` is added to `.gitignore` because it is the copy developers edit.
+  Called by `mix tinderbox.gen.compose`.
   """
 
   alias Tinderbox.Broker
+  alias Tinderbox.Env
   alias Tinderbox.Gen
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do
     app = Igniter.Project.Application.app_name(igniter)
-    app_dash = Broker.app_dash(app)
     broker = Broker.parse!(Keyword.get(opts, :broker) || "sqs")
+    db? = Keyword.get(opts, :db, true)
 
     assigns = [
       app: app,
-      app_dash: app_dash,
-      module: Igniter.Project.Module.module_name_prefix(igniter),
-      stack: Keyword.get(opts, :stack, "api"),
-      broker: broker,
-      broker_env: Broker.env_block(broker, app_dash),
-      db?: Keyword.get(opts, :db, true),
+      app_dash: Broker.app_dash(app),
+      db?: db?,
       extra_service: List.first(Broker.compose_services(broker))
     ]
+
+    env =
+      Env.sections(
+        app: app,
+        module: Igniter.Project.Module.module_name_prefix(igniter),
+        stack: Keyword.get(opts, :stack, "api"),
+        broker: broker,
+        db?: db?
+      )
 
     igniter
     |> Igniter.copy_template(
@@ -37,6 +45,7 @@ defmodule Tinderbox.Gen.Compose do
       "docker-compose.yml",
       assigns
     )
-    |> Igniter.copy_template(Gen.template_path("env.example.eex"), ".env.example", assigns)
+    |> Igniter.create_new_file(".env.example", Env.dotenv(env))
+    |> Gen.ignore([".env"])
   end
 end

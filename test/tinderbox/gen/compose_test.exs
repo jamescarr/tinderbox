@@ -53,6 +53,33 @@ defmodule Tinderbox.Gen.ComposeTest do
     refute content =~ "redpanda"
   end
 
+  test "a running service waits for every bootstrap job to complete, so `up --wait` exits 0" do
+    # Compose fails `up --wait` when a job container merely exits (even with
+    # status 0) unless a running service depends on it completing.
+    for broker <- [:sqs, :pubsub, :rabbitmq, :kafka] do
+      compose = compose_content(broker)
+      jobs = ~r/^  ([a-z-]+-bootstrap):$/m |> Regex.scan(compose) |> Enum.map(&List.last/1)
+
+      ready =
+        compose
+        |> String.split("\n  ready:\n", parts: 2)
+        |> List.last()
+        |> String.split(~r/^volumes:/m, parts: 2)
+        |> hd()
+
+      assert "aws-bootstrap" in jobs and "gcp-bootstrap" in jobs
+      assert ready =~ ~s(entrypoint: ["sleep", "infinity"]), "#{broker}: ready must stay up"
+
+      for job <- jobs do
+        assert ready =~ ~r/#{job}:\s+condition: service_completed_successfully/,
+               "#{broker}: nothing waits for #{job}"
+      end
+    end
+
+    assert compose_content(:kafka) =~ "redpanda-bootstrap:\n    image"
+    refute compose_content(:sqs) =~ "redpanda-bootstrap"
+  end
+
   test "postgres is generated unless --no-db" do
     assert compose_content(:sqs) =~ "postgres:17-alpine"
 
@@ -83,6 +110,26 @@ defmodule Tinderbox.Gen.ComposeTest do
     assert env =~ "STORAGE_BACKEND=s3"
     assert env =~ "Test.Storage"
     assert env =~ "GCS_BUCKET=test-local"
+  end
+
+  test ".env.example exports every variable, so a plain `source` reaches mix" do
+    env = compose_content(:sqs, stack: "worker", path: ".env.example")
+
+    assignments =
+      env
+      |> String.split("\n")
+      |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+
+    assert assignments != []
+    assert Enum.all?(assignments, &String.starts_with?(&1, "export "))
+    assert env =~ "export HEALTH_PORT=4001"
+  end
+
+  test "keeps the developer's .env out of git, and leaves .env.example tracked" do
+    gitignore = source(compose(:sqs), ".gitignore")
+
+    assert gitignore =~ ~r/^\.env$/m
+    refute gitignore =~ ".env.example"
   end
 
   test "raises on an unknown broker" do

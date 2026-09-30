@@ -7,7 +7,7 @@ name: <%= @app %>
 # host-side app needs. See https://floci.io.
 #
 #   docker compose up -d --wait
-#   cp .env.example .env && source .env
+#   cp .env.example .env && . ./.env   # every line is exported; mise users get the same from .mise.toml
 #   mix ash.setup
 
 services:
@@ -126,6 +126,22 @@ services:
       - |
         rpk topic create <%= @app_dash %>-inbound -X brokers=redpanda:9092 || true
         rpk topic create <%= @app_dash %>-outbound -X brokers=redpanda:9092 || true
+<% end %>
+  # Stays up once every bootstrap job above has finished. Compose fails
+  # `up --wait` when a job container merely exits, even with status 0, unless a
+  # running service depends on it completing: this is that service. It also means
+  # `docker compose up -d --wait` returns only after the queues, topics and
+  # buckets exist.
+  ready:
+    image: curlimages/curl:8.10.1
+    entrypoint: ["sleep", "infinity"]
+    depends_on:
+      aws-bootstrap:
+        condition: service_completed_successfully
+      gcp-bootstrap:
+        condition: service_completed_successfully
+<%= if @extra_service == :redpanda do %>      redpanda-bootstrap:
+        condition: service_completed_successfully
 <% end %>
 volumes:
 <%= if @db? do %>  pgdata:

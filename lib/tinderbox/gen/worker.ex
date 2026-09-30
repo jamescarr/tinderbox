@@ -49,7 +49,7 @@ defmodule Tinderbox.Gen.Worker do
     |> add_modules(assigns)
     |> add_children(assigns)
     |> add_runtime_config(assigns)
-    |> add_notices(broker)
+    |> add_notices(opts, broker)
   end
 
   defp add_inbox(igniter, assigns) do
@@ -174,12 +174,9 @@ defmodule Tinderbox.Gen.Worker do
     )
   end
 
-  defp add_notices(igniter, broker) do
+  defp add_notices(igniter, opts, broker) do
     igniter
-    |> Igniter.add_notice(
-      "Next: docker compose up -d --wait && cp .env.example .env && source .env && " <>
-        "mix ash.setup && mix run --no-halt   (health: curl localhost:4001/health)"
-    )
+    |> Igniter.add_notice(Gen.next_steps(:worker, opts))
     |> maybe_add_kafka_notice(broker)
   end
 

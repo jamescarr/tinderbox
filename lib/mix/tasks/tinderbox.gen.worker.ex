@@ -28,8 +28,8 @@ defmodule Mix.Tasks.Tinderbox.Gen.Worker do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix tinderbox.gen.worker --broker sqs",
-      schema: [broker: :string, yes: :boolean],
-      defaults: [broker: "sqs"],
+      schema: [broker: :string, yes: :boolean, compose: :boolean, mise: :boolean],
+      defaults: [broker: "sqs", compose: true, mise: true],
       composes: ["ash.install", "ash_postgres.install"],
       installs:
         [

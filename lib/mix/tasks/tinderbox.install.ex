@@ -22,6 +22,7 @@ defmodule Mix.Tasks.Tinderbox.Install do
     (`tinderbox.gen.api` / `tinderbox.gen.worker`).
   * `--broker sqs|pubsub|rabbitmq|kafka` is passed to the worker generator.
   * `--no-compose` skips `docker-compose.yml` / `.env.example`.
+  * `--no-mise` skips `.mise.toml` (toolchain pins, environment, dev-loop tasks).
   * `--no-demo` skips the API stack's demo domain and resource.
 
   Because only one stack is generated per project, the dependency list and the
@@ -39,8 +40,8 @@ defmodule Mix.Tasks.Tinderbox.Install do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix igniter.install tinderbox --stack worker --broker sqs",
-      schema: [stack: :string, broker: :string, compose: :boolean, demo: :boolean],
-      defaults: [broker: "sqs", compose: true, demo: true],
+      schema: [stack: :string, broker: :string, compose: :boolean, mise: :boolean, demo: :boolean],
+      defaults: [broker: "sqs", compose: true, mise: true, demo: true],
       required: [:stack],
       # Keep the template out of the generated app's runtime dependencies.
       only: [:dev, :test],
@@ -63,13 +64,25 @@ defmodule Mix.Tasks.Tinderbox.Install do
         other -> Mix.raise(~s|Unknown --stack #{inspect(other)}. Must be "api" or "worker".|)
       end
 
-    if opts[:compose] do
-      Igniter.compose_task(igniter, "tinderbox.gen.compose", [
-        "--stack",
-        opts[:stack],
-        "--broker",
-        opts[:broker] || "sqs"
-      ])
+    igniter =
+      if opts[:compose] do
+        Igniter.compose_task(igniter, "tinderbox.gen.compose", [
+          "--stack",
+          opts[:stack],
+          "--broker",
+          opts[:broker] || "sqs"
+        ])
+      else
+        igniter
+      end
+
+    if opts[:mise] do
+      Igniter.compose_task(
+        igniter,
+        "tinderbox.gen.mise",
+        ["--stack", opts[:stack], "--broker", opts[:broker] || "sqs"] ++
+          if(opts[:compose], do: [], else: ["--no-compose"])
+      )
     else
       igniter
     end
@@ -78,8 +91,11 @@ defmodule Mix.Tasks.Tinderbox.Install do
   # `info/2` runs before igniter parses the options, and igniter merges the
   # `composes:` schemas (and their `installs:`) before any task runs — so the
   # stack has to be read from argv to keep the two stacks' dependencies apart.
-  defp composes("api"), do: ["tinderbox.gen.api", "tinderbox.gen.compose"]
-  defp composes("worker"), do: ["tinderbox.gen.worker", "tinderbox.gen.compose"]
+  defp composes("api"), do: ["tinderbox.gen.api", "tinderbox.gen.compose", "tinderbox.gen.mise"]
+
+  defp composes("worker"),
+    do: ["tinderbox.gen.worker", "tinderbox.gen.compose", "tinderbox.gen.mise"]
+
   defp composes(_missing_or_unknown), do: []
 
   defp flag_value(argv, name) do

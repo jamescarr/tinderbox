@@ -131,9 +131,26 @@ defmodule Tinderbox.Gen.WorkerTest do
              order(pipeline, "Publisher.publish(result")
   end
 
-  test "notices describe how to run the worker, and kafka warns about cmake" do
-    assert_has_notice(worker(:sqs), &(&1 =~ "mix run --no-halt"))
-    assert_has_notice(worker(:sqs), &(&1 =~ "docker compose up"))
+  test "the notice is mise-first by default and health is a mise task" do
+    igniter = worker(:sqs)
+
+    assert_has_notice(igniter, &(&1 =~ "mise trust && mise run dev"))
+    assert_has_notice(igniter, &(&1 =~ "mix run --no-halt"))
+    assert_has_notice(igniter, &(&1 =~ "mise run health"))
+  end
+
+  test "without mise the notice spells out docker compose, a sourced .env and the server" do
+    igniter = Worker.apply(test_project(), broker: :sqs, mise: false)
+
+    assert_has_notice(
+      igniter,
+      &(&1 =~ "docker compose up -d --wait && cp .env.example .env && . ./.env && mix ash.setup")
+    )
+
+    refute Enum.any?(igniter.notices, &(&1 =~ "mise"))
+  end
+
+  test "kafka warns about cmake" do
     assert_has_notice(worker(:kafka), &(&1 =~ "CMake"))
   end
 

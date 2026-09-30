@@ -1,8 +1,11 @@
 # tinderbox
 
-Igniter template for two Elixir stacks. Point it at a fresh project with
-`mix igniter.new` and it scaffolds the stack, its emulator-backed `docker-compose.yml`,
-and the `.env.example` those services need.
+A tinderbox holds what you need to start a fire; this one holds what an Igniter
+needs to catch. It is an [Igniter](https://hexdocs.pm/igniter) template: point
+`mix igniter.new` at it and it scaffolds one of two Elixir stacks, plus the local
+tooling to run it — an emulator-backed `docker-compose.yml`, the environment those
+services need, and a `.mise.toml` that pins the toolchain and gives you the
+dev-loop tasks.
 
 1. **API stack** — Phoenix API-only + Ash + AshPostgres + AshJsonApi + AshPhoenix,
    with a working JSON:API resource reachable at `/api`.
@@ -40,14 +43,25 @@ mix igniter.new my_worker --sup \
   --stack worker --broker sqs
 ```
 
-Then, in the generated project:
+### Running a generated project
+
+With [mise](https://mise.jdx.dev) (the default):
+
+```bash
+mise trust && mise install   # once: allow .mise.toml, install Elixir + Erlang
+mise run dev                 # start the services, set up the database, run the app
+```
+
+`mise run dev` is `up` → `setup` → `mix phx.server` (API, `http://localhost:4000/api`)
+or `mix run --no-halt` (worker, `http://localhost:4001/health`).
+
+Without mise:
 
 ```bash
 docker compose up -d --wait
-cp .env.example .env && source .env
-mix ash.setup        # codegen + migrate + seed
-mix phx.server       # api:  JSON:API on http://localhost:4000/api
-mix run --no-halt    # worker: health on http://localhost:4001/health
+cp .env.example .env && . ./.env   # every line is exported; no `set -a` needed
+mix ash.setup
+mix phx.server                     # or: mix run --no-halt
 ```
 
 ### Flags
@@ -57,12 +71,56 @@ mix run --no-halt    # worker: health on http://localhost:4001/health
 | `--stack api\|worker` | installer | — (required) | which stack to generate |
 | `--broker sqs\|pubsub\|rabbitmq\|kafka` | worker | `sqs` | messaging technology for both the inbound consumer and the outbound publisher |
 | `--no-compose` | both | compose generated | skip `docker-compose.yml` / `.env.example` |
+| `--no-mise` | both | mise generated | skip `.mise.toml` |
 | `--no-demo` | api | demo generated | skip the demo `Catalog` domain + `Catalog.Item` resource |
-| `--no-db` | `tinderbox.gen.compose` | Postgres service | skip the Postgres service and `DATABASE_URL` |
+| `--no-db` | `tinderbox.gen.compose`, `tinderbox.gen.mise` | Postgres service | skip the Postgres service and `DATABASE_URL` |
 
-The individual tasks can be re-run in an existing project (`mix tinderbox.gen.compose
---stack worker --broker kafka`); each one guards its edits, so re-running is a no-op
-except for module creation, which errors rather than silently clobbering a file.
+The individual tasks (`tinderbox.gen.api`, `.worker`, `.compose`, `.mise`) can be
+re-run in an existing project. Re-running fails on the files a task *creates* —
+compose, `.env.example`, `.mise.toml`, generated modules — rather than overwriting
+them. The edits it makes to files that already exist are guarded and not applied
+twice: dependencies, `config/runtime.exs`, `ash_domains`, the supervisor children,
+`.gitignore`, and the `/api` mount in the router.
+
+## mise: toolchain, environment, tasks
+
+Generated projects carry a `.mise.toml` (skip it with `--no-mise`):
+
+* **`[tools]`** — Elixir `1.20.4-otp-29` and Erlang `29.1`, the pins ankusa uses (a
+  test keeps them equal to this package's own `.mise.toml`). The Kafka worker also
+  pins CMake, because `brod`'s `crc32cer` NIF is built from source.
+* **`[env]`** — the local environment: the emulator endpoints, `STORAGE_BACKEND`, and
+  for the worker `HEALTH_PORT` plus the broker's variables. `.env.example` is rendered
+  from the same data, so the two cannot drift.
+* **`[tasks.*]`**:
+
+| Task | Does |
+|---|---|
+| `mise run up` | `docker compose up -d --wait` — returns once Postgres, the emulators and the bootstrap jobs are done |
+| `mise run down` | `docker compose down` |
+| `mise run setup` | `up`, then `mix deps.get` and `mix ash.setup` |
+| `mise run dev` | `setup`, then the app |
+| `mise run test` | `up`, then `mix test` |
+| `mise run check` | `up`, then `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test` |
+| `mise run health` | worker only: `curl` the health endpoint on `$HEALTH_PORT` |
+
+`--no-compose` leaves out `up`/`down` and the `depends` on them.
+
+Tasks are inline tables, not `.mise/tasks/*` files: a file task has to be executable,
+which files an igniter writes are not, and mise does not list a non-executable file
+task until it has been run once.
+
+**Machine-specific overrides** go in `.mise.local.toml` (gitignored; mise layers it
+over `.mise.toml`). For example, when something else owns the default ports:
+
+```toml
+[env]
+HEALTH_PORT = "4022"   # the worker reads it in config/runtime.exs
+PORT = "4111"          # phx.new's runtime.exs reads it for the API
+```
+
+`DATABASE_URL` and `POOL_SIZE` are read by `MIX_ENV=prod` runs only; dev and test
+take their Postgres settings from `config/dev.exs` and `config/test.exs`.
 
 ## What gets generated
 
@@ -74,8 +132,9 @@ except for module creation, which errors rather than silently clobbering a file.
 * `<App>.Catalog` + `<App>.Catalog.Item` — demo domain and resource (`items` table,
   unique `sku`), registered in `config :<app>, ash_domains:` and in the router's
   `domains:` list.
-* `<App>Web.Router` — the AshJsonApi router is additionally mounted on the generated
-  `scope "/api"`, so `POST/GET/PATCH/DELETE /api/items` speak JSON:API.
+* `<App>Web.Router` — the AshJsonApi router is additionally mounted in an alias-free
+  `scope "/api"` placed after the installer's `/api/json` scope, so
+  `POST/GET/PATCH/DELETE /api/items` speak JSON:API and swagger stays reachable.
 * `<App>.Storage` + the `:ex_aws`/`:storage` runtime config.
 
 ### Worker stack (`mix tinderbox.gen.worker`)
@@ -102,12 +161,18 @@ except for module creation, which errors rather than silently clobbering a file.
   GCS + Pub/Sub) and their bootstrap jobs, plus RabbitMQ or Redpanda for those
   brokers. The app itself runs on the host, so `FLOCI_HOSTNAME` is deliberately
   unset: Floci then embeds `localhost` in the SQS queue URLs and pre-signed URLs.
-* `.env.example` — `DATABASE_URL`, the emulator endpoints, `STORAGE_BACKEND`, and the
-  broker block (`HEALTH_PORT` for the worker).
+  A `ready` service depends on every bootstrap job completing: compose fails
+  `up --wait` when a job merely exits, even with status 0, unless a running service
+  is waiting for it.
+* `.env.example` — the same variables as `[env]`, every line `export`ed.
+* `.mise.toml` — see above.
+* `.gitignore` — gains `.env` and `.mise.local.toml`.
 * `config/runtime.exs` — appended, *outside* the `if config_env() == :prod` block, so
   it applies in every environment: `:ex_aws` (with the `AWS_ENDPOINT_URL` host/port
   override and `ExAws.Request.Req` as the HTTP client, which keeps hackney out),
-  `:storage`, and — for the worker — `:pipeline` and `:health_port`.
+  `:storage`, and — for the worker — `:pipeline` and `:health_port`. Every value has
+  the compose default, so mix tasks that load it (`ash.codegen`, `ash.setup`, `test`)
+  work before any environment is loaded.
 
 ## Broker matrix
 
@@ -130,24 +195,27 @@ Notes per broker:
   outbound queue and their binding, and publishes with confirms, so `:ok` means
   RabbitMQ persisted the message.
 * **kafka** — `broadway_kafka` builds brod's `crc32cer` NIF from source, so CMake
-  >= 3.16 must be on `PATH` to compile it.
+  >= 3.16 is needed to compile it (mise installs it for you).
 
 ## Tests
 
 ```bash
-mix test
+mise run check    # format, warnings-as-errors compile, tests
 ```
 
 The generators are exercised through `Igniter.Test.test_project/1` against the
-`Tinderbox.Gen.*` modules directly — the Mix tasks are thin shells, and a test
-project cannot fetch the packages declared in `installs:`.
+`Tinderbox.Gen.*` modules, and `mix tinderbox.install` is composed against a test
+project to cover flag handling and the files and notices each flag combination
+produces. What a test project cannot do is fetch the packages the tasks declare in
+`installs:`.
 
 Beyond that, generated projects were run end to end against the emulators:
 
-* **worker / sqs** — `docker compose up -d --wait`, `mix ash.setup`, `mix run --no-halt`,
+* **worker / sqs, through mise** — `mise run dev` (up → setup → run) came up healthy;
   a message sent to the inbound queue came out of the outbound queue with
   `processed_at` added; re-sending the same body produced **no** second message and
-  left `inbox_messages` at one row (`mix ash.setup` output, `/health` 200).
+  left `inbox_messages` at one row. Overriding `HEALTH_PORT` in `.mise.local.toml`
+  moved the app to the new port, and `mise run check` passed.
 * **storage** — `STORAGE_BACKEND=s3` round-trips through Floci (`aws s3 ls` sees the
   object) and `STORAGE_BACKEND=gcs` through floci-gcp; a missing key is
   `{:error, :not_found}` on both.
@@ -159,6 +227,6 @@ Beyond that, generated projects were run end to end against the emulators:
   `demo-pubsub-inbound` on floci-gcp and published the transformed payload (plus
   its `message_id` attribute) to `demo-pubsub-outbound`.
 
-Note for machines where 5432 is already taken: the generated `docker-compose.yml`
-publishes Postgres on 5432; override the host port (and the dev `port:` in
-`config/dev.exs`) if something else owns it.
+If something else already owns 5432 on your machine, override the Postgres host port
+in a `docker-compose.override.yml` (`ports: !override ["5455:5432"]`) and set the same
+`port:` in `config/dev.exs` and `config/test.exs`.

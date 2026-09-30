@@ -1,3 +1,18 @@
+# Toolchain and tasks for tinderbox. https://mise.jdx.dev
+#   mise trust && mise install
+#   mise run check        # what CI should run
+#
+# The Elixir/Erlang pins follow ankusa's, and are what the projects tinderbox
+# generates pin too (Tinderbox.Gen.Mise.versions/0; a test keeps them in sync).
+
 [tools]
 elixir = "1.20.4-otp-29"
 erlang = "29.1"
+
+[tasks.test]
+description = "Run the unit tests"
+run = "mix test"
+
+[tasks.check]
+description = "What CI should run: formatting, warnings-as-errors compile, tests"
+run = ["mix format --check-formatted", "mix compile --warnings-as-errors", "mix test"]

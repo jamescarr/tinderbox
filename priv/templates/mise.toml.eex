@@ -1,0 +1,50 @@
+# <%= @app %>: toolchain, local environment and tasks, managed by mise (https://mise.jdx.dev).
+#
+#   mise trust      # once: let mise load this file
+#   mise install    # the toolchain below
+#   mise run dev    # <%= @dev_summary %>
+#   mise tasks      # everything else
+#
+# Machine-specific overrides go in .mise.local.toml (gitignored); mise layers it
+# over this file.
+
+[tools]
+elixir = "<%= @elixir %>"
+erlang = "<%= @erlang %>"
+<%= if @cmake? do %># broadway_kafka builds brod's crc32cer NIF from source, which needs CMake >= 3.16.
+cmake = "<%= @cmake %>"
+<% end %>
+[env]
+<%= @env %>
+<%= if @compose? do %>[tasks.up]
+description = "Start the backing services (docker compose) and wait until they are healthy"
+run = "docker compose up -d --wait"
+
+[tasks.down]
+description = "Stop the backing services"
+run = "docker compose down"
+
+<% end %>[tasks.setup]
+description = "Fetch dependencies, then create and migrate the database"
+<%= if @compose? do %>depends = ["up"]
+<% end %>run = ["mix deps.get", "mix ash.setup"]
+
+[tasks.dev]
+description = "<%= @dev_description %>"
+depends = ["setup"]
+run = "<%= @serve %>"
+
+[tasks.test]
+description = "Run the test suite"
+<%= if @compose? do %>depends = ["up"]
+<% end %>run = "mix test"
+
+[tasks.check]
+description = "What CI should run: formatting, warnings-as-errors compile, tests"
+<%= if @compose? do %>depends = ["up"]
+<% end %>run = ["mix format --check-formatted", "mix compile --warnings-as-errors", "mix test"]
+<%= if @worker? do %>
+[tasks.health]
+description = "Check the worker's health endpoint"
+run = "curl -fsS http://localhost:$HEALTH_PORT/health"
+<% end %>
