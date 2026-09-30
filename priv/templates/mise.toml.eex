@@ -8,6 +8,7 @@
 # Machine-specific overrides go in .mise.local.toml (gitignored); mise layers it
 # over this file.
 
+# Keep these in step with the `elixir:` requirement in mix.exs.
 [tools]
 elixir = "<%= @elixir %>"
 erlang = "<%= @erlang %>"

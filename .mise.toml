@@ -2,8 +2,9 @@
 #   mise trust && mise install
 #   mise run check        # what CI should run
 #
-# The Elixir/Erlang pins follow ankusa's, and are what the projects tinderbox
-# generates pin too (Tinderbox.Gen.Mise.versions/0; a test keeps them in sync).
+# The Elixir/Erlang pins follow ankusa's. Generated projects pin the toolchain that
+# runs the generator instead (Tinderbox.Toolchain); its fallback for dev and
+# pre-release builds is the pair this package was last verified with.
 
 [tools]
 elixir = "1.20.4-otp-29"

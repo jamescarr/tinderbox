@@ -3,8 +3,9 @@ defmodule Tinderbox.Gen.Mise do
   Generates `.mise.toml` for a stack: the pinned toolchain, the local environment
   and the dev-loop tasks.
 
-  * `[tools]` — Elixir and Erlang (plus CMake for the Kafka worker, whose `brod`
-    dependency builds a NIF from source).
+  * `[tools]` — Elixir and Erlang, pinned to the toolchain running the generator
+    (see `Tinderbox.Toolchain`), plus CMake for the Kafka worker, whose `brod`
+    dependency builds a NIF from source.
   * `[env]` — the same values as `.env.example`; both come from `Tinderbox.Env`.
   * `[tasks.*]` — `up`, `down`, `setup`, `dev`, `test`, `check`, and `health` for
     the worker. They are inline tables rather than `.mise/tasks/*` files because a
@@ -20,15 +21,7 @@ defmodule Tinderbox.Gen.Mise do
   alias Tinderbox.Broker
   alias Tinderbox.Env
   alias Tinderbox.Gen
-
-  # Elixir and Erlang mirror this package's own `.mise.toml` (a test keeps the two
-  # in sync), which follows the pins ankusa uses. CMake is what ankusa pins for
-  # the same brod NIF.
-  @versions %{elixir: "1.20.4-otp-29", erlang: "29.1", cmake: "4.4.3"}
-
-  @doc "The tool versions written to `[tools]`."
-  @spec versions() :: %{elixir: String.t(), erlang: String.t(), cmake: String.t()}
-  def versions, do: @versions
+  alias Tinderbox.Toolchain
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do
@@ -37,6 +30,11 @@ defmodule Tinderbox.Gen.Mise do
     broker = Broker.parse!(Keyword.get(opts, :broker) || "sqs")
     compose? = Keyword.get(opts, :compose, true)
     worker? = stack == "worker"
+
+    # `opts[:vm]` stands in for the running VM (a `t:Tinderbox.Toolchain.vm/0`): it is
+    # how tests generate "as if" on another Elixir/OTP. The Mix task never sets it.
+    vm = Keyword.get_lazy(opts, :vm, &Toolchain.detect/0)
+    {source, pins} = Toolchain.pins(vm)
 
     env =
       Env.sections(
@@ -51,9 +49,9 @@ defmodule Tinderbox.Gen.Mise do
 
     assigns = [
       app: app,
-      elixir: @versions.elixir,
-      erlang: @versions.erlang,
-      cmake: @versions.cmake,
+      elixir: pins.elixir,
+      erlang: pins.erlang,
+      cmake: Toolchain.cmake(),
       cmake?: worker? and broker == :kafka,
       compose?: compose?,
       worker?: worker?,
@@ -72,6 +70,19 @@ defmodule Tinderbox.Gen.Mise do
     igniter
     |> Igniter.create_new_file(".mise.toml", content)
     |> Gen.ignore([".mise.local.toml"])
+    |> add_fallback_notice(source, vm, pins)
+  end
+
+  defp add_fallback_notice(igniter, :running, _vm, _pins), do: igniter
+
+  defp add_fallback_notice(igniter, :fallback, vm, pins) do
+    Igniter.add_notice(
+      igniter,
+      "Elixir #{vm.elixir} is a dev or pre-release build, which mise has no version for, " <>
+        "so .mise.toml pins Elixir #{pins.elixir} and Erlang #{pins.erlang}, the toolchain " <>
+        "this package was verified with. Edit [tools] to match the `elixir:` requirement " <>
+        "in mix.exs."
+    )
   end
 
   defp dev_summary(true, serve), do: "up + setup + #{serve}"

@@ -86,9 +86,15 @@ twice: dependencies, `config/runtime.exs`, `ash_domains`, the supervisor childre
 
 Generated projects carry a `.mise.toml` (skip it with `--no-mise`):
 
-* **`[tools]`** — Elixir `1.20.4-otp-29` and Erlang `29.1`, the pins ankusa uses (a
-  test keeps them equal to this package's own `.mise.toml`). The Kafka worker also
-  pins CMake, because `brod`'s `crc32cer` NIF is built from source.
+* **`[tools]`** — Elixir and Erlang, pinned to the toolchain that ran the generator (for
+  example `1.20.4-otp-29` and `29.1`). `mix new` writes the running Elixir's
+  major.minor into `mix.exs` as its `elixir:` requirement, so a fixed pin would make
+  `mise run dev` fail Mix's version check for anyone generating on another release
+  (`phx.new` writes a fixed lower bound, which any newer Elixir satisfies). A dev or
+  pre-release Elixir has no mise version: the pins then fall back to the pair this
+  package was verified with, `1.20.4-otp-29` and `29.1`, and the generator prints a
+  notice. The Kafka worker also pins CMake, because `brod`'s `crc32cer` NIF is built
+  from source.
 * **`[env]`** — the local environment: the emulator endpoints, `STORAGE_BACKEND`, and
   for the worker `HEALTH_PORT` plus the broker's variables. `.env.example` is rendered
   from the same data, so the two cannot drift.
@@ -163,7 +169,8 @@ take their Postgres settings from `config/dev.exs` and `config/test.exs`.
   unset: Floci then embeds `localhost` in the SQS queue URLs and pre-signed URLs.
   A `ready` service depends on every bootstrap job completing: compose fails
   `up --wait` when a job merely exits, even with status 0, unless a running service
-  is waiting for it.
+  is waiting for it. It runs under an init, because `sleep` as PID 1 ignores SIGTERM
+  and `docker compose down` would otherwise wait out Docker's 10 s stop timeout.
 * `.env.example` — the same variables as `[env]`, every line `export`ed.
 * `.mise.toml` — see above.
 * `.gitignore` — gains `.env` and `.mise.local.toml`.

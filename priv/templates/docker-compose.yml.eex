@@ -134,6 +134,9 @@ services:
   # buckets exist.
   ready:
     image: curlimages/curl:8.10.1
+    # `sleep` as PID 1 ignores SIGTERM, so without an init `docker compose down`
+    # sits out Docker's 10s stop timeout (measured: 10.4s, vs 0.3s with `init`).
+    init: true
     entrypoint: ["sleep", "infinity"]
     depends_on:
       aws-bootstrap:

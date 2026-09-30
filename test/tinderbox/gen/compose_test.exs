@@ -70,6 +70,10 @@ defmodule Tinderbox.Gen.ComposeTest do
       assert "aws-bootstrap" in jobs and "gcp-bootstrap" in jobs
       assert ready =~ ~s(entrypoint: ["sleep", "infinity"]), "#{broker}: ready must stay up"
 
+      # `sleep` as PID 1 ignores SIGTERM: without an init, `docker compose down`
+      # waits out Docker's 10s stop timeout (measured 10.4s vs 0.3s).
+      assert ready =~ "init: true", "#{broker}: ready needs an init to stop promptly"
+
       for job <- jobs do
         assert ready =~ ~r/#{job}:\s+condition: service_completed_successfully/,
                "#{broker}: nothing waits for #{job}"
