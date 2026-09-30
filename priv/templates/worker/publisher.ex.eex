@@ -1,0 +1,69 @@
+@moduledoc """
+Publishes processed messages to the outbound <%= @broker %> endpoint named by
+`config :<%= @app %>, :pipeline`.
+
+Errors are returned to the caller, which fails the Broadway message so the
+broker's redelivery policy applies.
+"""
+
+@doc """
+Publishes `payload`. `opts[:message_id]` is the idempotency key of the inbound
+message, carried along where the <%= @broker %> API supports it.
+"""
+@spec publish(map(), keyword()) :: :ok | {:error, term()}
+def publish(payload, opts \\ []), do: do_publish(payload, opts)
+
+<%= case @broker do %>
+<% :sqs -> %>defp do_publish(payload, _opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+
+  case ExAws.SQS.send_message(config[:publish_queue_url], Jason.encode!(payload))
+       |> ExAws.request() do
+    {:ok, _response} -> :ok
+    {:error, reason} -> {:error, reason}
+  end
+end
+<% :pubsub -> %>defp do_publish(payload, opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+  url = "#{config[:base_url]}/v1/projects/#{config[:project_id]}/topics/#{config[:topic]}:publish"
+
+  attributes =
+    case opts[:message_id] do
+      nil -> %{}
+      message_id -> %{"message_id" => message_id}
+    end
+
+  message = %{
+    data: Base.encode64(Jason.encode!(payload)),
+    attributes: attributes
+  }
+
+  case Req.post(url,
+         json: %{messages: [message]},
+         headers: [authorization: "Bearer #{config[:token]}"]
+       ) do
+    {:ok, %{status: 200}} -> :ok
+    {:ok, %{status: status, body: body}} -> {:error, {:pubsub, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end
+<% :rabbitmq -> %>defp do_publish(payload, _opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+
+  <%= inspect(@connection) %>.publish(config[:routing_key], Jason.encode!(payload))
+end
+<% :kafka -> %>defp do_publish(payload, opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+
+  case :brod.produce_sync(
+         <%= inspect(@kafka_client) %>.client(),
+         config[:producer_topic],
+         :hash,
+         opts[:message_id] || "",
+         Jason.encode!(payload)
+       ) do
+    :ok -> :ok
+    {:error, reason} -> {:error, reason}
+  end
+end
+<% end %>

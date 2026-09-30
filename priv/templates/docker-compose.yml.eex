@@ -1,0 +1,133 @@
+name: <%= @app %>
+
+# Backing services for local development. The application runs on the host
+# (`mix phx.server` / `mix run --no-halt`), so every endpoint is published on
+# localhost. FLOCI_HOSTNAME is intentionally unset: Floci then embeds
+# `localhost` in generated SQS queue URLs and pre-signed URLs, which is what a
+# host-side app needs. See https://floci.io.
+#
+#   docker compose up -d --wait
+#   cp .env.example .env && source .env
+#   mix ash.setup
+
+services:
+<%= if @db? do %>  postgres:
+    image: postgres:17-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: <%= @app %>_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+<% end %>  # AWS emulator: S3 + SQS.
+  floci:
+    image: floci/floci:latest
+    ports:
+      - "4566:4566"
+    environment:
+      FLOCI_DEFAULT_REGION: us-east-1
+      FLOCI_STORAGE_MODE: persistent
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+    volumes:
+      - floci-data:/app/data
+
+  # GCP emulator: GCS + Pub/Sub.
+  floci-gcp:
+    image: floci/floci-gcp:latest
+    ports:
+      - "4588:4588"
+    environment:
+      FLOCI_GCP_DEFAULT_PROJECT_ID: floci-local
+      FLOCI_GCP_STORAGE_MODE: hybrid
+      FLOCI_GCP_STORAGE_PERSISTENT_PATH: /app/data
+    volumes:
+      - floci-gcp-data:/app/data
+
+  # Creates the S3 bucket and the two SQS queues. Idempotent; runs to completion.
+  aws-bootstrap:
+    image: amazon/aws-cli:2.17.62
+    depends_on: [floci]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://floci:4566
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until aws s3 ls >/dev/null 2>&1; do echo "waiting for floci..."; sleep 1; done
+        aws s3 mb s3://<%= @app_dash %>-local || true
+        aws sqs create-queue --queue-name <%= @app_dash %>-inbound || true
+        aws sqs create-queue --queue-name <%= @app_dash %>-outbound || true
+        echo "floci bootstrap done"
+
+  # Creates the GCS bucket, the Pub/Sub topics and the inbound subscription.
+  gcp-bootstrap:
+    image: curlimages/curl:8.10.1
+    depends_on: [floci-gcp]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until curl -sf http://floci-gcp:4588/health >/dev/null 2>&1; do echo "waiting for floci-gcp..."; sleep 1; done
+        curl -sf -X POST "http://floci-gcp:4588/storage/v1/b?project=floci-local" \
+          -H 'Content-Type: application/json' -d '{"name":"<%= @app_dash %>-local"}' || true
+        curl -sf -X PUT "http://floci-gcp:4588/v1/projects/floci-local/topics/<%= @app_dash %>-inbound" \
+          -H 'Content-Type: application/json' -d '{}' || true
+        curl -sf -X PUT "http://floci-gcp:4588/v1/projects/floci-local/topics/<%= @app_dash %>-outbound" \
+          -H 'Content-Type: application/json' -d '{}' || true
+        curl -sf -X PUT "http://floci-gcp:4588/v1/projects/floci-local/subscriptions/<%= @app_dash %>-inbound-sub" \
+          -H 'Content-Type: application/json' \
+          -d '{"topic":"projects/floci-local/topics/<%= @app_dash %>-inbound","ackDeadlineSeconds":30}' || true
+        echo "floci-gcp bootstrap done"
+<%= if @extra_service == :rabbitmq do %>
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # management UI, http://localhost:15672 (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+<% end %><%= if @extra_service == :redpanda do %>
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redpanda-bootstrap:
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.3
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rpk topic create <%= @app_dash %>-inbound -X brokers=redpanda:9092 || true
+        rpk topic create <%= @app_dash %>-outbound -X brokers=redpanda:9092 || true
+<% end %>
+volumes:
+<%= if @db? do %>  pgdata:
+<% end %>  floci-data:
+  floci-gcp-data:

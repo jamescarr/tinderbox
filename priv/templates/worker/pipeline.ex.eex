@@ -1,0 +1,179 @@
+@moduledoc """
+Broadway pipeline: consume from the inbound <%= @broker %> endpoint, record the
+message id in the idempotency store, and publish the transformed payload to the
+outbound endpoint.
+
+Failure handling: a message is acked when it was processed, was already
+processed (duplicate id), or was decoded/handled successfully. Anything else is
+failed, which hands it back to the broker's own redelivery policy.
+
+`<%= inspect(@processing) %>` is the seam for real business logic.
+"""
+
+use Broadway
+
+require Logger
+
+alias <%= inspect(@inbox) %>, as: Inbox
+alias <%= inspect(@message) %>, as: InboxMessage
+alias <%= inspect(@processing) %>, as: Processing
+alias <%= inspect(@publisher) %>, as: Publisher
+
+@spec start_link(term()) :: {:ok, pid()} | {:error, term()}
+def start_link(_opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+
+  Broadway.start_link(__MODULE__,
+    name: __MODULE__,
+    producer: [module: producer_spec(config), concurrency: 1],
+    processors: [default: [concurrency: config[:concurrency] || 4]]
+  )
+end
+
+@impl true
+def handle_message(:default, message, _context) do
+  case process(message.data) do
+    :ok -> message
+    :duplicate -> message
+    {:error, reason} -> Broadway.Message.failed(message, reason)
+  end
+end
+
+@impl true
+def handle_failed(messages, _context) do
+  Enum.each(messages, fn message ->
+    Logger.error("failed to process message: #{inspect(message.status)} #{inspect(message.data)}")
+  end)
+
+  messages
+end
+
+defp process(body) do
+  with {:ok, payload} <- decode(body) do
+    id = message_id(payload, body)
+
+    case Ash.get(InboxMessage, %{message_id: id}, domain: Inbox, not_found_error?: false) do
+      {:ok, nil} ->
+        record(payload, id)
+
+      {:ok, %{processed_at: %DateTime{}}} ->
+        Logger.debug("skipping duplicate message #{id}")
+        :duplicate
+
+      {:ok, _unfinished} ->
+        # Recorded by an earlier attempt that never finished publishing. Retry
+        # the publish: delivery is at-least-once anyway.
+        Logger.warning("retrying unfinished message #{id}")
+        publish(payload, id)
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+end
+
+defp decode(body) do
+  case Jason.decode(body) do
+    {:ok, payload} when is_map(payload) -> {:ok, payload}
+    {:ok, decoded} -> {:error, {:invalid_payload, decoded}}
+    {:error, error} -> {:error, error}
+  end
+end
+
+# The idempotency key: the payload's own id when it has one, otherwise the
+# SHA-256 of the raw body so that identical redeliveries hash identically.
+defp message_id(payload, body) do
+  payload["id"] || (:crypto.hash(:sha256, body) |> Base.encode16(case: :lower))
+end
+
+defp record(payload, id) do
+  attributes = %{message_id: id, payload: payload}
+
+  case Ash.create(InboxMessage, attributes, action: :record, domain: Inbox) do
+    {:ok, _record} ->
+      publish(payload, id)
+
+    # The unique identity on `message_id` lost the race to a concurrent
+    # processor: this delivery is a duplicate, not a failure. Any other error is
+    # a real failure and must be retried by the broker.
+    {:error, error} ->
+      if unique_violation?(error) do
+        Logger.debug("skipping duplicate message #{id}: #{inspect(error)}")
+        :duplicate
+      else
+        {:error, error}
+      end
+  end
+end
+
+defp unique_violation?(%Ash.Error.Invalid{errors: errors}) do
+  Enum.any?(errors, fn
+    %Ash.Error.Changes.InvalidAttribute{private_vars: private_vars} ->
+      private_vars[:constraint_type] == :unique
+
+    _other ->
+      false
+  end)
+end
+
+defp unique_violation?(_error), do: false
+
+defp publish(payload, id) do
+  with {:ok, result} <- Processing.handle(payload),
+       :ok <- Publisher.publish(result, message_id: id),
+       {:ok, _record} <- mark_processed(id) do
+    :ok
+  end
+end
+
+defp mark_processed(id) do
+  InboxMessage
+  |> Ash.get!(%{message_id: id}, domain: Inbox)
+  |> Ash.Changeset.for_update(:update, %{processed_at: DateTime.utc_now()})
+  |> Ash.update(domain: Inbox)
+end
+
+<%= case @broker do %>
+<% :sqs -> %>defp producer_spec(config) do
+  {BroadwaySQS.Producer,
+   queue_url: config[:queue_url],
+   max_number_of_messages: 10,
+   # BroadwaySQS' Req client uses Req's default receive timeout (15s) and exposes
+   # no way to change it, so the long poll has to stay under it: a poll that
+   # times out client-side leaves the received message invisible until its
+   # visibility timeout expires instead of processing it.
+   wait_time_seconds: 10,
+   visibility_timeout: 60}
+end
+<% :pubsub -> %>defp producer_spec(config) do
+  {BroadwayCloudPubSub.Producer,
+   subscription: "projects/#{config[:project_id]}/subscriptions/#{config[:subscription]}",
+   base_url: config[:base_url],
+   token_generator: {__MODULE__, :emulator_token, []}}
+end
+
+@doc """
+Token generator for the Pub/Sub emulator, which accepts any bearer token.
+
+`Goth` (and therefore real GCP credentials) is not needed while
+`PUBSUB_EMULATOR_HOST` points at floci-gcp.
+"""
+def emulator_token do
+  {:ok, Application.fetch_env!(:<%= @app %>, :pipeline)[:token]}
+end
+<% :rabbitmq -> %>defp producer_spec(config) do
+  {BroadwayRabbitMQ.Producer,
+   queue: config[:queue],
+   connection: config[:url],
+   declare: [durable: true],
+   bindings: [{config[:exchange], routing_key: config[:queue]}],
+   qos: [prefetch_count: 50],
+   on_failure: :reject_and_requeue}
+end
+<% :kafka -> %>defp producer_spec(config) do
+  {BroadwayKafka.Producer,
+   hosts: config[:hosts],
+   group_id: config[:group_id],
+   topics: [config[:topic]]}
+end
+<% end %>

@@ -1,0 +1,22 @@
+@moduledoc """
+Domain for the demo resource. Every resource listed in `resources/0` is exposed
+through the JSON:API routes declared in `json_api/0`.
+"""
+
+use Ash.Domain, extensions: [AshJsonApi.Domain]
+
+json_api do
+  routes do
+    base_route "/items", <%= inspect(@item) %> do
+      get :read
+      index :read
+      post :create
+      patch :update
+      delete :destroy
+    end
+  end
+end
+
+resources do
+  resource <%= inspect(@item) %>
+end

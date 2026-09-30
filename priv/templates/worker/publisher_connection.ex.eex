@@ -1,0 +1,103 @@
+@moduledoc """
+One AMQP connection plus a confirm-mode channel, owning the outbound topology:
+
+  * the durable `<exchange>` topic exchange,
+  * the durable outbound queue, and
+  * the binding between them (`<routing_key>`).
+
+Publishes are confirmed: `publish/2` only returns `:ok` once RabbitMQ has acked
+the message, so a published payload really was persisted.
+
+Connection loss is not a crash: this GenServer stays up, reconnects on a timer,
+and returns `{:error, :not_connected}` in the meantime — the same failure
+contract every other publish error follows.
+"""
+
+use GenServer
+
+require Logger
+
+@retry_ms 5_000
+@confirm_timeout_ms 5_000
+
+@spec start_link(keyword()) :: GenServer.on_start()
+def start_link(opts \\ []) do
+  GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+end
+
+@doc "Publishes `payload` to the configured exchange with `routing_key`."
+@spec publish(String.t(), iodata()) :: :ok | {:error, term()}
+def publish(routing_key, payload) do
+  GenServer.call(__MODULE__, {:publish, routing_key, payload}, 15_000)
+end
+
+@impl true
+def init(_opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+  {:ok, try_connect(%{config: config, conn: nil, chan: nil})}
+end
+
+@impl true
+def handle_info(:connect, state), do: {:noreply, try_connect(state)}
+
+def handle_info({:DOWN, _ref, :process, pid, reason}, %{conn: %{pid: pid}} = state) do
+  Logger.warning("rabbitmq connection lost: #{inspect(reason)}, reconnecting")
+  Process.send_after(self(), :connect, @retry_ms)
+  {:noreply, %{state | conn: nil, chan: nil}}
+end
+
+def handle_info({:DOWN, _ref, :process, _pid, _reason}, state), do: {:noreply, state}
+
+@impl true
+def handle_call({:publish, _routing_key, _payload}, _from, %{chan: nil} = state) do
+  {:reply, {:error, :not_connected}, state}
+end
+
+def handle_call({:publish, routing_key, payload}, _from, state) do
+  result =
+    try do
+      :ok =
+        AMQP.Basic.publish(state.chan, state.config[:exchange], routing_key, payload,
+          persistent: true,
+          content_type: "application/json"
+        )
+
+      case AMQP.Confirm.wait_for_confirms(state.chan, @confirm_timeout_ms) do
+        true -> :ok
+        false -> {:error, :nacked}
+        :timeout -> {:error, :confirm_timeout}
+      end
+    catch
+      :exit, reason -> {:error, {:publish_failed, reason}}
+    end
+
+  {:reply, result, state}
+end
+
+defp try_connect(state) do
+  case connect(state.config) do
+    {:ok, conn, chan} ->
+      Process.monitor(conn.pid)
+      Logger.info("rabbitmq connected, exchange=#{state.config[:exchange]}")
+      %{state | conn: conn, chan: chan}
+
+    {:error, reason} ->
+      Logger.warning("rabbitmq connect failed: #{inspect(reason)}, retrying")
+      Process.send_after(self(), :connect, @retry_ms)
+      state
+  end
+end
+
+defp connect(config) do
+  queue = config[:publish_queue]
+
+  with {:ok, conn} <- AMQP.Connection.open(config[:url]),
+       {:ok, chan} <- AMQP.Channel.open(conn),
+       :ok <- AMQP.Confirm.select(chan),
+       :ok <- AMQP.Exchange.declare(chan, config[:exchange], :topic, durable: true),
+       {:ok, _queue} <- AMQP.Queue.declare(chan, queue, durable: true),
+       :ok <-
+         AMQP.Queue.bind(chan, queue, config[:exchange], routing_key: config[:routing_key]) do
+    {:ok, conn, chan}
+  end
+end

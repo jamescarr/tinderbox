@@ -1,0 +1,10 @@
+@moduledoc """
+Domain for the idempotency store. `mix ash.codegen <name>` generates the
+migration for the resources listed here.
+"""
+
+use Ash.Domain
+
+resources do
+  resource <%= inspect(@message) %>
+end

@@ -1,0 +1,65 @@
+# The defaults below are the compose / .env.example values, so that mix tasks
+# which load runtime.exs (ash.codegen, ash.setup, test) work before `.env` is
+# sourced. Point them elsewhere by setting the environment variables.
+<%= case @broker do %>
+<% :sqs -> %>config <%= inspect(@app) %>, :pipeline,
+  queue_url:
+    System.get_env(
+      "SQS_QUEUE_URL",
+      "http://localhost:4566/000000000000/<%= @app_dash %>-inbound"
+    ),
+  publish_queue_url:
+    System.get_env(
+      "SQS_PUBLISH_QUEUE_URL",
+      "http://localhost:4566/000000000000/<%= @app_dash %>-outbound"
+    ),
+  concurrency: String.to_integer(System.get_env("PIPELINE_CONCURRENCY") || "4")
+<% :pubsub -> %># An empty PUBSUB_EMULATOR_HOST switches the pipeline to real Pub/Sub (which
+# then also needs Goth credentials; see `<%= inspect(@pipeline) %>`).
+pubsub_base_url =
+  case System.get_env("PUBSUB_EMULATOR_HOST", "localhost:4588") do
+    "" ->
+      "https://pubsub.googleapis.com"
+
+    host ->
+      if String.starts_with?(host, ["http://", "https://"]) do
+        host
+      else
+        "http://" <> host
+      end
+  end
+
+config <%= inspect(@app) %>, :pipeline,
+  project_id: System.get_env("GCP_PROJECT_ID", "floci-local"),
+  subscription: System.get_env("PUBSUB_SUBSCRIPTION", "<%= @app_dash %>-inbound-sub"),
+  topic: System.get_env("PUBSUB_TOPIC", "<%= @app_dash %>-outbound"),
+  base_url: pubsub_base_url,
+  token: System.get_env("PUBSUB_ACCESS_TOKEN", "emulator"),
+  concurrency: String.to_integer(System.get_env("PIPELINE_CONCURRENCY") || "4")
+<% :rabbitmq -> %>config <%= inspect(@app) %>, :pipeline,
+  url: System.get_env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672"),
+  queue: System.get_env("RABBITMQ_QUEUE", "<%= @app_dash %>-inbound"),
+  exchange: System.get_env("RABBITMQ_EXCHANGE", "<%= @app_dash %>"),
+  routing_key: System.get_env("RABBITMQ_ROUTING_KEY", "<%= @app_dash %>.outbound"),
+  publish_queue: System.get_env("RABBITMQ_PUBLISH_QUEUE", "<%= @app_dash %>-outbound"),
+  concurrency: String.to_integer(System.get_env("PIPELINE_CONCURRENCY") || "4")
+<% :kafka -> %>kafka_brokers =
+  System.get_env("KAFKA_BROKERS", "localhost:19092")
+  |> String.split(",", trim: true)
+  |> Enum.map(fn broker ->
+    case String.split(broker, ":", parts: 2) do
+      [host, port] -> {host, String.to_integer(port)}
+      [host] -> {host, 9092}
+    end
+  end)
+
+config <%= inspect(@app) %>, :pipeline,
+  hosts: kafka_brokers,
+  group_id: System.get_env("KAFKA_GROUP_ID", "<%= @app_dash %>"),
+  topic: System.get_env("KAFKA_CONSUMER_TOPIC", "<%= @app_dash %>-inbound"),
+  producer_topic: System.get_env("KAFKA_PRODUCER_TOPIC", "<%= @app_dash %>-outbound"),
+  concurrency: String.to_integer(System.get_env("PIPELINE_CONCURRENCY") || "4")
+<% end %>
+
+config <%= inspect(@app) %>,
+       health_port: String.to_integer(System.get_env("HEALTH_PORT") || "4001")

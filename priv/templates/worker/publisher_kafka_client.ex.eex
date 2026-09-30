@@ -1,0 +1,23 @@
+@moduledoc """
+Starts the `:brod` client that `<%= inspect(@publisher) %>` produces through.
+
+`auto_start_producers: true` lets `:brod` start a partition producer on the first
+`produce_sync/5` call for a topic instead of requiring every topic to be
+pre-started.
+"""
+
+@client :<%= @app %>_kafka_client
+
+@doc "Supervisor child spec: the bootstrap brokers come from the runtime config."
+def child_spec(_opts) do
+  hosts = Application.fetch_env!(:<%= @app %>, :pipeline)[:hosts]
+
+  %{
+    id: __MODULE__,
+    start: {:brod_client, :start_link, [hosts, @client, [auto_start_producers: true]]}
+  }
+end
+
+@doc "The registered name of the shared `:brod` client."
+@spec client() :: atom()
+def client, do: @client

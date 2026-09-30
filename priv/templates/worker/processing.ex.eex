@@ -1,0 +1,12 @@
+@moduledoc """
+The transformation applied to every accepted message before it is published.
+
+This is the seam for real business logic: `handle/1` gets the decoded inbound
+payload and returns the payload to publish downstream. Return
+`{:error, reason}` to fail the message — redelivery is the broker's business.
+"""
+
+@spec handle(map()) :: {:ok, map()} | {:error, term()}
+def handle(payload) when is_map(payload) do
+  {:ok, Map.put(payload, "processed_at", DateTime.utc_now() |> DateTime.to_iso8601())}
+end

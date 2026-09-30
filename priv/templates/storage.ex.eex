@@ -1,0 +1,85 @@
+@moduledoc """
+Object storage with two interchangeable backends, selected by the
+`STORAGE_BACKEND` env var (`"s3"` | `"gcs"`).
+
+Both backends honour the Floci emulator endpoints: S3 through `AWS_ENDPOINT_URL`
+(via the `<%= inspect(@module) %>` runtime config for `:ex_aws`), GCS through
+`STORAGE_EMULATOR_HOST`.
+"""
+
+@spec put(String.t(), iodata()) :: :ok | {:error, term()}
+def put(key, body) when is_binary(key) do
+  case backend() do
+    :s3 -> put_s3(key, body)
+    :gcs -> put_gcs(key, body)
+  end
+end
+
+@spec get(String.t()) :: {:ok, binary()} | {:error, :not_found | term()}
+def get(key) when is_binary(key) do
+  case backend() do
+    :s3 -> get_s3(key)
+    :gcs -> get_gcs(key)
+  end
+end
+
+defp backend do
+  case config()[:backend] do
+    "s3" ->
+      :s3
+
+    "gcs" ->
+      :gcs
+
+    other ->
+      raise ArgumentError,
+            "unknown STORAGE_BACKEND #{inspect(other)}, expected \"s3\" or \"gcs\""
+  end
+end
+
+defp config, do: Application.fetch_env!(:<%= @app %>, :storage)
+
+defp put_s3(key, body) do
+  case ExAws.S3.put_object(config()[:s3_bucket], key, body) |> ExAws.request() do
+    {:ok, _response} -> :ok
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp get_s3(key) do
+  case ExAws.S3.get_object(config()[:s3_bucket], key) |> ExAws.request() do
+    {:ok, %{body: body}} -> {:ok, body}
+    {:error, {:http_error, 404, _}} -> {:error, :not_found}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp put_gcs(key, body) do
+  config = config()
+  url = "#{config[:gcs_endpoint]}/upload/storage/v1/b/#{config[:gcs_bucket]}/o"
+
+  case Req.post(url,
+         params: [uploadType: "media", name: key],
+         headers: [authorization: "Bearer #{config[:gcs_token]}"],
+         body: body
+       ) do
+    {:ok, %{status: 200}} -> :ok
+    {:ok, %{status: status, body: body}} -> {:error, {:gcs, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp get_gcs(key) do
+  config = config()
+  url = "#{config[:gcs_endpoint]}/storage/v1/b/#{config[:gcs_bucket]}/o/#{URI.encode_www_form(key)}"
+
+  case Req.get(url,
+         params: [alt: "media"],
+         headers: [authorization: "Bearer #{config[:gcs_token]}"]
+       ) do
+    {:ok, %{status: 200, body: body}} -> {:ok, body}
+    {:ok, %{status: 404}} -> {:error, :not_found}
+    {:ok, %{status: status, body: body}} -> {:error, {:gcs, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end

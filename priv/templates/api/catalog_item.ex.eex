@@ -1,0 +1,40 @@
+@moduledoc """
+Demo resource, reachable at `/api/items`.
+
+Replace it with your own resources: the JSON:API routes live in
+`<%= inspect(@catalog) %>` and the migration is generated with
+`mix ash.codegen <name>`.
+"""
+
+use Ash.Resource,
+  domain: <%= inspect(@catalog) %>,
+  data_layer: AshPostgres.DataLayer,
+  extensions: [AshJsonApi.Resource]
+
+json_api do
+  type "item"
+end
+
+postgres do
+  table "items"
+  repo <%= inspect(@repo) %>
+end
+
+attributes do
+  uuid_v7_primary_key :id
+  attribute :name, :string, allow_nil?: false, public?: true
+  attribute :sku, :string, public?: true
+  timestamps()
+end
+
+actions do
+  defaults [:read, :destroy]
+
+  default_accept [:name, :sku]
+  create :create
+  update :update
+end
+
+identities do
+  identity :unique_sku, [:sku]
+end

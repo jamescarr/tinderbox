@@ -1,0 +1,21 @@
+# Point the AWS SDK at Floci (or any S3-compatible endpoint) when
+# AWS_ENDPOINT_URL is set; otherwise fall back to real AWS resolution.
+config :ex_aws,
+  http_client: ExAws.Request.Req,
+  access_key_id: [{:system, "AWS_ACCESS_KEY_ID"}, :instance_role],
+  secret_access_key: [{:system, "AWS_SECRET_ACCESS_KEY"}, :instance_role],
+  region: System.get_env("AWS_REGION", "us-east-1")
+
+if endpoint = System.get_env("AWS_ENDPOINT_URL") do
+  uri = URI.parse(endpoint)
+  override = [scheme: "#{uri.scheme}://", host: uri.host, port: uri.port]
+  config :ex_aws, :s3, override
+  config :ex_aws, :sqs, override
+end
+
+config <%= inspect(@app) %>, :storage,
+  backend: System.get_env("STORAGE_BACKEND", "s3"),
+  s3_bucket: System.get_env("S3_BUCKET", "<%= @app_dash %>-local"),
+  gcs_bucket: System.get_env("GCS_BUCKET", "<%= @app_dash %>-local"),
+  gcs_endpoint: System.get_env("STORAGE_EMULATOR_HOST", "https://storage.googleapis.com"),
+  gcs_token: System.get_env("GCS_ACCESS_TOKEN", "emulator")

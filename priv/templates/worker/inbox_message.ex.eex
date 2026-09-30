@@ -1,0 +1,38 @@
+@moduledoc """
+One row per inbound message id — the idempotency store.
+
+Brokers are at-least-once, so the same message can be delivered twice. The
+unique identity on `message_id` is what makes the second delivery a no-op: the
+pipeline looks the id up before processing, and a concurrent insert loses the
+race on that index instead of processing the message twice.
+
+`processed_at` is set after the outbound publish succeeded, so a row with a nil
+`processed_at` marks a message that was recorded but never finished.
+"""
+
+use Ash.Resource, domain: <%= inspect(@inbox) %>, data_layer: AshPostgres.DataLayer
+
+postgres do
+  table "inbox_messages"
+  repo <%= inspect(@repo) %>
+end
+
+attributes do
+  uuid_v7_primary_key :id
+  attribute :message_id, :string, allow_nil?: false
+  attribute :payload, :map, allow_nil?: false
+  attribute :processed_at, :utc_datetime_usec
+  timestamps()
+end
+
+actions do
+  defaults [:read, :destroy]
+
+  default_accept [:message_id, :payload, :processed_at]
+  create :record
+  update :update
+end
+
+identities do
+  identity :unique_message_id, [:message_id]
+end
