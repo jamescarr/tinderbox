@@ -1,4 +1,4 @@
-defmodule Mix.Tasks.Upmarket.Gen.Worker do
+defmodule Mix.Tasks.Tinderbox.Gen.Worker do
   @shortdoc "Generates the worker stack (Broadway + AshPostgres idempotency store)"
 
   @moduledoc """
@@ -12,22 +12,22 @@ defmodule Mix.Tasks.Upmarket.Gen.Worker do
 
   ```sh
   mix igniter.new my_worker --sup \\
-    --install upmarket_stack@path:/Users/jamescarr/projects/upmarkethq/upmarket_stack \\
+    --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
     --stack worker --broker sqs
   ```
   """
 
   use Igniter.Mix.Task
 
-  alias UpmarketStack.Broker
+  alias Tinderbox.Broker
 
   @impl Igniter.Mix.Task
   def info(argv, _source) do
     broker = Broker.parse!(broker_flag(argv) || "sqs")
 
     %Igniter.Mix.Task.Info{
-      group: :upmarket,
-      example: "mix upmarket.gen.worker --broker sqs",
+      group: :tinderbox,
+      example: "mix tinderbox.gen.worker --broker sqs",
       schema: [broker: :string, yes: :boolean],
       defaults: [broker: "sqs"],
       composes: ["ash.install", "ash_postgres.install"],
@@ -44,7 +44,7 @@ defmodule Mix.Tasks.Upmarket.Gen.Worker do
 
   @impl Igniter.Mix.Task
   def igniter(igniter) do
-    UpmarketStack.Gen.Worker.apply(igniter, igniter.args.options)
+    Tinderbox.Gen.Worker.apply(igniter, igniter.args.options)
   end
 
   # `info/2` runs before igniter parses the options, so the broker is read

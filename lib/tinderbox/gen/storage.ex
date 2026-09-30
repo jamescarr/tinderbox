@@ -1,4 +1,4 @@
-defmodule UpmarketStack.Gen.Storage do
+defmodule Tinderbox.Gen.Storage do
   @moduledoc """
   The object storage wiring both stacks share.
 
@@ -11,8 +11,8 @@ defmodule UpmarketStack.Gen.Storage do
   hackney in as well.
   """
 
-  alias UpmarketStack.Broker
-  alias UpmarketStack.Gen
+  alias Tinderbox.Broker
+  alias Tinderbox.Gen
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, _opts) do

@@ -1,9 +1,9 @@
-defmodule UpmarketStack.Gen.ComposeTest do
+defmodule Tinderbox.Gen.ComposeTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
 
-  alias UpmarketStack.Gen.Compose
+  alias Tinderbox.Gen.Compose
 
   test "writes docker-compose.yml and .env.example" do
     igniter = compose(:sqs)

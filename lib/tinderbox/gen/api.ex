@@ -1,16 +1,16 @@
-defmodule UpmarketStack.Gen.Api do
+defmodule Tinderbox.Gen.Api do
   @moduledoc """
   Generates the API stack: Phoenix (API-only) + Ash + AshPostgres + AshJsonApi +
   AshPhoenix, with a demo JSON:API resource mounted at `/api`.
 
   Igniter installs those packages and runs `ash.install`, `ash_postgres.install`
   and `ash_json_api.install` *before* this module runs — they are declared as
-  `installs:`/`composes:` in `Mix.Tasks.Upmarket.Gen.Api.info/2`, and those
+  `installs:`/`composes:` in `Mix.Tasks.Tinderbox.Gen.Api.info/2`, and those
   installers already create `<App>.Repo`, add it to the supervision tree, and
   create `<App>Web.AshJsonApiRouter`. This module only adds what is
   stack-specific:
 
-  * the object storage wiring both stacks share (`UpmarketStack.Gen.Storage`),
+  * the object storage wiring both stacks share (`Tinderbox.Gen.Storage`),
   * a demo domain + JSON:API resource (`--demo`, on by default),
   * the demo domain in `config :<app>, ash_domains: [...]` and in the router's
     `domains:` list (both installers ran before the domain existed),
@@ -18,12 +18,12 @@ defmodule UpmarketStack.Gen.Api do
   * the notice with the run instructions.
   """
 
-  alias UpmarketStack.Gen
-  alias UpmarketStack.Gen.Storage
+  alias Tinderbox.Gen
+  alias Tinderbox.Gen.Storage
 
   # The package is consumed as a local path dependency, so the "regenerate from
   # scratch" hint has to name the path. See the README.
-  @package_path "/Users/jamescarr/projects/upmarkethq/upmarket_stack"
+  @package_path "/Users/jamescarr/projects/upmarkethq/tinderbox"
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do
@@ -53,7 +53,7 @@ defmodule UpmarketStack.Gen.Api do
 
             mix igniter.new my_api --with phx.new \\
               --with-args="--no-html --no-assets --no-live --no-dashboard --no-mailer --no-gettext" \\
-              --install upmarket_stack@path:#{@package_path} \\
+              --install tinderbox@path:#{@package_path} \\
               --stack api
         """)
 

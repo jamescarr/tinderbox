@@ -1,4 +1,4 @@
-defmodule UpmarketStack.Gen.Worker do
+defmodule Tinderbox.Gen.Worker do
   @moduledoc """
   Generates the worker stack: a headless OTP daemon that consumes from one
   messaging endpoint of `<broker>`, records the message id in an
@@ -7,10 +7,10 @@ defmodule UpmarketStack.Gen.Worker do
 
   Igniter installs the Ash packages and runs `ash.install` /
   `ash_postgres.install` *before* this module runs (they are declared in
-  `Mix.Tasks.Upmarket.Gen.Worker.info/2`), so `<App>.Repo` already exists and is
+  `Mix.Tasks.Tinderbox.Gen.Worker.info/2`), so `<App>.Repo` already exists and is
   supervised. This module adds:
 
-  * the object storage wiring both stacks share (`UpmarketStack.Gen.Storage`),
+  * the object storage wiring both stacks share (`Tinderbox.Gen.Storage`),
   * the idempotency store (`<App>.Inbox` + `<App>.Inbox.Message`),
   * the Broadway pipeline, the processing seam, and the broker-specific publisher
     (plus its connection process for RabbitMQ / `:brod` client for Kafka),
@@ -18,9 +18,9 @@ defmodule UpmarketStack.Gen.Worker do
   * the runtime config the pipeline and the health endpoint read.
   """
 
-  alias UpmarketStack.Broker
-  alias UpmarketStack.Gen
-  alias UpmarketStack.Gen.Storage
+  alias Tinderbox.Broker
+  alias Tinderbox.Gen
+  alias Tinderbox.Gen.Storage
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do

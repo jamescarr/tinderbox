@@ -1,10 +1,10 @@
-defmodule UpmarketStack.Gen.WorkerTest do
+defmodule Tinderbox.Gen.WorkerTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
 
-  alias UpmarketStack.Broker
-  alias UpmarketStack.Gen.Worker
+  alias Tinderbox.Broker
+  alias Tinderbox.Gen.Worker
 
   @brokers [:sqs, :pubsub, :rabbitmq, :kafka]
 

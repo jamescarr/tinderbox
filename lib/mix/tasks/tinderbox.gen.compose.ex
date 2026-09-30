@@ -1,4 +1,4 @@
-defmodule Mix.Tasks.Upmarket.Gen.Compose do
+defmodule Mix.Tasks.Tinderbox.Gen.Compose do
   @shortdoc "Generates docker-compose.yml and .env.example for the local backing services"
 
   @moduledoc """
@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Upmarket.Gen.Compose do
   unset (Floci then embeds `localhost` in the SQS queue URLs it generates).
 
   ```sh
-  mix upmarket.gen.compose --stack worker --broker sqs
+  mix tinderbox.gen.compose --stack worker --broker sqs
   ```
   """
 
@@ -20,8 +20,8 @@ defmodule Mix.Tasks.Upmarket.Gen.Compose do
   @impl Igniter.Mix.Task
   def info(_argv, _source) do
     %Igniter.Mix.Task.Info{
-      group: :upmarket,
-      example: "mix upmarket.gen.compose --stack worker --broker sqs",
+      group: :tinderbox,
+      example: "mix tinderbox.gen.compose --stack worker --broker sqs",
       schema: [stack: :string, broker: :string, db: :boolean],
       defaults: [stack: "api", broker: "sqs", db: true]
     }
@@ -29,6 +29,6 @@ defmodule Mix.Tasks.Upmarket.Gen.Compose do
 
   @impl Igniter.Mix.Task
   def igniter(igniter) do
-    UpmarketStack.Gen.Compose.apply(igniter, igniter.args.options)
+    Tinderbox.Gen.Compose.apply(igniter, igniter.args.options)
   end
 end

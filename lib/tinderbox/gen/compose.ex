@@ -1,4 +1,4 @@
-defmodule UpmarketStack.Gen.Compose do
+defmodule Tinderbox.Gen.Compose do
   @moduledoc """
   Generates `docker-compose.yml` and `.env.example`.
 
@@ -8,11 +8,11 @@ defmodule UpmarketStack.Gen.Compose do
   on the host under `mix`, so every endpoint is published on `localhost`.
 
   All file content is rendered from `priv/templates`; this module only computes
-  the assigns. Called by `mix upmarket.gen.compose`.
+  the assigns. Called by `mix tinderbox.gen.compose`.
   """
 
-  alias UpmarketStack.Broker
-  alias UpmarketStack.Gen
+  alias Tinderbox.Broker
+  alias Tinderbox.Gen
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do

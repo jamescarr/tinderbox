@@ -1,6 +1,6 @@
-defmodule UpmarketStack.Gen do
+defmodule Tinderbox.Gen do
   @moduledoc """
-  Helpers shared by the `UpmarketStack.Gen.*` generators.
+  Helpers shared by the `Tinderbox.Gen.*` generators.
 
   Every file a generator writes is rendered from `priv/templates` so the
   generated code can be reviewed as plain Elixir/YAML instead of as a heredoc
@@ -10,7 +10,7 @@ defmodule UpmarketStack.Gen do
   @doc "Absolute path of a template in this package's `priv/templates`."
   @spec template_path(Path.t()) :: Path.t()
   def template_path(name) do
-    Path.join([Application.app_dir(:upmarket_stack, "priv/templates"), name])
+    Path.join([Application.app_dir(:tinderbox, "priv/templates"), name])
   end
 
   @doc """

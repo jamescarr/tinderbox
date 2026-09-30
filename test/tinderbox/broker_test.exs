@@ -1,7 +1,7 @@
-defmodule UpmarketStack.BrokerTest do
+defmodule Tinderbox.BrokerTest do
   use ExUnit.Case, async: true
 
-  alias UpmarketStack.Broker
+  alias Tinderbox.Broker
 
   @brokers ~w(sqs pubsub rabbitmq kafka)
 

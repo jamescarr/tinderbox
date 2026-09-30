@@ -1,9 +1,9 @@
-defmodule UpmarketStack.MixProject do
+defmodule Tinderbox.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :upmarket_stack,
+      app: :tinderbox,
       version: "0.1.0",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,

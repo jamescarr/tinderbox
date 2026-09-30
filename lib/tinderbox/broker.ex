@@ -1,6 +1,6 @@
-defmodule UpmarketStack.Broker do
+defmodule Tinderbox.Broker do
   @moduledoc """
-  The messaging technologies `mix upmarket.gen.worker` can target.
+  The messaging technologies `mix tinderbox.gen.worker` can target.
 
   This module is the single source of truth for everything that varies between
   brokers: the Broadway client dependency, the extra `docker compose` service,

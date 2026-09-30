@@ -1,9 +1,9 @@
-defmodule UpmarketStack.Gen.StorageTest do
+defmodule Tinderbox.Gen.StorageTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
 
-  alias UpmarketStack.Gen.Storage
+  alias Tinderbox.Gen.Storage
 
   test "adds the ex_aws and Req dependencies" do
     mix_exs = source(Storage.apply(test_project(), []), "mix.exs")

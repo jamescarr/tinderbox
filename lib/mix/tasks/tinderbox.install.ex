@@ -1,25 +1,25 @@
-defmodule Mix.Tasks.UpmarketStack.Install do
-  @shortdoc "Installs one of the upmarket stacks (api | worker) into the current project"
+defmodule Mix.Tasks.Tinderbox.Install do
+  @shortdoc "Installs one of the stacks (api | worker) into the current project"
 
   @moduledoc """
-  Entry point igniter runs for `mix igniter.install upmarket_stack` — and
-  therefore the task `mix igniter.new … --install upmarket_stack@path:…` invokes.
+  Entry point igniter runs for `mix igniter.install tinderbox` — and
+  therefore the task `mix igniter.new … --install tinderbox@path:…` invokes.
 
   ```sh
   # API stack
   mix igniter.new my_api --with phx.new \\
     --with-args="--no-html --no-assets --no-live --no-dashboard --no-mailer --no-gettext" \\
-    --install upmarket_stack@path:/Users/jamescarr/projects/upmarkethq/upmarket_stack \\
+    --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
     --stack api
 
   # Worker stack
   mix igniter.new my_worker --sup \\
-    --install upmarket_stack@path:/Users/jamescarr/projects/upmarkethq/upmarket_stack \\
+    --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
     --stack worker --broker sqs
   ```
 
   * `--stack api|worker` (required) selects the generator
-    (`upmarket.gen.api` / `upmarket.gen.worker`).
+    (`tinderbox.gen.api` / `tinderbox.gen.worker`).
   * `--broker sqs|pubsub|rabbitmq|kafka` is passed to the worker generator.
   * `--no-compose` skips `docker-compose.yml` / `.env.example`.
   * `--no-demo` skips the API stack's demo domain and resource.
@@ -37,8 +37,8 @@ defmodule Mix.Tasks.UpmarketStack.Install do
     stack = flag_value(argv, "stack")
 
     %Igniter.Mix.Task.Info{
-      group: :upmarket,
-      example: "mix igniter.install upmarket_stack --stack worker --broker sqs",
+      group: :tinderbox,
+      example: "mix igniter.install tinderbox --stack worker --broker sqs",
       schema: [stack: :string, broker: :string, compose: :boolean, demo: :boolean],
       defaults: [broker: "sqs", compose: true, demo: true],
       required: [:stack],
@@ -58,13 +58,13 @@ defmodule Mix.Tasks.UpmarketStack.Install do
 
     igniter =
       case opts[:stack] do
-        "api" -> Igniter.compose_task(igniter, "upmarket.gen.api", flags)
-        "worker" -> Igniter.compose_task(igniter, "upmarket.gen.worker", flags)
+        "api" -> Igniter.compose_task(igniter, "tinderbox.gen.api", flags)
+        "worker" -> Igniter.compose_task(igniter, "tinderbox.gen.worker", flags)
         other -> Mix.raise(~s|Unknown --stack #{inspect(other)}. Must be "api" or "worker".|)
       end
 
     if opts[:compose] do
-      Igniter.compose_task(igniter, "upmarket.gen.compose", [
+      Igniter.compose_task(igniter, "tinderbox.gen.compose", [
         "--stack",
         opts[:stack],
         "--broker",
@@ -78,14 +78,14 @@ defmodule Mix.Tasks.UpmarketStack.Install do
   # `info/2` runs before igniter parses the options, and igniter merges the
   # `composes:` schemas (and their `installs:`) before any task runs — so the
   # stack has to be read from argv to keep the two stacks' dependencies apart.
-  defp composes("api"), do: ["upmarket.gen.api", "upmarket.gen.compose"]
-  defp composes("worker"), do: ["upmarket.gen.worker", "upmarket.gen.compose"]
+  defp composes("api"), do: ["tinderbox.gen.api", "tinderbox.gen.compose"]
+  defp composes("worker"), do: ["tinderbox.gen.worker", "tinderbox.gen.compose"]
   defp composes(_missing_or_unknown), do: []
 
   defp flag_value(argv, name) do
     argv
-    # `--upmarket.stack api` is the namespaced spelling igniter accepts.
-    |> Enum.map(&String.replace_prefix(&1, "--upmarket.", "--"))
+    # `--tinderbox.stack api` is the namespaced spelling igniter accepts.
+    |> Enum.map(&String.replace_prefix(&1, "--tinderbox.", "--"))
     |> do_flag_value(name)
   end
 

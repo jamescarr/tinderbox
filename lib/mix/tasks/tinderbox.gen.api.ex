@@ -1,4 +1,4 @@
-defmodule Mix.Tasks.Upmarket.Gen.Api do
+defmodule Mix.Tasks.Tinderbox.Gen.Api do
   @shortdoc "Generates the API stack (Phoenix API-only + Ash + AshPostgres + AshJsonApi)"
 
   @moduledoc """
@@ -11,13 +11,13 @@ defmodule Mix.Tasks.Upmarket.Gen.Api do
   ```sh
   mix igniter.new my_api --with phx.new \\
     --with-args="--no-html --no-assets --no-live --no-dashboard --no-mailer --no-gettext" \\
-    --install upmarket_stack@path:/Users/jamescarr/projects/upmarkethq/upmarket_stack \\
+    --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
     --stack api
   ```
 
   What it adds on top of the Ash installers: the object storage wiring,
   a demo domain + resource exposed at `/api`, and `docker-compose.yml` /
-  `.env.example` (via `upmarket.gen.compose`, composed by `upmarket_stack.install`).
+  `.env.example` (via `tinderbox.gen.compose`, composed by `tinderbox.install`).
   """
 
   use Igniter.Mix.Task
@@ -25,8 +25,8 @@ defmodule Mix.Tasks.Upmarket.Gen.Api do
   @impl Igniter.Mix.Task
   def info(_argv, _source) do
     %Igniter.Mix.Task.Info{
-      group: :upmarket,
-      example: "mix upmarket.gen.api",
+      group: :tinderbox,
+      example: "mix tinderbox.gen.api",
       schema: [demo: :boolean, yes: :boolean],
       defaults: [demo: true],
       composes: ["ash.install", "ash_postgres.install", "ash_json_api.install"],
@@ -41,6 +41,6 @@ defmodule Mix.Tasks.Upmarket.Gen.Api do
 
   @impl Igniter.Mix.Task
   def igniter(igniter) do
-    UpmarketStack.Gen.Api.apply(igniter, igniter.args.options)
+    Tinderbox.Gen.Api.apply(igniter, igniter.args.options)
   end
 end

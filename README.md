@@ -1,4 +1,4 @@
-# upmarket_stack
+# tinderbox
 
 Igniter template for two Elixir stacks. Point it at a fresh project with
 `mix igniter.new` and it scaffolds the stack, its emulator-backed `docker-compose.yml`,
@@ -22,12 +22,12 @@ emulators.
 mix igniter.new my_api \
   --with phx.new \
   --with-args="--no-html --no-assets --no-live --no-dashboard --no-mailer --no-gettext" \
-  --install upmarket_stack@path:/Users/jamescarr/projects/upmarkethq/upmarket_stack \
+  --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \
   --stack api
 
 # Worker stack
 mix igniter.new my_worker --sup \
-  --install upmarket_stack@path:/Users/jamescarr/projects/upmarkethq/upmarket_stack \
+  --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \
   --stack worker --broker sqs
 ```
 
@@ -36,7 +36,7 @@ swap the source (and drop the local path):
 
 ```bash
 mix igniter.new my_worker --sup \
-  --install upmarket_stack@github:jamescarr/upmarket_stack \
+  --install tinderbox@github:jamescarr/tinderbox \
   --stack worker --broker sqs
 ```
 
@@ -58,15 +58,15 @@ mix run --no-halt    # worker: health on http://localhost:4001/health
 | `--broker sqs\|pubsub\|rabbitmq\|kafka` | worker | `sqs` | messaging technology for both the inbound consumer and the outbound publisher |
 | `--no-compose` | both | compose generated | skip `docker-compose.yml` / `.env.example` |
 | `--no-demo` | api | demo generated | skip the demo `Catalog` domain + `Catalog.Item` resource |
-| `--no-db` | `upmarket.gen.compose` | Postgres service | skip the Postgres service and `DATABASE_URL` |
+| `--no-db` | `tinderbox.gen.compose` | Postgres service | skip the Postgres service and `DATABASE_URL` |
 
-The individual tasks can be re-run in an existing project (`mix upmarket.gen.compose
+The individual tasks can be re-run in an existing project (`mix tinderbox.gen.compose
 --stack worker --broker kafka`); each one guards its edits, so re-running is a no-op
 except for module creation, which errors rather than silently clobbering a file.
 
 ## What gets generated
 
-### API stack (`mix upmarket.gen.api`)
+### API stack (`mix tinderbox.gen.api`)
 
 * `ash.install`, `ash_postgres.install`, `ash_json_api.install` — run by igniter, they
   create `<App>.Repo`, `<App>Web.AshJsonApiRouter`, the `:api` pipeline, and the
@@ -78,7 +78,7 @@ except for module creation, which errors rather than silently clobbering a file.
   `scope "/api"`, so `POST/GET/PATCH/DELETE /api/items` speak JSON:API.
 * `<App>.Storage` + the `:ex_aws`/`:storage` runtime config.
 
-### Worker stack (`mix upmarket.gen.worker`)
+### Worker stack (`mix tinderbox.gen.worker`)
 
 * `<App>.Inbox` + `<App>.Inbox.Message` — the idempotency store: one row per message
   id, unique identity on `message_id`, `processed_at` set only after the outbound
@@ -139,7 +139,7 @@ mix test
 ```
 
 The generators are exercised through `Igniter.Test.test_project/1` against the
-`UpmarketStack.Gen.*` modules directly — the Mix tasks are thin shells, and a test
+`Tinderbox.Gen.*` modules directly — the Mix tasks are thin shells, and a test
 project cannot fetch the packages declared in `installs:`.
 
 Beyond that, generated projects were run end to end against the emulators:
