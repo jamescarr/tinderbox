@@ -218,11 +218,13 @@ produces. What a test project cannot do is fetch the packages the tasks declare 
 
 Beyond that, generated projects were run end to end against the emulators:
 
-* **worker / sqs, through mise** — `mise run dev` (up → setup → run) came up healthy;
-  a message sent to the inbound queue came out of the outbound queue with
-  `processed_at` added; re-sending the same body produced **no** second message and
-  left `inbox_messages` at one row. Overriding `HEALTH_PORT` in `.mise.local.toml`
-  moved the app to the new port, and `mise run check` passed.
+* **worker / sqs, through mise, installed from `@github:jamescarr/tinderbox`** —
+  `mise run dev` (up → setup → run) came up healthy. A message sent to the inbound
+  queue came out of the outbound queue with `processed_at` added; sending the same
+  body again, under the same `mise run dev`, produced **no** second message, left
+  `inbox_messages` at one processed row, and left the inbound queue empty. Setting
+  `HEALTH_PORT` in `.mise.local.toml` moved the app to the new port; `mise run down`
+  returned in under a second; `mise run check` passed.
 * **storage** — `STORAGE_BACKEND=s3` round-trips through Floci (`aws s3 ls` sees the
   object) and `STORAGE_BACKEND=gcs` through floci-gcp; a missing key is
   `{:error, :not_found}` on both.
@@ -233,6 +235,11 @@ Beyond that, generated projects were run end to end against the emulators:
   `--warnings-as-errors`; the pubsub worker consumed a message published to
   `demo-pubsub-inbound` on floci-gcp and published the transformed payload (plus
   its `message_id` attribute) to `demo-pubsub-outbound`.
+
+Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
+runs were made on never gated `.mise.toml` (a config with templates and hooks was
+reported trusted too), so `mise trust` was a no-op there. It is left in the
+instructions because mise refuses untrusted configs where it is set up to.
 
 If something else already owns 5432 on your machine, override the Postgres host port
 in a `docker-compose.override.yml` (`ports: !override ["5455:5432"]`) and set the same
