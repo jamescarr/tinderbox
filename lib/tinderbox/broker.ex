@@ -1,15 +1,16 @@
 defmodule Tinderbox.Broker do
   @moduledoc """
-  The messaging technologies `mix tinderbox.gen.worker` can target.
+  The messaging technologies `mix tinderbox.gen.worker` can target (and, for
+  `:nats`, the one the SaaS stack's event bus runs on).
 
   This module is the single source of truth for everything that varies between
-  brokers: the Broadway client dependency, the extra `docker compose` service,
-  and the environment variables the generated worker reads.
+  brokers: the client dependencies, the extra `docker compose` service, and the
+  environment variables the generated worker reads.
   """
 
-  @type t :: :sqs | :pubsub | :rabbitmq | :kafka
+  @type t :: :sqs | :pubsub | :rabbitmq | :kafka | :nats
 
-  @brokers ~w(sqs pubsub rabbitmq kafka)
+  @brokers ~w(sqs pubsub rabbitmq kafka nats)
 
   @doc """
   Parses a `--broker` value, raising `Mix.raise/1` for anything unknown.
@@ -31,12 +32,21 @@ defmodule Tinderbox.Broker do
       "kafka" ->
         :kafka
 
+      "nats" ->
+        :nats
+
       other ->
         Mix.raise("Unknown --broker #{other}. Must be one of: #{Enum.join(@brokers, ", ")}")
     end
   end
 
-  @doc "The Broadway client dependency for the broker."
+  @doc """
+  The client dependencies for the broker.
+
+  NATS has no Broadway: the only Broadway/JetStream producer is the `jetstream`
+  hex package, last released 2023-10-19 and not part of `gnat`, so the NATS
+  worker is a `Gnat.Jetstream.PullConsumer` and needs `gnat` alone.
+  """
   @spec deps(t()) :: [{atom(), String.t()}]
   def deps(:sqs),
     do: [{:broadway, "~> 1.3"}, {:broadway_sqs, "~> 1.0"}, {:ex_aws_sqs, "~> 3.5"}]
@@ -44,17 +54,19 @@ defmodule Tinderbox.Broker do
   def deps(:pubsub), do: [{:broadway, "~> 1.3"}, {:broadway_cloud_pub_sub, "~> 1.0"}]
   def deps(:rabbitmq), do: [{:broadway, "~> 1.3"}, {:broadway_rabbitmq, "~> 0.8"}]
   def deps(:kafka), do: [{:broadway, "~> 1.3"}, {:broadway_kafka, "~> 0.7"}]
+  def deps(:nats), do: [{:gnat, "~> 1.18"}]
 
   @doc """
   Compose services the broker needs beyond Floci/floci-gcp.
 
   `:sqs` and `:pubsub` need none: Floci serves SQS, floci-gcp serves Pub/Sub.
   """
-  @spec compose_services(t()) :: [:rabbitmq] | [:redpanda] | []
+  @spec compose_services(t()) :: [:rabbitmq] | [:redpanda] | [:nats] | []
   def compose_services(:sqs), do: []
   def compose_services(:pubsub), do: []
   def compose_services(:rabbitmq), do: [:rabbitmq]
   def compose_services(:kafka), do: [:redpanda]
+  def compose_services(:nats), do: [:nats]
 
   @doc """
   The `NAME=value` entries this broker contributes to `.env.example`.
@@ -96,6 +108,16 @@ defmodule Tinderbox.Broker do
       {"KAFKA_CONSUMER_TOPIC", "#{app_dash}-inbound"},
       {"KAFKA_GROUP_ID", app_dash},
       {"KAFKA_PRODUCER_TOPIC", "#{app_dash}-outbound"}
+    ]
+  end
+
+  def env_vars(:nats, app_dash) do
+    [
+      {"NATS_HOST", "localhost"},
+      {"NATS_PORT", "4222"},
+      {"NATS_STREAM", "#{app_dash}-inbound"},
+      {"NATS_CONSUMER", "#{app_dash}-worker"},
+      {"NATS_PUBLISH_SUBJECT", "#{app_dash}.outbound"}
     ]
   end
 

@@ -3,8 +3,8 @@ defmodule Tinderbox.EnvTest do
 
   alias Tinderbox.Env
 
-  @brokers [:sqs, :pubsub, :rabbitmq, :kafka]
-  @stacks ["api", "worker"]
+  @brokers [:sqs, :pubsub, :rabbitmq, :kafka, :nats]
+  @stacks ["api", "worker", "saas"]
 
   test "no variable is defined twice, for every stack, broker and db choice" do
     for stack <- @stacks, broker <- @brokers, db? <- [true, false] do
@@ -23,6 +23,16 @@ defmodule Tinderbox.EnvTest do
     assert "PUBSUB_SUBSCRIPTION" in names
   end
 
+  test "the nats worker names its connection, stream, consumer and publish subject" do
+    names = names(sections(stack: "worker", broker: :nats))
+
+    for name <- ~w(NATS_HOST NATS_PORT NATS_STREAM NATS_CONSUMER NATS_PUBLISH_SUBJECT) do
+      assert name in names
+    end
+
+    refute "NATS_STREAM" in names(sections(stack: "api", broker: :nats))
+  end
+
   test "the worker adds the health port and its broker block; the api does not" do
     worker = names(sections(stack: "worker", broker: :kafka))
     assert "HEALTH_PORT" in worker
@@ -31,6 +41,39 @@ defmodule Tinderbox.EnvTest do
     api = names(sections(stack: "api", broker: :kafka))
     refute "HEALTH_PORT" in api
     refute "KAFKA_BROKERS" in api
+  end
+
+  test "the saas stack documents SSO, mail, Stripe, admins and tracing, but no worker variables" do
+    names = names(sections(stack: "saas", broker: :nats))
+
+    for name <- ~w(
+          NATS_HOST NATS_PORT
+          SSO_BASE_URL SSO_CLIENT_ID SSO_CLIENT_SECRET SSO_REDIRECT_URI
+          SMTP_HOST SMTP_PORT MAIL_FROM
+          STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_STARTER STRIPE_PRICE_PRO
+          ADMIN_EMAILS OTEL_SERVICE_NAME
+        ) do
+      assert name in names, "#{name} is missing from the saas environment"
+    end
+
+    # `--broker nats` must not leak the worker's stream names into a saas project.
+    for name <- ~w(HEALTH_PORT NATS_STREAM NATS_CONSUMER NATS_PUBLISH_SUBJECT) do
+      refute name in names
+    end
+  end
+
+  test "the saas SSO block points at the compose Dex, named after the app" do
+    env =
+      for {_title, vars} <- sections(stack: "saas", broker: :nats),
+          {name, value} <- vars,
+          into: %{},
+          do: {name, value}
+
+    assert env["SSO_BASE_URL"] == "http://localhost:5556/dex"
+    assert env["SSO_CLIENT_ID"] == "demo-worker"
+    assert env["SSO_CLIENT_SECRET"] == "demo-worker-dev-secret"
+    assert env["MAIL_FROM"] == "noreply@demo-worker.local"
+    assert env["OTEL_SERVICE_NAME"] == "demo_worker"
   end
 
   test "db?: false leaves out the Postgres variables" do

@@ -1,0 +1,65 @@
+@moduledoc """
+Creates an organization. Everyone starts here: a user with no organization is
+sent to this page by `<%= inspect(@web) %>.LiveOrganization`, and whoever creates one becomes its owner.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@accounts) %>.Organization
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :optional_organization}
+
+@impl true
+def mount(_params, _session, socket) do
+  form =
+    Organization
+    |> AshPhoenix.Form.for_create(:create, actor: socket.assigns.current_user, as: "organization")
+    |> to_form()
+
+  {:ok, socket |> assign(:page_title, "New organization") |> assign(:form, form)}
+end
+
+@impl true
+def handle_event("validate", %{"organization" => params}, socket) do
+  {:noreply, assign(socket, :form, AshPhoenix.Form.validate(socket.assigns.form, params))}
+end
+
+def handle_event("save", %{"organization" => params}, socket) do
+  case AshPhoenix.Form.submit(socket.assigns.form, params: params) do
+    {:ok, _organization} ->
+      {:noreply, push_navigate(socket, to: ~p"/dashboard")}
+
+    {:error, form} ->
+      {:noreply, assign(socket, :form, form)}
+  end
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+  >
+    <.header>
+      Create an organization
+      <:subtitle>
+        Organizations hold your team, your subscription and your data. You can create more later.
+      </:subtitle>
+    </.header>
+
+    <.form for={@form} id="organization-form" phx-change="validate" phx-submit="save">
+      <.input field={@form[:name]} type="text" label="Organization name" required />
+      <.button variant="primary" phx-disable-with="Creating...">Create organization</.button>
+    </.form>
+  </Layouts.app>
+  """
+end

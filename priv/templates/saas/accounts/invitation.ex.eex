@@ -1,0 +1,129 @@
+@moduledoc """
+An invitation to join an organization, sent to an email address.
+
+Inviting an address that already has an invitation re-issues it (new token, new
+expiry) instead of stacking a second one. Accepting is done by the invited
+user, who must be signed in with the invited email address.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@accounts) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshPaperTrail.Resource]
+
+postgres do
+  table "invitations"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :organization, on_delete: :delete
+    reference :invited_by, on_delete: :nilify
+  end
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  create_version_on_destroy? false
+  # Invitations are really deleted (revoking one), so a version row must not
+  # hold a foreign key to the invitation it describes.
+  reference_source? false
+  # The token is a bearer secret: never copy it into the audit trail.
+  sensitive_attributes :ignore
+  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+actions do
+  defaults [:read, :destroy]
+
+  create :invite do
+    accept [:email, :role, :organization_id]
+
+    upsert? true
+    upsert_identity :unique_email_per_org
+    upsert_fields [:token, :role, :expires_at, :accepted_at, :invited_by_id]
+
+    change relate_actor(:invited_by)
+    change set_attribute(:token, &__MODULE__.generate_token/0)
+    change set_attribute(:expires_at, &__MODULE__.default_expiry/0)
+    change set_attribute(:accepted_at, nil)
+    change <%= inspect(@accounts) %>.Changes.NotifyInvitee
+  end
+
+  read :by_token do
+    description "A pending, unexpired invitation by its token"
+    get? true
+    argument :token, :string, allow_nil?: false
+    filter expr(token == ^arg(:token) and is_nil(accepted_at) and expires_at > now())
+  end
+
+  update :accept do
+    accept []
+    require_atomic? false
+
+    change <%= inspect(@accounts) %>.Changes.AcceptInvitation
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  policy action(:read) do
+    authorize_if expr(
+                   exists(
+                     organization.memberships,
+                     user_id == ^actor(:id) and role in [:owner, :admin]
+                   )
+                 )
+  end
+
+  policy action([:invite, :destroy]) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+  end
+
+  # Possession of the token is the credential; `accept` checks that the actor's
+  # email is the invited one.
+  policy action([:by_token, :accept]) do
+    authorize_if actor_present()
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :email, :ci_string, allow_nil?: false, public?: true
+
+  attribute :role, :atom,
+    constraints: [one_of: [:owner, :admin, :member]],
+    default: :member,
+    allow_nil?: false,
+    public?: true
+
+  attribute :token, :string, allow_nil?: false, sensitive?: true
+  attribute :expires_at, :utc_datetime, allow_nil?: false
+  attribute :accepted_at, :utc_datetime
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+  belongs_to :invited_by, <%= inspect(@user) %>, public?: true
+end
+
+identities do
+  identity :unique_email_per_org, [:organization_id, :email]
+end
+
+@doc false
+def generate_token, do: 24 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+
+@doc false
+def default_expiry, do: DateTime.utc_now() |> DateTime.add(7, :day) |> DateTime.truncate(:second)

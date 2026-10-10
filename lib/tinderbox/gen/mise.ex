@@ -30,6 +30,7 @@ defmodule Tinderbox.Gen.Mise do
     broker = Broker.parse!(Keyword.get(opts, :broker) || "sqs")
     compose? = Keyword.get(opts, :compose, true)
     worker? = stack == "worker"
+    saas? = stack == "saas"
 
     # `opts[:vm]` stands in for the running VM (a `t:Tinderbox.Toolchain.vm/0`): it is
     # how tests generate "as if" on another Elixir/OTP. The Mix task never sets it.
@@ -55,10 +56,11 @@ defmodule Tinderbox.Gen.Mise do
       cmake?: worker? and broker == :kafka,
       compose?: compose?,
       worker?: worker?,
+      saas?: saas?,
       serve: serve,
       env: Env.toml(env),
       dev_summary: dev_summary(compose?, serve),
-      dev_description: dev_description(compose?, worker?)
+      dev_description: dev_description(compose?, stack)
     ]
 
     content =
@@ -88,14 +90,18 @@ defmodule Tinderbox.Gen.Mise do
   defp dev_summary(true, serve), do: "up + setup + #{serve}"
   defp dev_summary(false, serve), do: "setup + #{serve}"
 
-  defp dev_description(compose?, worker?) do
+  defp dev_description(compose?, stack) do
     start =
       if compose?,
         do: "Start the services, set up the database and run",
         else: "Set up the database and run"
 
     what =
-      if worker?, do: "the worker (health on :4001)", else: "the API (http://localhost:4000/api)"
+      case stack do
+        "worker" -> "the worker (health on :4001)"
+        "saas" -> "the app (http://localhost:4000, admin at /admin)"
+        _api -> "the API (http://localhost:4000/api)"
+      end
 
     "#{start} #{what}"
   end

@@ -1,0 +1,94 @@
+@moduledoc """
+Accepts an invitation on behalf of the signed-in actor.
+
+The actor's email must be the invited one: the token only proves the link was
+received, not that the person holding it is the invitee. Accepting creates the
+membership and stamps `accepted_at`; the organization's owners and admins are
+then notified (`member.joined`).
+"""
+
+use Ash.Resource.Change
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Membership
+alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@prefix) %>.Notifications
+
+@impl true
+def change(changeset, _opts, %{actor: actor}) do
+  changeset
+  |> Ash.Changeset.before_action(&join(&1, actor))
+  |> Ash.Changeset.after_action(&notify(&1, &2, actor))
+end
+
+defp join(changeset, nil), do: Ash.Changeset.add_error(changeset, "Sign in to accept an invitation")
+
+defp join(changeset, actor) do
+  invitation = changeset.data
+
+  if same_email?(actor.email, invitation.email) do
+    case add_member(invitation, actor) do
+      :ok ->
+        Ash.Changeset.force_change_attribute(changeset, :accepted_at, now())
+
+      {:error, error} ->
+        Ash.Changeset.add_error(changeset, error)
+    end
+  else
+    Ash.Changeset.add_error(changeset, "This invitation was sent to a different email address")
+  end
+end
+
+defp add_member(invitation, actor) do
+  already_member? =
+    Membership
+    |> Ash.Query.filter(organization_id == ^invitation.organization_id and user_id == ^actor.id)
+    |> Ash.exists?(authorize?: false)
+
+  if already_member? do
+    :ok
+  else
+    attributes = %{
+      organization_id: invitation.organization_id,
+      user_id: actor.id,
+      role: invitation.role
+    }
+
+    case Ash.create(Membership, attributes, action: :add, authorize?: false) do
+      {:ok, _membership} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  end
+end
+
+defp notify(_changeset, invitation, actor) do
+  organization = Ash.get!(Organization, invitation.organization_id, authorize?: false)
+
+  managers =
+    Membership
+    |> Ash.Query.filter(
+      organization_id == ^invitation.organization_id and role in [:owner, :admin] and
+        user_id != ^actor.id
+    )
+    |> Ash.Query.load(:user)
+    |> Ash.read!(authorize?: false)
+    |> Enum.map(& &1.user)
+
+  Notifications.trigger("member.joined", %{
+    recipients: managers,
+    actor: actor,
+    data: %{
+      title: "#{actor.email} joined #{organization.name}",
+      body: "They accepted their invitation as #{invitation.role}.",
+      url: "/organizations/members"
+    }
+  })
+
+  {:ok, invitation}
+end
+
+defp same_email?(left, right), do: normalize(left) == normalize(right)
+defp normalize(email), do: email |> to_string() |> String.downcase()
+
+defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)

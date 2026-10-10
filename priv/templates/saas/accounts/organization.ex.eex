@@ -1,0 +1,108 @@
+@moduledoc """
+A customer organization (the tenant): it owns memberships, invitations and at
+most one subscription. Whoever creates an organization becomes its owner.
+
+Readable through JSON:API at `GET /api/organizations`, scoped to the actor's
+own organizations by the policies below.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@accounts) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshJsonApi.Resource, AshPaperTrail.Resource]
+
+postgres do
+  table "organizations"
+  repo <%= inspect(@repo) %>
+end
+
+json_api do
+  type "organization"
+
+  routes do
+    base "/organizations"
+    index :read
+    get :read
+  end
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  create_version_on_destroy? false
+  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+actions do
+  defaults [:read]
+
+  create :create do
+    accept [:name]
+
+    change <%= inspect(@accounts) %>.Changes.SetSlug
+    change <%= inspect(@accounts) %>.Changes.AddOwnerMembership
+  end
+
+  update :rename do
+    accept [:name]
+  end
+
+  update :set_stripe_customer_id do
+    accept [:stripe_customer_id]
+  end
+
+  read :mine do
+    description "The organizations the actor is a member of"
+    filter expr(exists(memberships, user_id == ^actor(:id)))
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  # A read without an actor (no session, no bearer token) is filtered to
+  # nothing: `GET /api/organizations` answers an empty collection, and
+  # creates, renames and the like are forbidden.
+  policy action_type(:read) do
+    authorize_if expr(exists(memberships, user_id == ^actor(:id)))
+  end
+
+  policy action_type(:create) do
+    authorize_if actor_present()
+  end
+
+  policy action([:rename, :set_stripe_customer_id]) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :id}
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :name, :string, allow_nil?: false, public?: true
+  attribute :slug, :string, allow_nil?: false, public?: true
+  attribute :stripe_customer_id, :string, public?: false
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  has_many :memberships, <%= inspect(@accounts) %>.Membership
+  has_many :invitations, <%= inspect(@accounts) %>.Invitation
+  has_one :subscription, <%= inspect(@prefix) %>.Billing.Subscription
+end
+
+aggregates do
+  count :member_count, :memberships
+end
+
+identities do
+  identity :unique_slug, [:slug]
+end

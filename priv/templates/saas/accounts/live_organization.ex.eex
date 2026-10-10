@@ -1,0 +1,72 @@
+@moduledoc """
+LiveView `on_mount` hooks that resolve the organization the user is working in.
+
+    on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+    on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+Both hooks assign `:organizations` (every organization the user belongs to),
+`:current_organization` (the one in the session, else the first, with its
+subscription loaded) and `:current_membership` (the user's membership in it).
+
+  * `:require_organization` sends a user with no organization to
+    `/organizations/new`, the onboarding page.
+  * `:optional_organization` assigns `nil`s instead of redirecting; the
+    onboarding page itself uses it.
+
+The organization switcher (`<%= inspect(@web) %>.OrganizationController`) is what
+writes `:current_organization_id` to the session.
+"""
+
+use <%= inspect(@web) %>, :verified_routes
+
+import Phoenix.Component, only: [assign: 2]
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Membership
+alias <%= inspect(@accounts) %>.Organization
+
+def on_mount(:require_organization, _params, session, socket) do
+  socket = resolve(socket, session)
+
+  case socket.assigns.organizations do
+    [] -> {:halt, Phoenix.LiveView.redirect(socket, to: ~p"/organizations/new")}
+    _organizations -> {:cont, socket}
+  end
+end
+
+def on_mount(:optional_organization, _params, session, socket) do
+  {:cont, resolve(socket, session)}
+end
+
+defp resolve(socket, session) do
+  case socket.assigns[:current_user] do
+    nil -> assign(socket, organizations: [], current_organization: nil, current_membership: nil)
+    user -> resolve(socket, session, user)
+  end
+end
+
+defp resolve(socket, session, user) do
+  organizations =
+    Organization
+    |> Ash.Query.for_read(:mine, %{}, actor: user)
+    |> Ash.Query.load(:subscription)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!()
+
+  current =
+    Enum.find(organizations, &(&1.id == session["current_organization_id"])) ||
+      List.first(organizations)
+
+  assign(socket,
+    organizations: organizations,
+    current_organization: current,
+    current_membership: current && membership(current, user)
+  )
+end
+
+defp membership(organization, user) do
+  Membership
+  |> Ash.Query.filter(organization_id == ^organization.id and user_id == ^user.id)
+  |> Ash.read_one!(actor: user)
+end

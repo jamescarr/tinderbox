@@ -1,0 +1,19 @@
+# NATS JetStream. The defaults are the docker compose values, so `mix` tasks
+# that load runtime.exs work before `.env` is sourced.
+config <%= inspect(@app) %>, :nats, %{
+  name: :gnat,
+  backoff_period: 2_000,
+  connection_settings: [
+    %{
+      host: System.get_env("NATS_HOST", "localhost"),
+      port: String.to_integer(System.get_env("NATS_PORT", "4222"))
+    }
+  ]
+}
+
+# The stream <%= inspect(@prefix) %>.Events.StreamBootstrap creates, and the durable consumer
+# <%= inspect(@prefix) %>.Events.Consumer reads from.
+config <%= inspect(@app) %>, :events,
+  stream: "<%= @app_dash %>-events",
+  subject_prefix: "<%= @app_dash %>.events",
+  consumer: "<%= @app_dash %>-app"

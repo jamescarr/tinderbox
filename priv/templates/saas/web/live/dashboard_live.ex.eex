@@ -1,0 +1,98 @@
+@moduledoc """
+The signed-in landing page: the current organization at a glance.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Membership
+alias <%= inspect(@prefix) %>.Notifications
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok, socket |> assign(:page_title, "Dashboard") |> load()}
+end
+
+@impl true
+def handle_info({:notification_created, _notification}, socket) do
+  {:noreply, load(socket)}
+end
+
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  member_count =
+    Membership
+    |> Ash.Query.filter(organization_id == ^organization.id)
+    |> Ash.count!(actor: user)
+
+  assign(socket,
+    member_count: member_count,
+    notifications: Notifications.feed(user, limit: 5)
+  )
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+  >
+    <.header>
+      {@current_organization.name}
+      <:subtitle>Your role: {@current_membership.role}</:subtitle>
+    </.header>
+
+    <div class="stats stats-vertical sm:stats-horizontal bg-base-100 shadow w-full">
+      <div class="stat">
+        <div class="stat-title">Members</div>
+        <div class="stat-value">{@member_count}</div>
+        <div class="stat-actions">
+          <.link navigate={~p"/organizations/members"} class="link">Manage members</.link>
+        </div>
+      </div>
+
+      <div class="stat">
+        <div class="stat-title">Plan</div>
+        <div :if={@current_organization.subscription} class="stat-value text-2xl">
+          {@current_organization.subscription.plan_key || "Custom"}
+        </div>
+        <div :if={@current_organization.subscription} class="stat-desc">
+          {@current_organization.subscription.status}
+        </div>
+        <div :if={!@current_organization.subscription} class="stat-value text-2xl">None</div>
+        <div :if={!@current_organization.subscription} class="stat-actions">
+          <.link navigate={~p"/billing"} class="link">Choose a plan</.link>
+        </div>
+      </div>
+    </div>
+
+    <div class="card bg-base-100 shadow">
+      <div class="card-body">
+        <h2 class="card-title">Recent notifications</h2>
+        <p :if={@notifications == []} class="text-base-content/70">Nothing yet.</p>
+        <ul class="divide-y divide-base-300">
+          <li :for={notification <- @notifications} class="py-2">
+            <p class="font-medium">{notification.title}</p>
+            <p :if={notification.body} class="text-sm text-base-content/70">{notification.body}</p>
+          </li>
+        </ul>
+        <div class="card-actions justify-end">
+          <.link navigate={~p"/inbox"} class="link">Open inbox</.link>
+        </div>
+      </div>
+    </div>
+  </Layouts.app>
+  """
+end

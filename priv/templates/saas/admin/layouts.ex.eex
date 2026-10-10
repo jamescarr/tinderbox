@@ -1,0 +1,94 @@
+@moduledoc """
+The admin section's layout: a Petal Components sidebar shell with the admin
+navigation.
+
+Admin pages use `use <%= inspect(@web) %>, :admin_live_view` (Petal Components) instead of
+the daisyUI/CoreComponents set the rest of the application uses, because both
+define `button/1`, `table/1`, `icon/1` and friends.
+"""
+
+use <%= inspect(@web) %>, :admin_html
+
+@titles %{
+  dashboard: "Dashboard",
+  users: "Users",
+  organizations: "Organizations",
+  subscriptions: "Subscriptions"
+}
+
+attr :flash, :map, required: true
+attr :current_user, :any, required: true
+attr :current_page, :atom, required: true, values: [:dashboard, :users, :organizations, :subscriptions]
+
+slot :inner_block, required: true
+
+def admin(assigns) do
+  assigns = assign(assigns, :title, Map.fetch!(@titles, assigns.current_page))
+
+  ~H"""
+  <.sidebar_shell for="admin-sidebar">
+    <:sidebar>
+      <.sidebar_nav id="admin-sidebar" label="Admin">
+        <:header>
+          <.icon name="hero-shield-check" class="w-6 h-6 shrink-0" />
+          <span class="pc-sidebar__brand"><%= inspect(@prefix) %> admin</span>
+        </:header>
+
+        <.sidebar_group label="Manage">
+          <.sidebar_item
+            label="Dashboard"
+            path={~p"/admin"}
+            icon="hero-home"
+            active={@current_page == :dashboard}
+          />
+          <.sidebar_item
+            label="Users"
+            path={~p"/admin/users"}
+            icon="hero-users"
+            active={@current_page == :users}
+          />
+          <.sidebar_item
+            label="Organizations"
+            path={~p"/admin/organizations"}
+            icon="hero-building-office"
+            active={@current_page == :organizations}
+          />
+          <.sidebar_item
+            label="Subscriptions"
+            path={~p"/admin/subscriptions"}
+            icon="hero-credit-card"
+            active={@current_page == :subscriptions}
+          />
+          <.sidebar_item
+            label="Feature flags"
+            path={~p"/admin/flags"}
+            icon="hero-flag"
+            link_type="a"
+          />
+        </.sidebar_group>
+
+        <:footer>
+          <.sidebar_item
+            label="Back to app"
+            path={~p"/dashboard"}
+            icon="hero-arrow-left-start-on-rectangle"
+            link_type="a"
+          />
+        </:footer>
+      </.sidebar_nav>
+    </:sidebar>
+
+    <header class="flex items-center gap-3 border-b border-gray-200 p-4 dark:border-gray-700">
+      <.sidebar_trigger for="admin-sidebar" target="mobile" />
+      <.h2 class="!mb-0">{@title}</.h2>
+      <span class="ml-auto text-sm text-gray-500">{to_string(@current_user.email)}</span>
+    </header>
+
+    <main class="p-6">
+      {render_slot(@inner_block)}
+    </main>
+
+    <Layouts.flash_group flash={@flash} />
+  </.sidebar_shell>
+  """
+end

@@ -1,0 +1,82 @@
+@moduledoc """
+Admin: every organization with its member count and plan.
+"""
+
+use <%= inspect(@web) %>, :admin_live_view
+
+alias <%= inspect(@accounts) %>.Organization
+alias PetalComponents.DataTable.Engine
+alias PetalComponents.DataTable.State
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@fields [:name, :slug, :member_count, :plan_key, :status, :inserted_at]
+@limit 1000
+
+@impl true
+def mount(_params, _session, socket) do
+  rows =
+    Organization
+    |> Ash.Query.load([:member_count, :subscription])
+    |> Ash.Query.sort(inserted_at: :desc)
+    |> Ash.Query.limit(@limit)
+    |> Ash.read!(actor: socket.assigns.current_user)
+    |> Enum.map(fn organization ->
+      %{
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug,
+        member_count: organization.member_count,
+        plan_key: organization.subscription && organization.subscription.plan_key,
+        status: organization.subscription && organization.subscription.status,
+        inserted_at: organization.inserted_at
+      }
+    end)
+
+  state = %State{order_by: [{:inserted_at, :desc}], page_size: 25}
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Organizations")
+   |> assign(:all_rows, rows)
+   |> run(state)}
+end
+
+@impl true
+def handle_event("table", params, socket) do
+  {:noreply, run(socket, State.handle_op(socket.assigns.table, params, fields: @fields))}
+end
+
+defp run(socket, state) do
+  {rows, state} = Engine.List.run(socket.assigns.all_rows, state)
+  assign(socket, rows: rows, table: state)
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:organizations}>
+    <.data_table
+      id="organizations"
+      rows={@rows}
+      state={@table}
+      on_change="table"
+      searchable
+      page_size_options={[25, 50, 100]}
+    >
+      <:col :let={row} field={:name} label="Name" sortable filterable="text">{row.name}</:col>
+      <:col :let={row} field={:slug} label="Slug" sortable>{row.slug}</:col>
+      <:col :let={row} field={:member_count} label="Members" sortable>{row.member_count}</:col>
+      <:col :let={row} field={:plan_key} label="Plan" sortable>{row.plan_key || "—"}</:col>
+      <:col :let={row} field={:status} label="Status" sortable>{row.status || "—"}</:col>
+      <:col :let={row} field={:inserted_at} label="Created" sortable>
+        {Calendar.strftime(row.inserted_at, "%Y-%m-%d %H:%M")}
+      </:col>
+      <:action :let={row}>
+        <.link navigate={~p"/admin/organizations/#{row.id}"} class="text-sm underline">View</.link>
+      </:action>
+    </.data_table>
+  </AdminLayouts.admin>
+  """
+end

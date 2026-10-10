@@ -2,7 +2,7 @@
 Publishes processed messages to the outbound <%= @broker %> endpoint named by
 `config :<%= @app %>, :pipeline`.
 
-Errors are returned to the caller, which fails the Broadway message so the
+Errors are returned to the caller, which <%= if @broker == :nats do %>nacks the message<% else %>fails the Broadway message<% end %> so the
 broker's redelivery policy applies.
 """
 
@@ -64,6 +64,26 @@ end
        ) do
     :ok -> :ok
     {:error, reason} -> {:error, reason}
+  end
+end
+<% :nats -> %>defp do_publish(payload, opts) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+  headers = [{"Nats-Msg-Id", opts[:message_id] || Ecto.UUID.generate()}]
+
+  # JetStream acks a publish by replying to it: the reply body is the PubAck.
+  case Gnat.request(:gnat, config[:publish_subject], Jason.encode!(payload),
+         headers: headers,
+         receive_timeout: 5_000
+       ) do
+    {:ok, %{body: body}} ->
+      case Jason.decode(body) do
+        {:ok, %{"stream" => _stream, "seq" => _seq}} -> :ok
+        {:ok, %{"error" => error}} -> {:error, {:jetstream, error}}
+        other -> {:error, {:jetstream, other}}
+      end
+
+    {:error, reason} ->
+      {:error, reason}
   end
 end
 <% end %>

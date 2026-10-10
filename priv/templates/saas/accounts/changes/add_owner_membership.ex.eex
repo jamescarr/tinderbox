@@ -1,0 +1,21 @@
+@moduledoc """
+Makes the actor who creates an organization its owner, in the same transaction.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@accounts) %>.Membership
+
+@impl true
+def change(changeset, _opts, %{actor: %{id: user_id}}) do
+  Ash.Changeset.after_action(changeset, fn _changeset, organization ->
+    attributes = %{organization_id: organization.id, user_id: user_id, role: :owner}
+
+    case Ash.create(Membership, attributes, action: :add, authorize?: false) do
+      {:ok, _membership} -> {:ok, organization}
+      {:error, error} -> {:error, error}
+    end
+  end)
+end
+
+def change(changeset, _opts, _context), do: changeset

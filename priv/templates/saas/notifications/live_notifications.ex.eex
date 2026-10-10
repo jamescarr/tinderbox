@@ -1,0 +1,39 @@
+@moduledoc """
+LiveView `on_mount` hook that keeps the unread badge live.
+
+    on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+    on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+
+It assigns `:unread_count`, and once connected subscribes to the user's
+`"notifications:<user id>"` topic. Each `{:notification_created, notification}`
+message bumps the count; the hook returns `:cont`, so the message still reaches
+the LiveView's own `handle_info/2` (the inbox prepends the row there).
+"""
+
+import Phoenix.Component, only: [assign: 3, update: 3]
+import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1]
+
+alias <%= inspect(@prefix) %>.Notifications
+
+def on_mount(:unread_count, _params, _session, socket) do
+  case socket.assigns[:current_user] do
+    nil ->
+      {:cont, assign(socket, :unread_count, 0)}
+
+    user ->
+      socket = assign(socket, :unread_count, Notifications.unread_count(user))
+
+      if connected?(socket) do
+        Phoenix.PubSub.subscribe(<%= inspect(@pubsub) %>, "notifications:#{user.id}")
+        {:cont, attach_hook(socket, :notifications, :handle_info, &count_new/2)}
+      else
+        {:cont, socket}
+      end
+  end
+end
+
+defp count_new({:notification_created, _notification}, socket) do
+  {:cont, update(socket, :unread_count, &(&1 + 1))}
+end
+
+defp count_new(_message, socket), do: {:cont, socket}

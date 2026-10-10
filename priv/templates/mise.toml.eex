@@ -12,7 +12,10 @@
 [tools]
 elixir = "<%= @elixir %>"
 erlang = "<%= @erlang %>"
-<%= if @cmake? do %># broadway_kafka builds brod's crc32cer NIF from source, which needs CMake >= 3.16.
+<%= if @saas? do %># Stripe CLI for `mise run stripe` (or: brew install stripe/stripe-cli/stripe).
+# Released as a tarball holding a binary called `stripe`, hence `exe`.
+"github:stripe/stripe-cli" = { version = "latest", exe = "stripe" }
+<% end %><%= if @cmake? do %># broadway_kafka builds brod's crc32cer NIF from source, which needs CMake >= 3.16.
 cmake = "<%= @cmake %>"
 <% end %>
 [env]
@@ -48,4 +51,8 @@ description = "What CI should run: formatting, warnings-as-errors compile, tests
 [tasks.health]
 description = "Check the worker's health endpoint"
 run = "curl -fsS http://localhost:$HEALTH_PORT/health"
+<% end %><%= if @saas? do %>
+[tasks.stripe]
+description = "Forward Stripe test-mode webhooks to the app; copy the printed whsec_ into .mise.local.toml as STRIPE_WEBHOOK_SECRET"
+run = "stripe listen --forward-to localhost:4000/webhooks/stripe"
 <% end %>

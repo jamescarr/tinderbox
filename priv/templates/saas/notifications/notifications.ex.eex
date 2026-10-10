@@ -1,0 +1,90 @@
+@moduledoc """
+The notification platform: an inbox per user, per-key channel rules, and sending.
+
+This module is both the Ash domain holding the notification resources and the
+**facade** the rest of the application calls. Nothing outside it should touch
+`<%= inspect(@prefix) %>.Notifications.Notification` or `.Preference` directly, so the
+implementation can be swapped for a hosted service without touching callers.
+
+    <%= inspect(@prefix) %>.Notifications.trigger("member.invited", %{
+      recipients: [user, "a-user-id", %{email: "new@example.com"}],
+      actor: current_user,
+      data: %{title: "You're invited", body: "Join us.", url: "/invitations/abc"}
+    })
+
+Every function delegates to the configured adapter, which defaults to
+`<%= inspect(@prefix) %>.Notifications.Adapters.Local` (rows in this application's database, email
+through Oban and Swoosh).
+
+## Swapping in Knock
+
+| Facade | Knock |
+|---|---|
+| `trigger/3` | triggering a workflow (the key is the workflow key; `recipients`, `actor` and `data` carry over) |
+| `feed/2`, `unread_count/1` | the user's in-app feed |
+| `mark_read/2`, `mark_all_read/1`, `archive/2` | message status updates (read, archived), singly or in bulk |
+| `preferences/1`, `set_preference/4` | the user's preference set (per workflow, per channel type) |
+
+Write `<%= inspect(@prefix) %>.Notifications.Adapters.Knock` implementing
+`<%= inspect(@prefix) %>.Notifications.Adapter`, then:
+
+    config <%= inspect(@app) %>, :notifications, adapter: <%= inspect(@prefix) %>.Notifications.Adapters.Knock
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>
+
+resources do
+  resource <%= inspect(@prefix) %>.Notifications.Notification
+  resource <%= inspect(@prefix) %>.Notifications.Preference
+end
+
+alias <%= inspect(@prefix) %>.Notifications.Adapter
+
+@doc """
+Triggers the notification `key` for `params.recipients`.
+
+`params` is `t:Adapter.params/0`: `recipients` are users, user ids or
+`%{email: email}` (an address without an account gets email only), `actor` is
+the user who caused it (never notified of their own action), and `data` carries
+`:title`, and optionally `:body` and `:url`.
+"""
+@spec trigger(String.t(), Adapter.params(), keyword()) :: :ok | {:error, term()}
+def trigger(key, params, opts \\ []), do: adapter().trigger(key, params, opts)
+
+@doc "The user's inbox, newest first. Options: `:limit` (default 50)."
+@spec feed(struct(), keyword()) :: [struct()]
+def feed(user, opts \\ []), do: adapter().feed(user, opts)
+
+@doc "How many unread, unarchived notifications the user has."
+@spec unread_count(struct()) :: non_neg_integer()
+def unread_count(user), do: adapter().unread_count(user)
+
+@doc "Marks one of the user's notifications as read."
+@spec mark_read(struct(), String.t()) :: {:ok, struct()} | {:error, term()}
+def mark_read(user, notification_id), do: adapter().mark_read(user, notification_id)
+
+@doc "Marks all of the user's notifications as read."
+@spec mark_all_read(struct()) :: :ok | {:error, term()}
+def mark_all_read(user), do: adapter().mark_all_read(user)
+
+@doc "Archives one of the user's notifications (it leaves the inbox)."
+@spec archive(struct(), String.t()) :: {:ok, struct()} | {:error, term()}
+def archive(user, notification_id), do: adapter().archive(user, notification_id)
+
+@doc """
+The user's effective channel settings for every key in
+`<%= inspect(@prefix) %>.Notifications.Catalog`, as `%{key => %{in_app: boolean, email: boolean}}`.
+"""
+@spec preferences(struct()) :: Adapter.preferences()
+def preferences(user), do: adapter().preferences(user)
+
+@doc "Turns one channel (`:in_app` or `:email`) on or off for one key."
+@spec set_preference(struct(), String.t(), Adapter.channel(), boolean()) ::
+        :ok | {:error, term()}
+def set_preference(user, key, channel, enabled?),
+  do: adapter().set_preference(user, key, channel, enabled?)
+
+defp adapter do
+  Application.get_env(<%= inspect(@app) %>, :notifications, [])[:adapter] ||
+    <%= inspect(@prefix) %>.Notifications.Adapters.Local
+end

@@ -1,0 +1,203 @@
+@moduledoc """
+Brings `<%= inspect(@prefix) %>.Billing.Subscription` up to date with Stripe for one recorded event.
+
+Runs inside the `:sync` AshOban trigger of `<%= inspect(@prefix) %>.Billing.StripeEvent`:
+
+  1. fetch the subscription from Stripe (the event is only a hint; Stripe's
+     current state wins over whatever order webhooks arrived in),
+  2. find the organization it belongs to (the `organization_id` metadata set at
+     checkout, else the organization with that Stripe customer),
+  3. upsert the organization's subscription,
+  4. mark the event processed, and, when the status or plan actually changed (or
+     a payment failed), notify the organization's owners and admins.
+
+A subscription that belongs to no organization (for example the fixtures
+`stripe trigger` creates) is marked processed without notifying anyone. A Stripe
+error fails the job, and Oban retries it.
+"""
+
+use Ash.Resource.Change
+
+require Ash.Query
+require Logger
+
+alias <%= inspect(@accounts) %>.Membership
+alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@prefix) %>.Billing.Plans
+alias <%= inspect(@prefix) %>.Billing.Subscription
+alias <%= inspect(@prefix) %>.Notifications
+
+@impl true
+def change(changeset, _opts, _context) do
+  changeset
+  |> Ash.Changeset.before_action(&sync/1)
+  |> Ash.Changeset.after_action(&notify/2)
+end
+
+defp sync(changeset) do
+  event = changeset.data
+
+  with {:ok, stripe} <- Stripe.Subscription.retrieve(event.stripe_subscription_id),
+       {:ok, organization} <- find_organization(stripe),
+       {:ok, outcome} <- upsert(organization, stripe) do
+    changeset
+    |> Ash.Changeset.force_change_attribute(:processed_at, now())
+    |> Ash.Changeset.put_context(:billing_sync, outcome)
+  else
+    :no_organization ->
+      Logger.info("stripe subscription #{event.stripe_subscription_id} belongs to no organization")
+      Ash.Changeset.force_change_attribute(changeset, :processed_at, now())
+
+    {:error, error} ->
+      Ash.Changeset.add_error(changeset, error)
+  end
+end
+
+defp find_organization(stripe) do
+  case organization_by_id(stripe.metadata["organization_id"]) || organization_by_customer(stripe) do
+    nil -> :no_organization
+    organization -> {:ok, organization}
+  end
+end
+
+defp organization_by_id(nil), do: nil
+
+defp organization_by_id(id) do
+  case Ash.get(Organization, id, authorize?: false) do
+    {:ok, organization} -> organization
+    {:error, _not_found} -> nil
+  end
+end
+
+defp organization_by_customer(stripe) do
+  Organization
+  |> Ash.Query.filter(stripe_customer_id == ^customer_id(stripe))
+  |> Ash.read_one!(authorize?: false)
+end
+
+defp upsert(organization, stripe) do
+  item = stripe.items.data |> List.first()
+  price_id = item && item.price.id
+  previous = previous(organization)
+
+  plan_key =
+    case Plans.by_price_id(price_id) do
+      {:ok, plan} -> plan.key
+      :error -> nil
+    end
+
+  attributes = %{
+    organization_id: organization.id,
+    stripe_subscription_id: stripe.id,
+    stripe_customer_id: customer_id(stripe),
+    stripe_price_id: price_id,
+    plan_key: plan_key,
+    status: stripe.status,
+    current_period_end: period_end(item, stripe),
+    cancel_at_period_end: stripe.cancel_at_period_end || false
+  }
+
+  # A late webhook for a subscription that ended must not overwrite the
+  # organization's newer subscription.
+  if superseded?(previous, attributes) do
+    {:ok, %{organization: organization, changed?: false, subscription: previous}}
+  else
+    case Ash.create(Subscription, attributes, action: :upsert_from_stripe, authorize?: false) do
+      {:ok, subscription} ->
+        {:ok,
+         %{organization: organization, changed?: changed?(previous, subscription), subscription: subscription}}
+
+      {:error, error} ->
+        {:error, error}
+    end
+  end
+end
+
+# The end of the current billing period lives on the subscription item in recent
+# Stripe API versions and on the subscription itself in older ones.
+defp period_end(item, stripe) do
+  case (item && item.current_period_end) || Map.get(stripe, :current_period_end) do
+    nil -> nil
+    seconds -> DateTime.from_unix!(seconds)
+  end
+end
+
+defp previous(organization) do
+  Subscription
+  |> Ash.Query.filter(organization_id == ^organization.id)
+  |> Ash.read_one!(authorize?: false)
+end
+
+defp superseded?(nil, _attributes), do: false
+
+defp superseded?(previous, attributes) do
+  previous.stripe_subscription_id != attributes.stripe_subscription_id and
+    attributes.status in ["canceled", "incomplete_expired"]
+end
+
+defp changed?(nil, _subscription), do: true
+
+defp changed?(previous, subscription) do
+  previous.status != subscription.status or previous.plan_key != subscription.plan_key or
+    previous.stripe_subscription_id != subscription.stripe_subscription_id
+end
+
+# Stripe returns the customer as an id unless it was expanded.
+defp customer_id(%{customer: %{id: id}}), do: id
+defp customer_id(%{customer: id}) when is_binary(id), do: id
+
+# -- notifications ----------------------------------------------------------
+
+defp notify(changeset, event) do
+  case changeset.context[:billing_sync] do
+    %{organization: organization, subscription: subscription, changed?: changed?} ->
+      if changed?, do: subscription_updated(organization, subscription)
+      if event.type == "invoice.payment_failed", do: payment_failed(organization, subscription)
+
+    nil ->
+      :ok
+  end
+
+  {:ok, event}
+end
+
+defp subscription_updated(organization, subscription) do
+  Notifications.trigger("subscription.updated", %{
+    recipients: managers(organization),
+    data: %{
+      title: "Subscription #{humanize(subscription.status)}",
+      body: "#{plan_name(subscription)} is now #{humanize(subscription.status)} for #{organization.name}.",
+      url: "/billing"
+    }
+  })
+end
+
+defp payment_failed(organization, subscription) do
+  Notifications.trigger("payment.failed", %{
+    recipients: managers(organization),
+    data: %{
+      title: "A payment failed",
+      body: "We could not charge the card for #{plan_name(subscription)} (#{organization.name}).",
+      url: "/billing"
+    }
+  })
+end
+
+defp managers(organization) do
+  Membership
+  |> Ash.Query.filter(organization_id == ^organization.id and role in [:owner, :admin])
+  |> Ash.Query.load(:user)
+  |> Ash.read!(authorize?: false)
+  |> Enum.map(& &1.user)
+end
+
+defp plan_name(%{stripe_price_id: price_id}) do
+  case Plans.by_price_id(price_id) do
+    {:ok, plan} -> plan.name
+    :error -> "Your plan"
+  end
+end
+
+defp humanize(status), do: status |> to_string() |> String.replace("_", " ")
+
+defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)

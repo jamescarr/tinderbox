@@ -93,7 +93,9 @@ defmodule Tinderbox.Gen.MiseTest do
           {"api", :sqs},
           {"worker", :sqs},
           {"worker", :pubsub},
-          {"worker", :kafka}
+          {"worker", :kafka},
+          {"worker", :nats},
+          {"saas", :nats}
         ] do
       igniter =
         test_project()
@@ -120,6 +122,28 @@ defmodule Tinderbox.Gen.MiseTest do
 
     assert toml =~ ~s(run = "mix phx.server")
     refute toml =~ "[tasks.health]"
+  end
+
+  test "saas serves with phx.server, installs the Stripe CLI and forwards webhooks with it" do
+    toml = content(mise(stack: "saas", broker: :nats))
+
+    assert toml =~ ~s(run = "mix phx.server")
+    assert toml =~ ~s("github:stripe/stripe-cli" = { version = "latest", exe = "stripe" })
+
+    assert task(toml, "stripe") =~
+             ~s(run = "stripe listen --forward-to localhost:4000/webhooks/stripe")
+
+    assert task(toml, "dev") =~ "the app (http://localhost:4000, admin at /admin)"
+    assert toml =~ ~s(SSO_BASE_URL = "http://localhost:5556/dex")
+    refute toml =~ "[tasks.health]"
+  end
+
+  test "the other stacks have no Stripe CLI or stripe task" do
+    for stack <- ["api", "worker"] do
+      toml = content(mise(stack: stack))
+
+      refute toml =~ "stripe"
+    end
   end
 
   test "the worker runs with --no-halt and gets a health task on HEALTH_PORT" do
@@ -169,7 +193,13 @@ defmodule Tinderbox.Gen.MiseTest do
   end
 
   test "ends with a single newline whichever optional blocks are on" do
-    for opts <- [[], [stack: "worker"], [compose: false], [stack: "worker", broker: :kafka]] do
+    for opts <- [
+          [],
+          [stack: "worker"],
+          [compose: false],
+          [stack: "worker", broker: :kafka],
+          [stack: "saas", broker: :nats]
+        ] do
       toml = content(mise(opts))
 
       assert String.ends_with?(toml, "\n")

@@ -12,8 +12,10 @@ defmodule Tinderbox.Gen.Worker do
 
   * the object storage wiring both stacks share (`Tinderbox.Gen.Storage`),
   * the idempotency store (`<App>.Inbox` + `<App>.Inbox.Message`),
-  * the Broadway pipeline, the processing seam, and the broker-specific publisher
-    (plus its connection process for RabbitMQ / `:brod` client for Kafka),
+  * the Broadway pipeline (a `Gnat.Jetstream.PullConsumer` for `--broker nats`), the
+    processing seam, and the broker-specific publisher (plus its connection
+    process for RabbitMQ / `:brod` client for Kafka / the Gnat connection
+    supervisor for NATS),
   * the health endpoint and the supervisor children,
   * the runtime config the pipeline and the health endpoint read.
   """
@@ -142,9 +144,22 @@ defmodule Tinderbox.Gen.Worker do
 
   defp broker_child(assigns) do
     case assigns[:broker] do
-      :rabbitmq -> {assigns[:connection], []}
-      :kafka -> assigns[:kafka_client]
-      _sqs_or_pubsub -> nil
+      :rabbitmq ->
+        {assigns[:connection], []}
+
+      :kafka ->
+        assigns[:kafka_client]
+
+      # The connection settings come from the runtime config, so they are handed
+      # over as code (same technique as the health child's port).
+      :nats ->
+        settings =
+          Sourceror.parse_string!("Application.fetch_env!(#{inspect(assigns[:app])}, :nats)")
+
+        {Gnat.ConnectionSupervisor, {:code, settings}}
+
+      _sqs_or_pubsub ->
+        nil
     end
   end
 

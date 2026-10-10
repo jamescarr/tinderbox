@@ -1,0 +1,32 @@
+@moduledoc """
+Where your application reacts to events.
+
+`handle/1` receives the decoded envelope (a map with string keys: `"id"`,
+`"type"`, `"occurred_at"`, `"payload"`) and returns:
+
+  * `:ok` - handled, acknowledge it;
+  * `:skip` - not interested, acknowledge it;
+  * `{:error, reason}` - failed, JetStream redelivers it.
+
+Pattern-match on `"type"`:
+
+    def handle(%{"type" => "organization.create", "payload" => payload}) do
+      # …
+      :ok
+    end
+
+    def handle(_event), do: :skip
+
+Delivery is at-least-once, so handlers must be idempotent; `"id"` is stable
+across redeliveries.
+"""
+
+require Logger
+
+@spec handle(map()) :: :ok | :skip | {:error, term()}
+def handle(%{"type" => type, "id" => id}) do
+  Logger.info("event #{type} (#{id})")
+  :ok
+end
+
+def handle(_event), do: :skip

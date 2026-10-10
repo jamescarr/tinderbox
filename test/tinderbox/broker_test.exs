@@ -3,7 +3,7 @@ defmodule Tinderbox.BrokerTest do
 
   alias Tinderbox.Broker
 
-  @brokers ~w(sqs pubsub rabbitmq kafka)
+  @brokers ~w(sqs pubsub rabbitmq kafka nats)
 
   test "parse!/1 accepts the documented brokers" do
     for broker <- @brokers do
@@ -13,7 +13,7 @@ defmodule Tinderbox.BrokerTest do
 
   test "parse!/1 raises on an unknown broker" do
     assert_raise Mix.Error,
-                 ~r/Unknown --broker fog\. Must be one of: sqs, pubsub, rabbitmq, kafka/,
+                 ~r/Unknown --broker fog\. Must be one of: sqs, pubsub, rabbitmq, kafka, nats/,
                  fn -> Broker.parse!("fog") end
   end
 
@@ -31,6 +31,10 @@ defmodule Tinderbox.BrokerTest do
     end
   end
 
+  test "deps/1 gives nats gnat alone: JetStream is a pull consumer, not a Broadway producer" do
+    assert [{:gnat, "~> 1.18"}] = Broker.deps(:nats)
+  end
+
   test "deps/1 adds ex_aws_sqs only for sqs (the publisher uses ExAws.SQS)" do
     assert {:ex_aws_sqs, _} = List.keyfind(Broker.deps(:sqs), :ex_aws_sqs, 0)
 
@@ -44,6 +48,7 @@ defmodule Tinderbox.BrokerTest do
     assert Broker.compose_services(:pubsub) == []
     assert Broker.compose_services(:rabbitmq) == [:rabbitmq]
     assert Broker.compose_services(:kafka) == [:redpanda]
+    assert Broker.compose_services(:nats) == [:nats]
   end
 
   test "env_vars/2 documents the keys each broker reads" do
@@ -70,6 +75,14 @@ defmodule Tinderbox.BrokerTest do
              "KAFKA_CONSUMER_TOPIC",
              "KAFKA_GROUP_ID",
              "KAFKA_PRODUCER_TOPIC"
+           ]
+
+    assert env_keys(:nats) == [
+             "NATS_HOST",
+             "NATS_PORT",
+             "NATS_STREAM",
+             "NATS_CONSUMER",
+             "NATS_PUBLISH_SUBJECT"
            ]
   end
 

@@ -1,0 +1,11 @@
+policy action_type(:read) do
+  # Yourself, anybody as a platform admin, and the people you share an
+  # organization with.
+  authorize_if expr(id == ^actor(:id))
+  authorize_if actor_attribute_equals(:role, :admin)
+  authorize_if expr(exists(memberships.organization.memberships, user_id == ^actor(:id)))
+end
+
+policy action(:set_role) do
+  authorize_if actor_attribute_equals(:role, :admin)
+end

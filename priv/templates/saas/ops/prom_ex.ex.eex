@@ -1,0 +1,46 @@
+@moduledoc """
+Prometheus metrics (PromEx), served at `GET /metrics` by `PromEx.Plug` in the endpoint.
+
+`/metrics` is unauthenticated on purpose: scrape it from inside your network, or
+have the load balancer refuse it from outside. To protect it in the application
+instead, wrap the plug in the endpoint with `Unplug` (see `PromEx.Plug`).
+
+Grafana dashboards for each plugin ship with PromEx:
+`mix prom_ex.dashboard.export --dashboard application.json --module <%= inspect(@prefix) %>.PromEx`.
+"""
+
+use PromEx, otp_app: <%= inspect(@app) %>
+
+alias PromEx.Plugins
+
+@impl true
+def plugins do
+  [
+    Plugins.Application,
+    Plugins.Beam,
+    {Plugins.Phoenix, router: <%= inspect(@router) %>, endpoint: <%= inspect(@endpoint) %>},
+    Plugins.Ecto,
+    Plugins.Oban,
+    Plugins.PhoenixLiveView
+  ]
+end
+
+@impl true
+def dashboard_assigns do
+  [
+    datasource_id: "prometheus",
+    default_selected_interval: "30s"
+  ]
+end
+
+@impl true
+def dashboards do
+  [
+    {:prom_ex, "application.json"},
+    {:prom_ex, "beam.json"},
+    {:prom_ex, "phoenix.json"},
+    {:prom_ex, "ecto.json"},
+    {:prom_ex, "oban.json"},
+    {:prom_ex, "phoenix_live_view.json"}
+  ]
+end

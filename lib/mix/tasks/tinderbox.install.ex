@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Tinderbox.Install do
-  @shortdoc "Installs one of the stacks (api | worker) into the current project"
+  @shortdoc "Installs one of the stacks (api | worker | saas) into the current project"
 
   @moduledoc """
   Entry point igniter runs for `mix igniter.install tinderbox` — and
@@ -16,19 +16,27 @@ defmodule Mix.Tasks.Tinderbox.Install do
   mix igniter.new my_worker --sup \\
     --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
     --stack worker --broker sqs
+
+  # SaaS stack
+  mix igniter.new my_app --with phx.new \\
+    --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
+    --stack saas
   ```
 
-  * `--stack api|worker` (required) selects the generator
-    (`tinderbox.gen.api` / `tinderbox.gen.worker`).
-  * `--broker sqs|pubsub|rabbitmq|kafka` is passed to the worker generator.
+  * `--stack api|worker|saas` (required) selects the generator
+    (`tinderbox.gen.api` / `tinderbox.gen.worker` / `tinderbox.gen.saas`).
+  * `--broker sqs|pubsub|rabbitmq|kafka|nats` is passed to the worker generator.
+    The SaaS stack always runs its event bus on NATS JetStream, whatever
+    `--broker` says.
   * `--no-compose` skips `docker-compose.yml` / `.env.example`.
   * `--no-mise` skips `.mise.toml` (toolchain pins, environment, dev-loop tasks).
-  * `--no-demo` skips the API stack's demo domain and resource.
+  * `--no-demo` skips the API stack's demo domain and resource (ignored by saas).
 
   Because only one stack is generated per project, the dependency list and the
   composed tasks are computed from `--stack` in `info/2`: an API project does not
-  pull in the Broadway clients, and a worker project does not pull in
-  AshJsonApi/AshPhoenix.
+  pull in the Broadway clients, a worker project does not pull in
+  AshJsonApi/AshPhoenix, and neither pulls in the SaaS stack's authentication,
+  billing and admin packages.
   """
 
   use Igniter.Mix.Task
@@ -39,7 +47,7 @@ defmodule Mix.Tasks.Tinderbox.Install do
 
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
-      example: "mix igniter.install tinderbox --stack worker --broker sqs",
+      example: "mix igniter.install tinderbox --stack saas",
       schema: [stack: :string, broker: :string, compose: :boolean, mise: :boolean, demo: :boolean],
       defaults: [broker: "sqs", compose: true, mise: true, demo: true],
       required: [:stack],
@@ -59,10 +67,20 @@ defmodule Mix.Tasks.Tinderbox.Install do
 
     igniter =
       case opts[:stack] do
-        "api" -> Igniter.compose_task(igniter, "tinderbox.gen.api", flags)
-        "worker" -> Igniter.compose_task(igniter, "tinderbox.gen.worker", flags)
-        other -> Mix.raise(~s|Unknown --stack #{inspect(other)}. Must be "api" or "worker".|)
+        "api" ->
+          Igniter.compose_task(igniter, "tinderbox.gen.api", flags)
+
+        "worker" ->
+          Igniter.compose_task(igniter, "tinderbox.gen.worker", flags)
+
+        "saas" ->
+          Igniter.compose_task(igniter, "tinderbox.gen.saas", flags)
+
+        other ->
+          Mix.raise(~s|Unknown --stack #{inspect(other)}. Must be "api", "worker" or "saas".|)
       end
+
+    broker = broker(opts)
 
     igniter =
       if opts[:compose] do
@@ -70,7 +88,7 @@ defmodule Mix.Tasks.Tinderbox.Install do
           "--stack",
           opts[:stack],
           "--broker",
-          opts[:broker] || "sqs"
+          broker
         ])
       else
         igniter
@@ -80,12 +98,18 @@ defmodule Mix.Tasks.Tinderbox.Install do
       Igniter.compose_task(
         igniter,
         "tinderbox.gen.mise",
-        ["--stack", opts[:stack], "--broker", opts[:broker] || "sqs"] ++
+        ["--stack", opts[:stack], "--broker", broker] ++
           if(opts[:compose], do: [], else: ["--no-compose"])
       )
     else
       igniter
     end
+  end
+
+  # The SaaS stack's event bus is NATS JetStream, so compose and mise get the
+  # nats broker whatever `--broker` was given (its default is `sqs`).
+  defp broker(opts) do
+    if opts[:stack] == "saas", do: "nats", else: opts[:broker] || "sqs"
   end
 
   # `info/2` runs before igniter parses the options, and igniter merges the
@@ -95,6 +119,9 @@ defmodule Mix.Tasks.Tinderbox.Install do
 
   defp composes("worker"),
     do: ["tinderbox.gen.worker", "tinderbox.gen.compose", "tinderbox.gen.mise"]
+
+  defp composes("saas"),
+    do: ["tinderbox.gen.saas", "tinderbox.gen.compose", "tinderbox.gen.mise"]
 
   defp composes(_missing_or_unknown), do: []
 

@@ -1,0 +1,73 @@
+@moduledoc """
+Receives verified Stripe webhook events from `Stripe.WebhookPlug` (mounted in
+the endpoint at `/webhooks/stripe`).
+
+The handler does no work itself: it records the event and the subscription it is
+about in `<%= inspect(@prefix) %>.Billing.StripeEvent`, and the AshOban trigger syncs the
+subscription from Stripe in the background with retries. That keeps the response
+to Stripe fast and makes a Stripe redelivery harmless (events are unique by id).
+
+Events that are not about a subscription are acknowledged and ignored.
+"""
+
+@behaviour Stripe.WebhookHandler
+
+alias <%= inspect(@prefix) %>.Billing.StripeEvent
+
+@subscription_events ~w(
+  customer.subscription.created
+  customer.subscription.updated
+  customer.subscription.deleted
+)
+
+@subscription_reference_events ~w(
+  checkout.session.completed
+  invoice.paid
+  invoice.payment_failed
+)
+
+@impl Stripe.WebhookHandler
+def handle_event(%Stripe.Event{type: type} = event) when type in @subscription_events do
+  record(event, event.data.object.id)
+end
+
+def handle_event(%Stripe.Event{type: type} = event) when type in @subscription_reference_events do
+  record(event, subscription_id(event.data.object))
+end
+
+def handle_event(_event), do: :ok
+
+defp record(_event, nil), do: :ok
+
+defp record(%Stripe.Event{id: id, type: type}, subscription_id) do
+  attributes = %{stripe_event_id: id, type: type, stripe_subscription_id: subscription_id}
+
+  case Ash.create(StripeEvent, attributes, action: :record, authorize?: false) do
+    {:ok, _event} -> :ok
+    {:error, _error} -> {:error, "could not record the event"}
+  end
+end
+
+# A checkout session or invoice names its subscription as an id, as an expanded
+# object, or (newer API versions, invoices only) under
+# `parent.subscription_details.subscription`; one-off payments have none.
+defp subscription_id(object) do
+  case field(object, :subscription) do
+    nil ->
+      object
+      |> field(:parent)
+      |> field(:subscription_details)
+      |> field(:subscription)
+      |> id()
+
+    subscription ->
+      id(subscription)
+  end
+end
+
+defp field(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+defp field(_other, _key), do: nil
+
+defp id(%{id: id}) when is_binary(id), do: id
+defp id(id) when is_binary(id), do: id
+defp id(_other), do: nil

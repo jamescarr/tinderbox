@@ -1,0 +1,36 @@
+@moduledoc """
+Delivers one notification email through `<%= inspect(@mailer) %>` (Swoosh).
+
+Enqueued by `<%= inspect(@prefix) %>.Notifications.Adapters.Local`; Oban retries failures up to
+five times. Relative `url`s are made absolute with the endpoint's URL so the
+link works from an inbox.
+"""
+
+use Oban.Worker, queue: :notifications, max_attempts: 5
+
+import Swoosh.Email
+
+@impl Oban.Worker
+def perform(%Oban.Job{args: %{"to" => to, "title" => title} = args}) do
+  email =
+    new()
+    |> to(to)
+    |> from({<%= inspect(inspect(@prefix)) %>, Application.fetch_env!(<%= inspect(@app) %>, :mail_from)})
+    |> subject(title)
+    |> text_body(body(args))
+
+  case <%= inspect(@mailer) %>.deliver(email) do
+    {:ok, _metadata} -> :ok
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp body(args) do
+  [args["body"], link(args["url"])]
+  |> Enum.reject(&(&1 in [nil, ""]))
+  |> Enum.join("\n\n")
+end
+
+defp link(nil), do: nil
+defp link("/" <> _ = path), do: <%= inspect(@endpoint) %>.url() <> path
+defp link(url), do: url

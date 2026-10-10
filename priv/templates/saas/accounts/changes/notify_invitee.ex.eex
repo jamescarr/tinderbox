@@ -1,0 +1,34 @@
+@moduledoc """
+Tells the invitee they were invited: an email always, and an in-app notification
+too when the address already belongs to a user.
+
+The notification carries the link to `/invitations/<token>`.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@prefix) %>.Notifications
+
+@impl true
+def change(changeset, _opts, context) do
+  Ash.Changeset.after_action(changeset, fn _changeset, invitation ->
+    organization = Ash.get!(Organization, invitation.organization_id, authorize?: false)
+    inviter = context.actor
+
+    Notifications.trigger("member.invited", %{
+      recipients: [%{email: to_string(invitation.email)}],
+      actor: inviter,
+      data: %{
+        title: "You're invited to #{organization.name}",
+        body: "#{inviter_name(inviter)} invited you as #{invitation.role}.",
+        url: "/invitations/#{invitation.token}"
+      }
+    })
+
+    {:ok, invitation}
+  end)
+end
+
+defp inviter_name(%{email: email}), do: to_string(email)
+defp inviter_name(_other), do: "An administrator"

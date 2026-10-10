@@ -1,0 +1,104 @@
+@moduledoc """
+Makes sure the JetStream stream and the application's durable consumer exist.
+
+Started after the NATS connection, it creates the stream (all subjects under
+`config <%= inspect(@app) %>, :events` `subject_prefix`) and the pull consumer
+`<%= inspect(@prefix) %>.Events.Consumer` reads from, when they are missing. If NATS is not
+reachable it logs a warning and tries again every two seconds, forever: a broker
+outage never stops the application from booting.
+"""
+
+use GenServer
+
+require Logger
+
+alias Gnat.Jetstream.API.Consumer
+alias Gnat.Jetstream.API.Stream
+
+@retry_ms 2_000
+@second_ns 1_000_000_000
+
+def start_link(_opts), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+@impl GenServer
+def init(nil), do: {:ok, nil, {:continue, :ensure}}
+
+@impl GenServer
+def handle_continue(:ensure, state), do: {:noreply, attempt(state)}
+
+@impl GenServer
+def handle_info(:retry, state), do: {:noreply, attempt(state)}
+
+def handle_info(_message, state), do: {:noreply, state}
+
+@doc """
+Creates the stream and the consumer unless they exist.
+
+Safe to call at any time; returns `{:error, reason}` instead of raising.
+"""
+@spec ensure() :: :ok | {:error, term()}
+def ensure do
+  config = Application.fetch_env!(<%= inspect(@app) %>, :events)
+
+  with :ok <- ensure_stream(config), do: ensure_consumer(config)
+rescue
+  error -> {:error, error}
+catch
+  :exit, reason -> {:error, {:exit, reason}}
+end
+
+defp attempt(state) do
+  case ensure() do
+    :ok ->
+      Logger.info("JetStream stream and consumer are ready")
+
+    {:error, reason} ->
+      Logger.warning("JetStream is not ready (#{inspect(reason)}); retrying in #{@retry_ms}ms")
+      Process.send_after(self(), :retry, @retry_ms)
+  end
+
+  state
+end
+
+defp ensure_stream(config) do
+  case Stream.info(:gnat, config[:stream]) do
+    {:ok, _info} -> :ok
+    {:error, %{"code" => 404}} -> create_stream(config)
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp create_stream(config) do
+  stream = %Stream{
+    name: config[:stream],
+    subjects: [config[:subject_prefix] <> ".>"],
+    storage: :file,
+    retention: :limits,
+    max_age: 7 * 24 * 60 * 60 * @second_ns,
+    duplicate_window: 120 * @second_ns
+  }
+
+  with {:ok, _info} <- Stream.create(:gnat, stream), do: :ok
+end
+
+defp ensure_consumer(config) do
+  case Consumer.info(:gnat, config[:stream], config[:consumer]) do
+    {:ok, _info} -> :ok
+    {:error, %{"code" => 404}} -> create_consumer(config)
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp create_consumer(config) do
+  consumer = %Consumer{
+    stream_name: config[:stream],
+    durable_name: config[:consumer],
+    ack_policy: :explicit,
+    deliver_policy: :all,
+    filter_subject: config[:subject_prefix] <> ".>",
+    max_deliver: 10,
+    ack_wait: 30 * @second_ns
+  }
+
+  with {:ok, _info} <- Consumer.create(:gnat, consumer), do: :ok
+end

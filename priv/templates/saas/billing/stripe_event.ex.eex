@@ -1,0 +1,98 @@
+@moduledoc """
+A Stripe webhook event waiting to be synced.
+
+The webhook endpoint only records `(event id, type, subscription id)` here and
+answers 200 straight away. The `:sync` AshOban trigger then does the real work
+with retries: `<%= inspect(@prefix) %>.Billing.Changes.SyncSubscription` fetches the subscription
+from Stripe and upserts `<%= inspect(@prefix) %>.Billing.Subscription`. Recording is idempotent on the
+Stripe event id, so Stripe's redeliveries are free.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@prefix) %>.Billing,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  extensions: [AshOban]
+
+postgres do
+  table "stripe_events"
+  repo <%= inspect(@repo) %>
+end
+
+oban do
+  triggers do
+    trigger :sync do
+      action :sync
+      # `error` is set by `:mark_failed` once every attempt has failed, which
+      # takes the event out of the scheduler for good.
+      where expr(is_nil(processed_at) and is_nil(error))
+      queue :billing
+      max_attempts 5
+      scheduler_cron "* * * * *"
+      # Named explicitly (as `mix ash_oban.set_default_module_names` would):
+      # renaming the trigger later must not orphan jobs already enqueued.
+      worker_module_name <%= inspect(@prefix) %>.Billing.StripeEvent.AshOban.Worker.Sync
+      scheduler_module_name <%= inspect(@prefix) %>.Billing.StripeEvent.AshOban.Scheduler.Sync
+      on_error :mark_failed
+    end
+  end
+end
+
+actions do
+  defaults [:read]
+
+  create :record do
+    accept [:stripe_event_id, :type, :stripe_subscription_id]
+
+    upsert? true
+    upsert_identity :unique_stripe_event_id
+    upsert_fields []
+
+    change run_oban_trigger(:sync)
+  end
+
+  update :sync do
+    accept []
+    require_atomic? false
+
+    change <%= inspect(@prefix) %>.Billing.Changes.SyncSubscription
+  end
+
+  update :mark_failed do
+    accept []
+    require_atomic? false
+    argument :error, :map
+
+    change fn changeset, _context ->
+      error = changeset |> Ash.Changeset.get_argument(:error) |> inspect() |> String.slice(0, 2_000)
+
+      Ash.Changeset.force_change_attribute(changeset, :error, error)
+    end
+  end
+end
+
+policies do
+  bypass AshOban.Checks.AshObanInteraction do
+    authorize_if always()
+  end
+
+  # Everything else is forbidden: the webhook handler records events with
+  # `authorize?: false`.
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :stripe_event_id, :string, allow_nil?: false
+  attribute :type, :string, allow_nil?: false
+  attribute :stripe_subscription_id, :string, allow_nil?: false
+  attribute :processed_at, :utc_datetime
+  attribute :error, :string
+
+  create_timestamp :inserted_at
+end
+
+identities do
+  identity :unique_stripe_event_id, [:stripe_event_id]
+end

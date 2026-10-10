@@ -1,0 +1,2 @@
+# The From address of every email the application sends.
+config <%= inspect(@app) %>, mail_from: System.get_env("MAIL_FROM", "noreply@<%= @app_dash %>.local")

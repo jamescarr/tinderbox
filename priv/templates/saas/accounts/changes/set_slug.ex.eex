@@ -1,0 +1,24 @@
+@moduledoc """
+Derives an organization's `slug` from its name: the slugified name plus a short
+random suffix, so two organizations called "Acme" never collide on the unique
+`slug` identity.
+"""
+
+use Ash.Resource.Change
+
+@impl true
+def change(changeset, _opts, _context) do
+  case Ash.Changeset.get_attribute(changeset, :name) do
+    nil -> changeset
+    name -> Ash.Changeset.force_change_attribute(changeset, :slug, build(name))
+  end
+end
+
+@doc false
+def build(name) do
+  # `Slug.slugify/1` returns nil for a name with nothing slugifiable in it.
+  base = Slug.slugify(to_string(name)) || "org"
+  suffix = 4 |> :crypto.strong_rand_bytes() |> Base.encode32(case: :lower, padding: false)
+
+  base <> "-" <> binary_part(suffix, 0, 6)
+end

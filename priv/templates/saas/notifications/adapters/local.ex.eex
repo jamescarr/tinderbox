@@ -1,0 +1,192 @@
+@moduledoc """
+The notification adapter that keeps everything in this application: in-app
+notifications are rows in `notifications`, per-key channel rules are rows in
+`notification_preferences`, and email is an Oban job
+(`<%= inspect(@prefix) %>.Notifications.Workers.SendEmail`) delivered through Swoosh.
+
+For each recipient, `trigger/3` looks up the user's rule for the key (their row
+for the key, else their `"*"` row, else everything on) and delivers on each
+enabled channel. A recipient given as `%{email: address}` who has no account is
+email-only. Like Knock, the actor is never notified of their own action.
+"""
+
+@behaviour <%= inspect(@prefix) %>.Notifications.Adapter
+
+require Ash.Query
+require Logger
+
+alias <%= inspect(@prefix) %>.Notifications.Catalog
+alias <%= inspect(@prefix) %>.Notifications.Notification
+alias <%= inspect(@prefix) %>.Notifications.Preference
+alias <%= inspect(@prefix) %>.Notifications.Workers.SendEmail
+alias <%= inspect(@user) %>, as: User
+
+@default_channels %{in_app: true, email: true}
+@feed_limit 50
+
+@impl true
+def trigger(key, %{recipients: recipients, data: data} = params, _opts) do
+  actor_id = actor_id(params[:actor])
+
+  recipients
+  |> Enum.map(&resolve/1)
+  |> Enum.reject(&(&1 == :skip or user_id(&1) == actor_id and actor_id != nil))
+  |> Enum.uniq_by(&recipient_key/1)
+  |> Enum.each(&deliver(key, &1, data))
+end
+
+@impl true
+def feed(user, opts) do
+  Notification
+  |> Ash.Query.for_read(:inbox, %{}, actor: user)
+  |> Ash.Query.limit(Keyword.get(opts, :limit, @feed_limit))
+  |> Ash.read!()
+end
+
+@impl true
+def unread_count(user) do
+  Notification
+  |> Ash.Query.for_read(:unread, %{}, actor: user)
+  |> Ash.count!()
+end
+
+@impl true
+def mark_read(user, notification_id) do
+  with {:ok, notification} <- Ash.get(Notification, notification_id, actor: user) do
+    Ash.update(notification, %{}, action: :mark_read, actor: user)
+  end
+end
+
+@impl true
+def mark_all_read(user) do
+  result =
+    Notification
+    |> Ash.Query.for_read(:unread, %{}, actor: user)
+    |> Ash.bulk_update(:mark_read, %{},
+      actor: user,
+      strategy: :stream,
+      return_errors?: true
+    )
+
+  case result do
+    %Ash.BulkResult{status: :success} -> :ok
+    %Ash.BulkResult{errors: errors} -> {:error, errors}
+  end
+end
+
+@impl true
+def archive(user, notification_id) do
+  with {:ok, notification} <- Ash.get(Notification, notification_id, actor: user) do
+    Ash.update(notification, %{}, action: :archive, actor: user)
+  end
+end
+
+@impl true
+def preferences(user) do
+  rows =
+    Preference
+    |> Ash.Query.for_read(:for_user, %{}, actor: user)
+    |> Ash.read!()
+
+  default = rows |> Enum.find(&(&1.key == "*")) |> channels(@default_channels)
+
+  Map.new(Catalog.keys(), fn %{key: key} ->
+    {key, rows |> Enum.find(&(&1.key == key)) |> channels(default)}
+  end)
+end
+
+@impl true
+def set_preference(user, key, channel, enabled?) when channel in [:in_app, :email] do
+  current = Map.get(preferences(user), key, @default_channels)
+  attributes = current |> Map.put(channel, enabled?) |> Map.merge(%{key: key, user_id: user.id})
+
+  case Ash.create(Preference, attributes, action: :set, authorize?: false) do
+    {:ok, _preference} -> :ok
+    {:error, error} -> {:error, error}
+  end
+end
+
+# -- recipients -------------------------------------------------------------
+
+defp resolve(%User{} = user), do: {:user, user}
+
+defp resolve(%{email: email}) when is_binary(email) do
+  case User |> Ash.Query.filter(email == ^email) |> Ash.read_one(authorize?: false) do
+    {:ok, nil} -> {:email, email}
+    {:ok, user} -> {:user, user}
+    {:error, error} -> skip(email, error)
+  end
+end
+
+defp resolve(user_id) when is_binary(user_id) do
+  case Ash.get(User, user_id, authorize?: false) do
+    {:ok, user} -> {:user, user}
+    {:error, error} -> skip(user_id, error)
+  end
+end
+
+defp resolve(other), do: skip(other, :unsupported_recipient)
+
+defp skip(recipient, reason) do
+  Logger.warning("notification recipient #{inspect(recipient)} skipped: #{inspect(reason)}")
+  :skip
+end
+
+defp actor_id(%{id: id}), do: id
+defp actor_id(_other), do: nil
+
+defp user_id({:user, %{id: id}}), do: id
+defp user_id(_other), do: nil
+
+defp recipient_key({:user, user}), do: {:user, user.id}
+defp recipient_key({:email, email}), do: {:email, String.downcase(email)}
+
+# -- delivery ---------------------------------------------------------------
+
+defp deliver(key, {:user, user}, data) do
+  channels = channels_for(key, user)
+
+  if channels.in_app, do: in_app(key, user, data)
+  if channels.email, do: email(key, to_string(user.email), data)
+end
+
+defp deliver(key, {:email, address}, data), do: email(key, address, data)
+
+# The user's row for the key, else their `"*"` row, else everything on.
+defp channels_for(key, user) do
+  rows =
+    Preference
+    |> Ash.Query.filter(user_id == ^user.id and key in ^[key, "*"])
+    |> Ash.read!(authorize?: false)
+
+  fallback = rows |> Enum.find(&(&1.key == "*")) |> channels(@default_channels)
+  rows |> Enum.find(&(&1.key == key)) |> channels(fallback)
+end
+
+defp channels(nil, fallback), do: fallback
+defp channels(%{in_app: in_app, email: email}, _fallback), do: %{in_app: in_app, email: email}
+
+defp in_app(key, user, data) do
+  attributes = %{
+    key: key,
+    title: data.title,
+    body: data[:body],
+    url: data[:url],
+    data: Map.drop(data, [:title, :body, :url]),
+    recipient_id: user.id
+  }
+
+  notification = Ash.create!(Notification, attributes, action: :deliver, authorize?: false)
+
+  Phoenix.PubSub.broadcast(
+    <%= inspect(@pubsub) %>,
+    "notifications:#{user.id}",
+    {:notification_created, notification}
+  )
+end
+
+defp email(key, address, data) do
+  %{"to" => address, "key" => key, "title" => data.title, "body" => data[:body], "url" => data[:url]}
+  |> SendEmail.new()
+  |> Oban.insert!()
+end
