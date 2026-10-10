@@ -1,0 +1,58 @@
+@moduledoc """
+Pulls events from the JetStream consumer and hands each to
+`<%= inspect(@prefix) %>.Events.Handler`.
+
+A message is acked when the handler returns `:ok` or `:skip`, and nacked (so
+JetStream redelivers it, up to the consumer's `max_deliver`) when it returns
+`{:error, reason}` or raises. A message that is not valid JSON can never
+succeed, so it is terminated instead of redelivered.
+"""
+
+use Gnat.Jetstream.PullConsumer
+
+require Logger
+
+@spec start_link(term()) :: GenServer.on_start()
+def start_link(_opts) do
+  Gnat.Jetstream.PullConsumer.start_link(__MODULE__, nil, name: __MODULE__)
+end
+
+@impl true
+def init(nil) do
+  config = Application.fetch_env!(<%= inspect(@app) %>, :events)
+
+  {:ok, nil,
+   connection_name: :gnat,
+   stream_name: config[:stream],
+   consumer_name: config[:consumer],
+   connection_retries: 30}
+end
+
+@impl true
+def handle_message(message, state) do
+  case Jason.decode(IO.iodata_to_binary(message.body)) do
+    {:ok, event} when is_map(event) ->
+      {outcome(run(event)), state}
+
+    _invalid ->
+      Logger.error("dropping a JetStream message that is not a JSON event: #{inspect(message.topic)}")
+      {:term, state}
+  end
+end
+
+# A handler that raises must nack the message, not take the consumer down with it.
+defp run(event) do
+  <%= inspect(@prefix) %>.Events.Handler.handle(event)
+rescue
+  exception ->
+    Logger.error(Exception.format(:error, exception, __STACKTRACE__))
+    {:error, exception}
+end
+
+defp outcome(:ok), do: :ack
+defp outcome(:skip), do: :ack
+
+defp outcome({:error, reason}) do
+  Logger.error("event handler failed: #{inspect(reason)}")
+  :nack
+end

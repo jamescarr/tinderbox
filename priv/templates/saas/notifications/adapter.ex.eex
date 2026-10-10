@@ -1,0 +1,40 @@
+@moduledoc """
+The contract a notification backend implements.
+
+`<%= inspect(@prefix) %>.Notifications` delegates every call to the adapter configured under
+`config <%= inspect(@app) %>, :notifications, adapter: Module`. The shipped adapter is
+`<%= inspect(@prefix) %>.Notifications.Adapters.Local`; a Knock adapter would map the callbacks as
+described in the facade's documentation.
+"""
+
+@typedoc "A user struct, as returned by the accounts domain."
+@type user :: struct()
+
+@type recipient :: user() | String.t() | %{required(:email) => String.t()}
+
+@type data :: %{
+        required(:title) => String.t(),
+        optional(:body) => String.t() | nil,
+        optional(:url) => String.t() | nil,
+        optional(atom()) => term()
+      }
+
+@type params :: %{
+        required(:recipients) => [recipient()],
+        optional(:actor) => user() | nil,
+        required(:data) => data()
+      }
+
+@type channel :: :in_app | :email
+
+@type preferences :: %{String.t() => %{in_app: boolean(), email: boolean()}}
+
+@callback trigger(key :: String.t(), params(), keyword()) :: :ok | {:error, term()}
+@callback feed(user(), keyword()) :: [struct()]
+@callback unread_count(user()) :: non_neg_integer()
+@callback mark_read(user(), notification_id :: String.t()) :: {:ok, struct()} | {:error, term()}
+@callback mark_all_read(user()) :: :ok | {:error, term()}
+@callback archive(user(), notification_id :: String.t()) :: {:ok, struct()} | {:error, term()}
+@callback preferences(user()) :: preferences()
+@callback set_preference(user(), key :: String.t(), channel(), boolean()) ::
+            :ok | {:error, term()}

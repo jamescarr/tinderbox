@@ -1,0 +1,79 @@
+@moduledoc """
+Admin: one organization, with its members, subscription and pending invitations.
+"""
+
+use <%= inspect(@web) %>, :admin_live_view
+
+alias <%= inspect(@accounts) %>.Organization
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@impl true
+def mount(%{"id" => id}, _session, socket) do
+  organization =
+    Ash.get!(Organization, id,
+      actor: socket.assigns.current_user,
+      load: [:subscription, memberships: :user, invitations: []]
+    )
+
+  {:ok,
+   socket
+   |> assign(:page_title, organization.name)
+   |> assign(:organization, organization)
+   |> assign(:pending, Enum.filter(organization.invitations, &is_nil(&1.accepted_at)))}
+end
+
+defp time(nil), do: "—"
+defp time(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:organizations}>
+    <.card>
+      <.card_header title={@organization.name} description={"Slug: #{@organization.slug}"}>
+        <:action>
+          <.link navigate={~p"/admin/organizations"} class="text-sm underline">All organizations</.link>
+        </:action>
+      </.card_header>
+      <.card_content>
+        <p class="text-sm text-gray-500">Created {time(@organization.inserted_at)}</p>
+        <p class="text-sm text-gray-500">Stripe customer: {@organization.stripe_customer_id || "none"}</p>
+      </.card_content>
+    </.card>
+
+    <.card class="mt-6">
+      <.card_header title="Subscription" />
+      <.card_content>
+        <p :if={!@organization.subscription} class="text-sm text-gray-500">No subscription.</p>
+        <dl :if={@organization.subscription} class="grid grid-cols-2 gap-2 text-sm">
+          <dt class="text-gray-500">Plan</dt>
+          <dd>{@organization.subscription.plan_key || "—"}</dd>
+          <dt class="text-gray-500">Status</dt>
+          <dd>{@organization.subscription.status}</dd>
+          <dt class="text-gray-500">Period ends</dt>
+          <dd>{time(@organization.subscription.current_period_end)}</dd>
+          <dt class="text-gray-500">Stripe subscription</dt>
+          <dd><code class="text-xs">{@organization.subscription.stripe_subscription_id}</code></dd>
+        </dl>
+      </.card_content>
+    </.card>
+
+    <h3 class="mt-6 mb-2 text-lg font-semibold">Members</h3>
+    <.table id="members" rows={@organization.memberships}>
+      <:col :let={membership} label="Email">{to_string(membership.user.email)}</:col>
+      <:col :let={membership} label="Role">{membership.role}</:col>
+      <:col :let={membership} label="Joined">{time(membership.inserted_at)}</:col>
+    </.table>
+
+    <h3 class="mt-6 mb-2 text-lg font-semibold">Pending invitations</h3>
+    <p :if={@pending == []} class="text-sm text-gray-500">None.</p>
+    <.table :if={@pending != []} id="invitations" rows={@pending}>
+      <:col :let={invitation} label="Email">{to_string(invitation.email)}</:col>
+      <:col :let={invitation} label="Role">{invitation.role}</:col>
+      <:col :let={invitation} label="Expires">{time(invitation.expires_at)}</:col>
+    </.table>
+  </AdminLayouts.admin>
+  """
+end

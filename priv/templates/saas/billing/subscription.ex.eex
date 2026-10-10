@@ -1,0 +1,122 @@
+@moduledoc """
+An organization's Stripe subscription, as last synced from Stripe.
+
+One row per organization: it always describes the organization's current (or most
+recent) Stripe subscription. Written only by the sync in
+`<%= inspect(@prefix) %>.Billing.Changes.SyncSubscription` (an AshOban trigger on
+`<%= inspect(@prefix) %>.Billing.StripeEvent`); members of the organization may read it.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@prefix) %>.Billing,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshPaperTrail.Resource]
+
+postgres do
+  table "subscriptions"
+  repo <%= inspect(@repo) %>
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  create_version_on_destroy? false
+  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+actions do
+  defaults [:read]
+
+  create :upsert_from_stripe do
+    accept [
+      :stripe_subscription_id,
+      :stripe_customer_id,
+      :stripe_price_id,
+      :plan_key,
+      :status,
+      :current_period_end,
+      :cancel_at_period_end,
+      :organization_id
+    ]
+
+    # One row per organization: a new Stripe subscription (after a cancellation)
+    # replaces the previous one instead of colliding with it.
+    upsert? true
+    upsert_identity :unique_organization
+
+    upsert_fields [
+      :stripe_subscription_id,
+      :stripe_customer_id,
+      :stripe_price_id,
+      :plan_key,
+      :status,
+      :current_period_end,
+      :cancel_at_period_end
+    ]
+  end
+
+  read :for_organization do
+    get? true
+    argument :organization_id, :uuid, allow_nil?: false
+    filter expr(organization_id == ^arg(:organization_id))
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  # The sync runs inside an Oban job, with `authorize?: false` for the upsert.
+  bypass AshOban.Checks.AshObanInteraction do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(exists(organization.memberships, user_id == ^actor(:id)))
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :stripe_subscription_id, :string, allow_nil?: false, public?: true
+  attribute :stripe_customer_id, :string, allow_nil?: false, public?: true
+  attribute :stripe_price_id, :string, public?: true
+  attribute :plan_key, :string, public?: true
+
+  attribute :status, :atom,
+    constraints: [
+      one_of: [
+        :trialing,
+        :active,
+        :past_due,
+        :canceled,
+        :unpaid,
+        :incomplete,
+        :incomplete_expired,
+        :paused
+      ]
+    ],
+    allow_nil?: false,
+    public?: true
+
+  attribute :current_period_end, :utc_datetime, public?: true
+  attribute :cancel_at_period_end, :boolean, default: false, allow_nil?: false, public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+end
+
+identities do
+  identity :unique_stripe_subscription_id, [:stripe_subscription_id]
+  identity :unique_organization, [:organization_id]
+end

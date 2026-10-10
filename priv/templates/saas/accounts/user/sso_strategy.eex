@@ -1,0 +1,11 @@
+oidc :sso do
+  client_id <%= inspect(@secrets) %>
+  client_secret <%= inspect(@secrets) %>
+  redirect_uri <%= inspect(@secrets) %>
+  base_url <%= inspect(@secrets) %>
+  identity_resource <%= inspect(@user_identity) %>
+  authorization_params scope: "openid profile email"
+  # An SSO login whose email matches an existing, unverified local account does
+  # not link silently: the account's owner has to confirm by email first.
+  on_untrusted_email_match :confirm
+end

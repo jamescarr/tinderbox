@@ -1,0 +1,91 @@
+@moduledoc """
+A user's role in an organization. An organization always keeps at least one
+owner (`<%= inspect(@accounts) %>.Validations.NotLastOwner`).
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@accounts) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshPaperTrail.Resource]
+
+postgres do
+  table "memberships"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :organization, on_delete: :delete
+    reference :user, on_delete: :delete
+  end
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  create_version_on_destroy? false
+  # Memberships are really deleted (removing a member), so a version row must
+  # not hold a foreign key to the membership it describes.
+  reference_source? false
+  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+actions do
+  defaults [:read]
+
+  create :add do
+    accept [:organization_id, :user_id, :role]
+  end
+
+  update :change_role do
+    accept [:role]
+    require_atomic? false
+
+    validate <%= inspect(@accounts) %>.Validations.NotLastOwner
+  end
+
+  destroy :destroy do
+    primary? true
+    require_atomic? false
+
+    validate <%= inspect(@accounts) %>.Validations.NotLastOwner
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(exists(organization.memberships, user_id == ^actor(:id)))
+  end
+
+  policy action([:add, :change_role, :destroy]) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :role, :atom,
+    constraints: [one_of: [:owner, :admin, :member]],
+    default: :member,
+    allow_nil?: false,
+    public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+  belongs_to :user, <%= inspect(@user) %>, allow_nil?: false, public?: true
+end
+
+identities do
+  identity :unique_member, [:organization_id, :user_id]
+end

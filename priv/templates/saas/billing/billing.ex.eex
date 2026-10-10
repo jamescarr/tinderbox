@@ -1,0 +1,131 @@
+@moduledoc """
+Stripe subscriptions for organizations.
+
+This module is the Ash domain for billing and the facade the web layer calls:
+
+  * `start_checkout/3` - a Stripe Checkout session to subscribe an organization
+    to a plan,
+  * `portal_url/1` - the Stripe Billing Portal, where customers change plan,
+    update their card and cancel,
+  * `subscription/1` - the organization's synced subscription.
+
+Stripe is the source of truth. The webhook (`<%= inspect(@web) %>.StripeWebhookHandler`) only
+records the event; `<%= inspect(@prefix) %>.Billing.StripeEvent`'s AshOban trigger then fetches the
+subscription from Stripe and upserts `<%= inspect(@prefix) %>.Billing.Subscription`, so a lost or
+reordered webhook cannot leave stale state behind.
+
+Plans are configuration (`config <%= inspect(@app) %>, :plans`, see
+`<%= inspect(@prefix) %>.Billing.Plans`), not rows.
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>, extensions: [AshPaperTrail.Domain]
+
+paper_trail do
+  include_versions? true
+end
+
+resources do
+  resource <%= inspect(@prefix) %>.Billing.Subscription
+  resource <%= inspect(@prefix) %>.Billing.StripeEvent
+end
+
+alias <%= inspect(@prefix) %>.Billing.Plans
+alias <%= inspect(@prefix) %>.Billing.Subscription
+
+# A subscription in one of these states already bills the organization.
+@live_statuses [:trialing, :active, :past_due, :unpaid, :paused]
+
+@doc """
+Creates a Stripe Checkout session that subscribes `organization` to the plan
+`plan_key` and returns its URL.
+
+The organization's Stripe customer is created on first use. An organization
+that already has a live subscription is refused with `{:error, :already_subscribed}`:
+a second Checkout would bill it twice, so plan changes go through `portal_url/1`.
+"""
+@spec start_checkout(struct(), String.t(), struct()) :: {:ok, String.t()} | {:error, term()}
+def start_checkout(organization, plan_key, actor) do
+  with {:ok, plan} <- fetch_plan(plan_key),
+       :ok <- ensure_not_subscribed(organization),
+       {:ok, customer_id} <- ensure_customer(organization, actor),
+       {:ok, session} <- create_session(organization, customer_id, plan),
+       {:ok, url} <- hosted_url(session) do
+    {:ok, url}
+  end
+end
+
+@doc """
+The URL of a Stripe Billing Portal session for the organization's customer.
+
+`{:error, :no_customer}` when the organization has never started a checkout.
+"""
+@spec portal_url(struct()) :: {:ok, String.t()} | {:error, term()}
+def portal_url(%{stripe_customer_id: nil}), do: {:error, :no_customer}
+
+def portal_url(organization) do
+  params = %{customer: organization.stripe_customer_id, return_url: base_url() <> "/billing"}
+
+  with {:ok, session} <- Stripe.BillingPortal.Session.create(params), do: {:ok, session.url}
+end
+
+@doc "The organization's subscription, or `nil` when it has none."
+@spec subscription(struct()) :: {:ok, struct() | nil} | {:error, term()}
+def subscription(organization) do
+  Subscription
+  |> Ash.Query.for_read(:for_organization, %{organization_id: organization.id})
+  |> Ash.read_one(authorize?: false)
+end
+
+defp fetch_plan(plan_key) do
+  case Plans.fetch(plan_key) do
+    {:ok, plan} -> {:ok, plan}
+    :error -> {:error, :unknown_plan}
+  end
+end
+
+defp ensure_not_subscribed(organization) do
+  case subscription(organization) do
+    {:ok, %{status: status}} when status in @live_statuses -> {:error, :already_subscribed}
+    {:ok, _none_or_ended} -> :ok
+    {:error, error} -> {:error, error}
+  end
+end
+
+defp ensure_customer(%{stripe_customer_id: id}, _actor) when is_binary(id), do: {:ok, id}
+
+defp ensure_customer(organization, actor) do
+  params = %{
+    name: organization.name,
+    email: to_string(actor.email),
+    metadata: %{"organization_id" => organization.id}
+  }
+
+  with {:ok, customer} <- Stripe.Customer.create(params),
+       {:ok, _organization} <-
+         Ash.update(organization, %{stripe_customer_id: customer.id},
+           action: :set_stripe_customer_id,
+           actor: actor
+         ) do
+    {:ok, customer.id}
+  end
+end
+
+defp create_session(organization, customer_id, plan) do
+  Stripe.Checkout.Session.create(%{
+    mode: :subscription,
+    customer: customer_id,
+    line_items: [%{price: plan.price_id, quantity: 1}],
+    success_url: base_url() <> "/billing?checkout=success",
+    cancel_url: base_url() <> "/billing?checkout=canceled",
+    client_reference_id: organization.id,
+    # The subscription carries the organization id too: the webhook sync finds
+    # the organization from it.
+    subscription_data: %{metadata: %{"organization_id" => organization.id}}
+  })
+end
+
+# A hosted Checkout session always has a `url`; refuse to redirect to nothing.
+defp hosted_url(%{url: url}) when is_binary(url), do: {:ok, url}
+defp hosted_url(_session), do: {:error, :no_checkout_url}
+
+defp base_url, do: <%= inspect(@endpoint) %>.url()

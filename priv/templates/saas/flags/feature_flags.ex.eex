@@ -1,0 +1,26 @@
+@moduledoc """
+Feature flags, by FunWithFlags (https://hexdocs.pm/fun_with_flags).
+
+Flags live in the database (`fun_with_flags_toggles`) and are managed by admins
+at `/admin/flags`. This module tells FunWithFlags who the actors are:
+
+  * a user is the actor `"user:<id>"`, an organization `"organization:<id>"`,
+  * platform admins are in the `"admins"` group.
+
+    FunWithFlags.enabled?(:new_dashboard, for: user)
+    FunWithFlags.enabled?(:new_billing, for: organization)
+    FunWithFlags.enable(:beta, for_group: "admins")
+"""
+
+defimpl FunWithFlags.Actor, for: <%= inspect(@user) %> do
+  def id(%{id: id}), do: "user:" <> id
+end
+
+defimpl FunWithFlags.Actor, for: <%= inspect(@accounts) %>.Organization do
+  def id(%{id: id}), do: "organization:" <> id
+end
+
+defimpl FunWithFlags.Group, for: <%= inspect(@user) %> do
+  def in?(%{role: :admin}, "admins"), do: true
+  def in?(_user, _group), do: false
+end

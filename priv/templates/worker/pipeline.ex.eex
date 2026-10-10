@@ -1,17 +1,21 @@
 @moduledoc """
-Broadway pipeline: consume from the inbound <%= @broker %> endpoint, record the
+<%= if @broker == :nats do %>JetStream pull consumer<% else %>Broadway pipeline<% end %>: consume from the inbound <%= @broker %> endpoint, record the
 message id in the idempotency store, and publish the transformed payload to the
 outbound endpoint.
 
-Failure handling: a message is acked when it was processed, was already
+<%= if @broker == :nats do %>Failure handling: a message is acked when it was processed or was already
+processed (duplicate id). Anything else is nacked, which hands it back to the
+consumer's own redelivery policy (`max_deliver` on the JetStream consumer).
+<% else %>Failure handling: a message is acked when it was processed, was already
 processed (duplicate id), or was decoded/handled successfully. Anything else is
 failed, which hands it back to the broker's own redelivery policy.
-
+<% end %>
 `<%= inspect(@processing) %>` is the seam for real business logic.
 """
 
-use Broadway
-
+<%= if @broker == :nats do %>use Gnat.Jetstream.PullConsumer
+<% else %>use Broadway
+<% end %>
 require Logger
 
 alias <%= inspect(@inbox) %>, as: Inbox
@@ -19,7 +23,37 @@ alias <%= inspect(@message) %>, as: InboxMessage
 alias <%= inspect(@processing) %>, as: Processing
 alias <%= inspect(@publisher) %>, as: Publisher
 
-@spec start_link(term()) :: {:ok, pid()} | {:error, term()}
+<%= if @broker == :nats do %>@spec start_link(term()) :: GenServer.on_start()
+def start_link(_opts) do
+  Gnat.Jetstream.PullConsumer.start_link(__MODULE__, nil, name: __MODULE__)
+end
+
+@impl true
+def init(nil) do
+  config = Application.fetch_env!(:<%= @app %>, :pipeline)
+
+  {:ok, nil,
+   connection_name: :gnat,
+   stream_name: config[:stream],
+   consumer_name: config[:consumer],
+   connection_retries: 30}
+end
+
+@impl true
+def handle_message(message, state) do
+  case process(IO.iodata_to_binary(message.body)) do
+    :ok ->
+      {:ack, state}
+
+    :duplicate ->
+      {:ack, state}
+
+    {:error, reason} ->
+      Logger.error("failed to process message: #{inspect(reason)}")
+      {:nack, state}
+  end
+end
+<% else %>@spec start_link(term()) :: {:ok, pid()} | {:error, term()}
 def start_link(_opts) do
   config = Application.fetch_env!(:<%= @app %>, :pipeline)
 
@@ -47,7 +81,7 @@ def handle_failed(messages, _context) do
 
   messages
 end
-
+<% end %>
 defp process(body) do
   with {:ok, payload} <- decode(body) do
     id = message_id(payload, body)
@@ -132,7 +166,7 @@ defp mark_processed(id) do
   |> Ash.Changeset.for_update(:update, %{processed_at: DateTime.utc_now()})
   |> Ash.update(domain: Inbox)
 end
-
+<%= if @broker != :nats do %>
 <%= case @broker do %>
 <% :sqs -> %>defp producer_spec(config) do
   {BroadwaySQS.Producer,
@@ -176,4 +210,4 @@ end
    group_id: config[:group_id],
    topics: [config[:topic]]}
 end
-<% end %>
+<% end %><% end %>

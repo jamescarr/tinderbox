@@ -1,0 +1,32 @@
+@moduledoc """
+Refuses to remove or demote the only owner of an organization.
+"""
+
+use Ash.Resource.Validation
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Membership
+
+@impl true
+def validate(changeset, _opts, _context) do
+  membership = changeset.data
+
+  if membership.role == :owner and losing_ownership?(changeset) and owners(membership) <= 1 do
+    {:error, field: :role, message: "an organization needs at least one owner"}
+  else
+    :ok
+  end
+end
+
+@impl true
+def describe(_opts), do: [message: "an organization needs at least one owner", vars: []]
+
+defp losing_ownership?(%{action: %{type: :destroy}}), do: true
+defp losing_ownership?(changeset), do: Ash.Changeset.get_attribute(changeset, :role) != :owner
+
+defp owners(membership) do
+  Membership
+  |> Ash.Query.filter(organization_id == ^membership.organization_id and role == :owner)
+  |> Ash.count!(authorize?: false)
+end

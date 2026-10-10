@@ -1,0 +1,24 @@
+@moduledoc """
+LiveView `on_mount` hook for the admin section.
+
+    on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+    on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+A signed-in user who is not a platform admin (`role: :admin`, see
+`ADMIN_EMAILS`) is sent back to the dashboard with an error.
+"""
+
+use <%= inspect(@web) %>, :verified_routes
+
+def on_mount(:require_admin, _params, _session, socket) do
+  case socket.assigns[:current_user] do
+    %{role: :admin} ->
+      {:cont, socket}
+
+    _other ->
+      {:halt,
+       socket
+       |> Phoenix.LiveView.put_flash(:error, "Not authorized")
+       |> Phoenix.LiveView.redirect(to: ~p"/dashboard")}
+  end
+end

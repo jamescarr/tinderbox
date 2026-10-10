@@ -1,0 +1,34 @@
+@moduledoc """
+Switches the organization the signed-in user is working in.
+
+The choice lives in the session (`:current_organization_id`), which
+`<%= inspect(@web) %>.LiveOrganization` reads on every LiveView mount. It is a
+controller, not a LiveView event, because a LiveView cannot write the session.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+alias <%= inspect(@accounts) %>.Organization
+
+# POST /organizations/switch with `id`
+def switch(conn, %{"id" => id}) do
+  case conn.assigns[:current_user] do
+    nil ->
+      redirect(conn, to: ~p"/sign-in")
+
+    user ->
+      # `:mine` only returns organizations the user is a member of, so a forged
+      # id for somebody else's organization is refused here.
+      case Ash.get(Organization, id, action: :mine, actor: user) do
+        {:ok, organization} ->
+          conn
+          |> put_session(:current_organization_id, organization.id)
+          |> redirect(to: ~p"/dashboard")
+
+        {:error, _error} ->
+          conn
+          |> put_flash(:error, "You are not a member of that organization")
+          |> redirect(to: ~p"/dashboard")
+      end
+  end
+end

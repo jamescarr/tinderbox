@@ -22,8 +22,8 @@ defmodule Tinderbox.Env do
   The env sections for a generated project.
 
   Options: `:app`, `:module` (base module, used in a comment), `:broker`, and
-  optionally `:stack` (`"api"` | `"worker"`, default `"api"`) and `:db?`
-  (default `true`).
+  optionally `:stack` (`"api"` | `"worker"` | `"saas"`, default `"api"`) and
+  `:db?` (default `true`).
   """
   @spec sections(keyword()) :: [section()]
   def sections(opts) do
@@ -74,10 +74,45 @@ defmodule Tinderbox.Env do
         []
       end
 
-    (postgres ++ shared ++ worker)
+    (postgres ++ shared ++ worker ++ saas(stack, app, app_dash))
     |> drop_repeated_names()
     |> validate!()
   end
+
+  # The SaaS stack's own variables. The broker is *not* consulted: the stack's
+  # event bus is always NATS, and the worker's stream/consumer names (which
+  # `Broker.env_vars(:nats, _)` would add) mean nothing here.
+  defp saas("saas", app, app_dash) do
+    [
+      {"NATS (JetStream)", [{"NATS_HOST", "localhost"}, {"NATS_PORT", "4222"}]},
+      {"SSO: Dex OIDC emulator (any OIDC issuer works: Google, Microsoft, Okta, Auth0)",
+       [
+         {"SSO_BASE_URL", "http://localhost:5556/dex"},
+         {"SSO_CLIENT_ID", app_dash},
+         {"SSO_CLIENT_SECRET", "#{app_dash}-dev-secret"},
+         {"SSO_REDIRECT_URI", "http://localhost:4000/auth"}
+       ]},
+      {"Mail: Mailpit (UI http://localhost:8025)",
+       [
+         {"SMTP_HOST", "localhost"},
+         {"SMTP_PORT", "1025"},
+         {"MAIL_FROM", "noreply@#{app_dash}.local"}
+       ]},
+      {"Stripe test mode: replace in .mise.local.toml, never commit real keys",
+       [
+         {"STRIPE_SECRET_KEY", "sk_test_replace_me"},
+         {"STRIPE_WEBHOOK_SECRET", "whsec_replace_me"},
+         {"STRIPE_PRICE_STARTER", "price_replace_me"},
+         {"STRIPE_PRICE_PRO", "price_replace_me"}
+       ]},
+      {"Admins: comma-separated emails that get role admin on registration",
+       [{"ADMIN_EMAILS", "admin@example.com"}]},
+      {"Observability (set OTEL_EXPORTER_OTLP_ENDPOINT to export traces)",
+       [{"OTEL_SERVICE_NAME", to_string(app)}]}
+    ]
+  end
+
+  defp saas(_stack, _app, _app_dash), do: []
 
   @doc """
   Renders sections as `.env.example`: every assignment is an `export`.

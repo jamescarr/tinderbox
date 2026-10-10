@@ -1,0 +1,64 @@
+@moduledoc """
+A user's channel rule for one notification key. The key `"*"` is the user's
+default for every key without a row of its own; with no rows at all, every
+channel is on.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@prefix) %>.Notifications,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer]
+
+postgres do
+  table "notification_preferences"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :user, on_delete: :delete
+  end
+end
+
+actions do
+  defaults [:read]
+
+  create :set do
+    accept [:key, :in_app, :email, :user_id]
+    upsert? true
+    upsert_identity :unique_user_key
+    upsert_fields [:in_app, :email]
+  end
+
+  read :for_user do
+    filter expr(user_id == ^actor(:id))
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(user_id == ^actor(:id))
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :key, :string, allow_nil?: false, public?: true
+  attribute :in_app, :boolean, default: true, allow_nil?: false, public?: true
+  attribute :email, :boolean, default: true, allow_nil?: false, public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :user, <%= inspect(@user) %>, allow_nil?: false, public?: true
+end
+
+identities do
+  identity :unique_user_key, [:user_id, :key]
+end

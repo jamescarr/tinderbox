@@ -1,0 +1,35 @@
+@moduledoc """
+The plans an organization can subscribe to.
+
+Plans are configuration, not rows: `config <%= inspect(@app) %>, :plans` in
+`config/runtime.exs`, each with a `key`, a display `name`, a `description` and the
+Stripe `price_id` (a recurring Price from your Stripe dashboard). Add a plan by
+adding a map there.
+"""
+
+@type plan :: %{
+        required(:key) => String.t(),
+        required(:name) => String.t(),
+        required(:price_id) => String.t(),
+        optional(:description) => String.t()
+      }
+
+@doc "Every plan, in the order they are configured."
+@spec all() :: [plan()]
+def all, do: Application.fetch_env!(<%= inspect(@app) %>, :plans)
+
+@doc "The plan with this key."
+@spec fetch(String.t()) :: {:ok, plan()} | :error
+def fetch(key), do: find(&(&1.key == key))
+
+@doc "The plan sold as this Stripe price."
+@spec by_price_id(String.t() | nil) :: {:ok, plan()} | :error
+def by_price_id(nil), do: :error
+def by_price_id(price_id), do: find(&(&1.price_id == price_id))
+
+defp find(predicate) do
+  case Enum.find(all(), predicate) do
+    nil -> :error
+    plan -> {:ok, plan}
+  end
+end

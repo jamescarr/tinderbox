@@ -1,0 +1,33 @@
+@moduledoc """
+Gives a user the `:admin` role when they register with an email listed in
+`config :<%= @app %>, :admin_emails` (`ADMIN_EMAILS`, comma separated).
+
+This is how the first platform administrator is created: nobody can promote
+themselves, and an address that is not listed registers as a plain member. The
+decision is made in a `before_action` hook so it also sees an email that another
+change derived later (the SSO register action reads it from the identity
+provider's `user_info`).
+"""
+
+use Ash.Resource.Change
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_action(changeset, fn changeset ->
+    if admin_email?(Ash.Changeset.get_attribute(changeset, :email)) do
+      Ash.Changeset.force_change_attribute(changeset, :role, :admin)
+    else
+      changeset
+    end
+  end)
+end
+
+defp admin_email?(nil), do: false
+
+defp admin_email?(email) do
+  email = email |> to_string() |> String.downcase()
+
+  :<%= @app %>
+  |> Application.get_env(:admin_emails, [])
+  |> Enum.any?(&(String.downcase(&1) == email))
+end

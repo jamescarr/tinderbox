@@ -21,10 +21,10 @@ defmodule Tinderbox.Gen.Storage do
     prefix = Igniter.Project.Module.module_name_prefix(igniter)
 
     igniter
-    |> Igniter.Project.Deps.add_dep({:ex_aws, "~> 2.7"})
-    |> Igniter.Project.Deps.add_dep({:ex_aws_s3, "~> 2.5"})
-    |> Igniter.Project.Deps.add_dep({:req, "~> 0.7"})
-    |> Igniter.Project.Deps.add_dep({:sweet_xml, "~> 0.7"})
+    |> add_dep({:ex_aws, "~> 2.7"})
+    |> add_dep({:ex_aws_s3, "~> 2.5"})
+    |> add_dep({:req, "~> 0.7"})
+    |> add_dep({:sweet_xml, "~> 0.7"})
     |> Gen.append_to_runtime_exs(
       Gen.render_template("runtime_config.exs.eex", app: app, app_dash: app_dash),
       fn igniter ->
@@ -36,4 +36,9 @@ defmodule Tinderbox.Gen.Storage do
       Gen.render_template("storage.ex.eex", app: app, module: prefix)
     )
   end
+
+  # A dependency the project already has is left alone: `phx.new` with a mailer
+  # declares `req ~> 0.5`, which allows 0.7, and `add_dep/2` would otherwise
+  # stop to ask whether to replace it, which a generator cannot answer.
+  defp add_dep(igniter, dep), do: Igniter.Project.Deps.add_dep(igniter, dep, on_exists: :skip)
 end

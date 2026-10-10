@@ -1,0 +1,9 @@
+defmodule <%= inspect(@web) %>.PageControllerTest do
+  use <%= inspect(@web) %>.ConnCase
+
+  test "GET / invites a visitor to sign in", %{conn: conn} do
+    conn = get(conn, ~p"/")
+
+    assert html_response(conn, 200) =~ "Sign in"
+  end
+end

@@ -1,0 +1,103 @@
+@moduledoc """
+Per-notification channel settings: for each key in
+`<%= inspect(@prefix) %>.Notifications.Catalog`, whether it reaches the user in the app, by email, or both.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@prefix) %>.Notifications
+alias <%= inspect(@prefix) %>.Notifications.Catalog
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :optional_organization}
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok,
+   socket
+   |> assign(:page_title, "Notification settings")
+   |> assign(:keys, Catalog.keys())
+   |> load()}
+end
+
+@impl true
+def handle_event("toggle", %{"key" => key, "channel" => channel} = params, socket)
+    when channel in ["in_app", "email"] do
+  # An unchecked checkbox sends no `value`.
+  enabled? = params["value"] == "true"
+
+  case Notifications.set_preference(
+         socket.assigns.current_user,
+         key,
+         String.to_existing_atom(channel),
+         enabled?
+       ) do
+    :ok -> {:noreply, load(socket)}
+    {:error, _error} -> {:noreply, put_flash(socket, :error, "Could not save that setting")}
+  end
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load(socket) do
+  assign(socket, :preferences, Notifications.preferences(socket.assigns.current_user))
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+  >
+    <.header>
+      Notification settings
+      <:subtitle>Choose how each kind of notification reaches you.</:subtitle>
+    </.header>
+
+    <table class="table" id="notification-settings">
+      <thead>
+        <tr>
+          <th>Notification</th>
+          <th>In the app</th>
+          <th>Email</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={entry <- @keys} id={"preference-#{entry.key}"}>
+          <td>{entry.label}</td>
+          <td>
+            <input
+              type="checkbox"
+              class="checkbox"
+              value="true"
+              checked={@preferences[entry.key].in_app}
+              phx-click="toggle"
+              phx-value-key={entry.key}
+              phx-value-channel="in_app"
+              aria-label={"#{entry.label}: in the app"}
+            />
+          </td>
+          <td>
+            <input
+              type="checkbox"
+              class="checkbox"
+              value="true"
+              checked={@preferences[entry.key].email}
+              phx-click="toggle"
+              phx-value-key={entry.key}
+              phx-value-channel="email"
+              aria-label={"#{entry.label}: email"}
+            />
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </Layouts.app>
+  """
+end

@@ -1,0 +1,119 @@
+@moduledoc """
+Admin: every user, searchable and sortable, with a button to grant or revoke
+the platform admin role.
+
+The table is Petal's `<.data_table>` over an in-memory list (the newest 1000
+users): fine at admin scale, and it keeps sorting, filtering and paging out of
+this module.
+"""
+
+use <%= inspect(@web) %>, :admin_live_view
+
+alias PetalComponents.DataTable.Engine
+alias PetalComponents.DataTable.State
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@fields [:email, :role, :confirmed_at, :inserted_at]
+@limit 1000
+
+@impl true
+def mount(_params, _session, socket) do
+  state = %State{order_by: [{:inserted_at, :desc}], page_size: 25}
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Users")
+   |> load_rows()
+   |> run(state)}
+end
+
+@impl true
+def handle_event("table", params, socket) do
+  {:noreply, run(socket, State.handle_op(socket.assigns.table, params, fields: @fields))}
+end
+
+def handle_event("set_role", %{"id" => id, "role" => role}, socket) when role in ~w(admin member) do
+  actor = socket.assigns.current_user
+
+  if id == actor.id do
+    {:noreply, put_flash(socket, :error, "You cannot change your own role")}
+  else
+    user = Ash.get!(<%= inspect(@user) %>, id, actor: actor)
+    Ash.update!(user, %{role: role}, action: :set_role, actor: actor)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "#{user.email} is now #{role}")
+     |> load_rows()
+     |> run(socket.assigns.table)}
+  end
+end
+
+defp load_rows(socket) do
+  rows =
+    <%= inspect(@user) %>
+    |> Ash.Query.sort(created_at: :desc)
+    |> Ash.Query.limit(@limit)
+    |> Ash.read!(actor: socket.assigns.current_user)
+    |> Enum.map(fn user ->
+      %{
+        id: user.id,
+        email: to_string(user.email),
+        role: user.role,
+        confirmed_at: user.confirmed_at,
+        inserted_at: user.created_at
+      }
+    end)
+
+  assign(socket, :all_rows, rows)
+end
+
+defp run(socket, state) do
+  {rows, state} = Engine.List.run(socket.assigns.all_rows, state)
+  assign(socket, rows: rows, table: state)
+end
+
+defp time(nil), do: "—"
+defp time(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:users}>
+    <.data_table
+      id="users"
+      rows={@rows}
+      state={@table}
+      on_change="table"
+      searchable
+      page_size_options={[25, 50, 100]}
+    >
+      <:col :let={row} field={:email} label="Email" sortable filterable="text">{row.email}</:col>
+      <:col :let={row} field={:role} label="Role" sortable>
+        <.badge color={if row.role == :admin, do: "warning", else: "gray"} label={to_string(row.role)} />
+      </:col>
+      <:col :let={row} field={:confirmed_at} label="Confirmed" sortable>
+        {time(row.confirmed_at)}
+      </:col>
+      <:col :let={row} field={:inserted_at} label="Registered" sortable>
+        {time(row.inserted_at)}
+      </:col>
+      <:action :let={row}>
+        <.button
+          :if={row.id != @current_user.id}
+          size="xs"
+          variant="outline"
+          color="gray"
+          phx-click="set_role"
+          phx-value-id={row.id}
+          phx-value-role={if row.role == :admin, do: "member", else: "admin"}
+        >
+          {if row.role == :admin, do: "Make member", else: "Make admin"}
+        </.button>
+      </:action>
+    </.data_table>
+  </AdminLayouts.admin>
+  """
+end

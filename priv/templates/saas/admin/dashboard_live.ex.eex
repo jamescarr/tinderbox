@@ -1,0 +1,59 @@
+@moduledoc """
+Admin dashboard: how many users, organizations and active subscriptions there are.
+"""
+
+use <%= inspect(@web) %>, :admin_live_view
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@prefix) %>.Billing.Subscription
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@impl true
+def mount(_params, _session, socket) do
+  actor = socket.assigns.current_user
+
+  active_subscriptions =
+    Subscription
+    |> Ash.Query.filter(status in [:active, :trialing])
+    |> Ash.count!(actor: actor)
+
+  {:ok,
+   assign(socket,
+     page_title: "Admin",
+     users: Ash.count!(<%= inspect(@user) %>, actor: actor),
+     organizations: Ash.count!(Organization, actor: actor),
+     active_subscriptions: active_subscriptions
+   )}
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:dashboard}>
+    <div class="grid gap-4 sm:grid-cols-3">
+      <.card>
+        <.card_header title="Users" />
+        <.card_content>
+          <p class="text-3xl font-semibold">{@users}</p>
+        </.card_content>
+      </.card>
+      <.card>
+        <.card_header title="Organizations" />
+        <.card_content>
+          <p class="text-3xl font-semibold">{@organizations}</p>
+        </.card_content>
+      </.card>
+      <.card>
+        <.card_header title="Active subscriptions" />
+        <.card_content>
+          <p class="text-3xl font-semibold">{@active_subscriptions}</p>
+        </.card_content>
+      </.card>
+    </div>
+  </AdminLayouts.admin>
+  """
+end

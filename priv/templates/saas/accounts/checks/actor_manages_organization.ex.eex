@@ -1,0 +1,41 @@
+@moduledoc """
+Policy check: the actor is an owner or admin of the organization the action is
+about.
+
+Used where an expression check cannot be: on creates (there is no record yet,
+only the `organization_id` being set) and, for uniformity, on updates and
+destroys of rows that belong to an organization.
+
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+
+`field` names the changeset attribute that holds the organization id
+(`:organization_id` on memberships and invitations, `:id` on the organization
+itself).
+"""
+
+use Ash.Policy.SimpleCheck
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Membership
+
+@impl true
+def describe(opts), do: "actor is an owner or admin of the organization (#{opts[:field]})"
+
+@impl true
+def match?(%{id: user_id}, %{subject: %Ash.Changeset{} = changeset}, opts) do
+  case Ash.Changeset.get_attribute(changeset, Keyword.fetch!(opts, :field)) do
+    nil -> false
+    organization_id -> manages?(user_id, organization_id)
+  end
+end
+
+def match?(_actor, _context, _opts), do: false
+
+defp manages?(user_id, organization_id) do
+  Membership
+  |> Ash.Query.filter(
+    organization_id == ^organization_id and user_id == ^user_id and role in [:owner, :admin]
+  )
+  |> Ash.exists?(authorize?: false)
+end

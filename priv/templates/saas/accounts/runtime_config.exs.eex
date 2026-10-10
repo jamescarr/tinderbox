@@ -1,0 +1,18 @@
+# Single sign-on: any OIDC issuer works (Google, Microsoft, Okta, Auth0, Dex).
+# The defaults are the docker compose Dex values, so `mix` tasks that load
+# runtime.exs work before `.env` is sourced. `SSO_REDIRECT_URI` is the
+# callback *base*: AshAuthentication appends `/user/sso/callback`.
+#
+# `ADMIN_EMAILS` (comma separated) lists who becomes a platform administrator
+# (`role: :admin`) when they register. It defaults to the Dex user outside
+# production only: a well-known default admin address must never be live in prod.
+config <%= inspect(@app) %>,
+  sso_client_id: System.get_env("SSO_CLIENT_ID", "<%= @app_dash %>"),
+  sso_client_secret: System.get_env("SSO_CLIENT_SECRET", "<%= @app_dash %>-dev-secret"),
+  sso_redirect_uri: System.get_env("SSO_REDIRECT_URI", "http://localhost:4000/auth"),
+  sso_base_url: System.get_env("SSO_BASE_URL", "http://localhost:5556/dex"),
+  admin_emails:
+    "ADMIN_EMAILS"
+    |> System.get_env(if(config_env() == :prod, do: "", else: "admin@example.com"))
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)

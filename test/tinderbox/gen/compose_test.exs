@@ -53,6 +53,59 @@ defmodule Tinderbox.Gen.ComposeTest do
     refute content =~ "redpanda"
   end
 
+  test "nats adds JetStream; only the worker stack gets the bootstrap job its `ready` waits for" do
+    content = compose_content(:nats)
+
+    assert content =~ "image: nats:2.15-alpine"
+    assert content =~ ~s(command: ["--jetstream")
+    assert content =~ "  nats-data:"
+    refute content =~ "nats-bootstrap"
+    refute content =~ "rabbitmq:4-management-alpine"
+
+    worker = compose_content(:nats, stack: "worker")
+
+    assert worker =~ "natsio/nats-box:0.20.0"
+    assert worker =~ ~s(stream add test-inbound --subjects "test.inbound")
+    assert worker =~ ~s(stream add test-outbound --subjects "test.outbound")
+    assert worker =~ "consumer add test-inbound test-worker --pull"
+    assert worker =~ ~r/nats-bootstrap:\n    image/
+
+    ready = worker |> String.split("\n  ready:\n", parts: 2) |> List.last()
+    assert ready =~ ~r/nats-bootstrap:\s+condition: service_completed_successfully/
+  end
+
+  test "saas adds Dex, Mailpit and NATS, and Dex's config next to them" do
+    igniter = compose(:nats, stack: "saas")
+    content = source(igniter, "docker-compose.yml")
+
+    assert content =~ "image: dexidp/dex:v2.46.0"
+    assert content =~ "./docker/dex/config.yaml:/etc/dex/config.yaml:ro"
+    assert content =~ "image: axllent/mailpit:v1.31"
+    assert content =~ ~s|"1025:1025"|
+    assert content =~ ~s|"8025:8025"|
+    assert content =~ "image: nats:2.15-alpine"
+    # The application creates its own stream (`Test.Events.StreamBootstrap`).
+    refute content =~ "nats-bootstrap"
+
+    dex = source(igniter, "docker/dex/config.yaml")
+
+    assert dex =~ "issuer: http://localhost:5556/dex"
+    assert dex =~ "- id: test"
+    assert dex =~ "secret: test-dev-secret"
+    assert dex =~ "http://localhost:4000/auth/user/sso/callback"
+    assert dex =~ "email: admin@example.com"
+  end
+
+  test "only the saas stack gets Dex and Mailpit" do
+    for stack <- ["api", "worker"] do
+      content = compose_content(:nats, stack: stack)
+
+      refute content =~ "dexidp/dex"
+      refute content =~ "mailpit"
+      refute_creates(compose(:nats, stack: stack), "docker/dex/config.yaml")
+    end
+  end
+
   test "a running service waits for every bootstrap job to complete, so `up --wait` exits 0" do
     # Compose fails `up --wait` when a job container merely exits (even with
     # status 0) unless a running service depends on it completing.

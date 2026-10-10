@@ -1,0 +1,72 @@
+@moduledoc """
+Publishes domain events to NATS JetStream.
+
+Every Ash change to an organization, membership, invitation or subscription is
+published by `<%= inspect(@prefix) %>.Events.AshNotifier`; your own code can publish too:
+
+    <%= inspect(@prefix) %>.Events.publish("report.generated", %{report_id: id})
+
+An event is a JSON envelope on the subject `<prefix>.<type>` (the prefix comes
+from `config <%= inspect(@app) %>, :events`):
+
+    {"id": "…", "type": "organization.create", "occurred_at": "…", "payload": {…}}
+
+`publish/3` waits for JetStream's acknowledgement (`PubAck`), sends the event id
+as `Nats-Msg-Id` so a retried publish inside the stream's duplicate window is
+stored once, and never raises: a down broker is `{:error, :disconnected}`.
+Consumers handle events in `<%= inspect(@prefix) %>.Events.Handler`.
+"""
+
+@receive_timeout 5_000
+
+@typedoc "Why a publish failed."
+@type error :: :disconnected | :timeout | {:jetstream, term()} | term()
+
+@doc """
+Publishes an event of `type` with `payload`. Options: `:id` (the event id,
+default a new UUID).
+"""
+@spec publish(String.t(), map(), keyword()) :: :ok | {:error, error()}
+def publish(type, payload, opts \\ []) do
+  id = Keyword.get_lazy(opts, :id, &Ecto.UUID.generate/0)
+
+  envelope = %{
+    id: id,
+    type: type,
+    occurred_at: DateTime.utc_now(),
+    payload: payload
+  }
+
+  with {:ok, body} <- Jason.encode(envelope),
+       {:ok, reply} <- request(subject(type), body, id) do
+    ack(reply)
+  end
+rescue
+  error -> {:error, error}
+catch
+  # `Gnat.request/4` is a GenServer call: with no connection process the call exits.
+  :exit, _reason -> {:error, :disconnected}
+end
+
+@doc "The subject an event of `type` is published on."
+@spec subject(String.t()) :: String.t()
+def subject(type), do: config()[:subject_prefix] <> "." <> type
+
+defp request(subject, body, id) do
+  Gnat.request(:gnat, subject, body,
+    headers: [{"Nats-Msg-Id", id}],
+    receive_timeout: @receive_timeout
+  )
+end
+
+# JetStream answers a publish with a PubAck: `{"stream": …, "seq": …}` on success,
+# `{"error": {…}}` when it refused the message.
+defp ack(%{body: body}) do
+  case Jason.decode(body) do
+    {:ok, %{"stream" => _stream, "seq" => _seq}} -> :ok
+    {:ok, %{"error" => error}} -> {:error, {:jetstream, error}}
+    other -> {:error, {:jetstream, other}}
+  end
+end
+
+defp config, do: Application.fetch_env!(<%= inspect(@app) %>, :events)

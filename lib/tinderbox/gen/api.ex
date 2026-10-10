@@ -21,10 +21,6 @@ defmodule Tinderbox.Gen.Api do
   alias Tinderbox.Gen
   alias Tinderbox.Gen.Storage
 
-  # The package is consumed as a local path dependency, so the "regenerate from
-  # scratch" hint has to name the path. See the README.
-  @package_path "/Users/jamescarr/projects/upmarkethq/tinderbox"
-
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do
     require_phoenix!(igniter)
@@ -50,7 +46,7 @@ defmodule Tinderbox.Gen.Api do
 
             mix igniter.new my_api --with phx.new \\
               --with-args="--no-html --no-assets --no-live --no-dashboard --no-mailer --no-gettext" \\
-              --install tinderbox@path:#{@package_path} \\
+              --install tinderbox@path:#{Gen.package_path()} \\
               --stack api
         """)
 

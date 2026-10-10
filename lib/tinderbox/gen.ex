@@ -82,30 +82,57 @@ defmodule Tinderbox.Gen do
     )
   end
 
+  # The package is consumed as a local path dependency, so the "regenerate from
+  # scratch" hints in the generators' errors have to name the path. See the README.
+  @package_path "/Users/jamescarr/projects/upmarkethq/tinderbox"
+
+  @doc "Where this package lives on the author's machine, for the generators' error hints."
+  @spec package_path() :: Path.t()
+  def package_path, do: @package_path
+
   @doc """
   The "what now?" notice a stack generator prints, matching the tooling that was
   generated: mise (`--no-mise` skips it), docker compose (`--no-compose` skips
   it), or neither.
   """
-  @spec next_steps(:api | :worker, Keyword.t()) :: String.t()
+  @spec next_steps(:api | :worker | :saas, Keyword.t()) :: String.t()
   def next_steps(stack, opts) do
-    serve = if stack == :api, do: "mix phx.server", else: "mix run --no-halt"
+    serve = if stack == :worker, do: "mix run --no-halt", else: "mix phx.server"
     health = if stack == :worker, do: " (health: `mise run health`)", else: ""
 
     cond do
       Keyword.get(opts, :mise, true) ->
-        "Next: mise trust && mise run dev   # #{steps(opts)}, then #{serve}#{health}; " <>
-          "`mise tasks` lists the rest"
+        "Next: mise trust && mise run dev   # #{steps(opts)}, then #{serve}#{health}" <>
+          saas_tail(stack, opts, "run `mise run stripe`") <>
+          "; `mise tasks` lists the rest"
 
       Keyword.get(opts, :compose, true) ->
         "Next: docker compose up -d --wait && cp .env.example .env && . ./.env && " <>
           "mix ash.setup && #{serve}" <>
-          if(stack == :worker, do: "   (health: curl localhost:4001/health)", else: "")
+          if(stack == :worker, do: "   (health: curl localhost:4001/health)", else: "") <>
+          saas_tail(stack, opts, nil)
 
       true ->
         "Next: mix ash.setup && #{serve}"
     end
   end
+
+  # What to do once the SaaS app is up. The local SSO provider and the mail sink
+  # are compose services, so there is nothing to say without compose.
+  defp saas_tail(:saas, opts, stripe_cli) do
+    if Keyword.get(opts, :compose, true) do
+      stripe =
+        "Stripe: put STRIPE_SECRET_KEY, STRIPE_PRICE_STARTER, STRIPE_PRICE_PRO in " <>
+          if(stripe_cli, do: ".mise.local.toml and #{stripe_cli}", else: ".env")
+
+      "; then open http://localhost:4000 — SSO: admin@example.com / password (Dex), " <>
+        "mail: http://localhost:8025 (Mailpit), " <> stripe
+    else
+      ""
+    end
+  end
+
+  defp saas_tail(_stack, _opts, _stripe_cli), do: ""
 
   defp steps(opts) do
     if Keyword.get(opts, :compose, true),

@@ -59,6 +59,22 @@ config <%= inspect(@app) %>, :pipeline,
   topic: System.get_env("KAFKA_CONSUMER_TOPIC", "<%= @app_dash %>-inbound"),
   producer_topic: System.get_env("KAFKA_PRODUCER_TOPIC", "<%= @app_dash %>-outbound"),
   concurrency: String.to_integer(System.get_env("PIPELINE_CONCURRENCY") || "4")
+<% :nats -> %>config <%= inspect(@app) %>, :nats, %{
+  name: :gnat,
+  backoff_period: 2_000,
+  connection_settings: [
+    %{
+      host: System.get_env("NATS_HOST", "localhost"),
+      port: String.to_integer(System.get_env("NATS_PORT", "4222"))
+    }
+  ]
+}
+
+config <%= inspect(@app) %>, :pipeline,
+  stream: System.get_env("NATS_STREAM", "<%= @app_dash %>-inbound"),
+  consumer: System.get_env("NATS_CONSUMER", "<%= @app_dash %>-worker"),
+  publish_subject: System.get_env("NATS_PUBLISH_SUBJECT", "<%= @app_dash %>.outbound"),
+  concurrency: String.to_integer(System.get_env("PIPELINE_CONCURRENCY") || "4")
 <% end %>
 
 config <%= inspect(@app) %>,

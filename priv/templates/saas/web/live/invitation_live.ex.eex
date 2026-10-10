@@ -1,0 +1,77 @@
+@moduledoc """
+Accepting an invitation: `/invitations/:token`, linked from the invitation email
+and notification.
+
+The invitee has to be signed in as the invited address (the `:accept` action
+checks it). A token that is unknown, already used or expired sends the visitor
+home with an error.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@accounts) %>.Invitation
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+
+@impl true
+def mount(%{"token" => token}, _session, socket) do
+  user = socket.assigns.current_user
+
+  with {:ok, %Invitation{} = invitation} <-
+         Invitation
+         |> Ash.Query.for_read(:by_token, %{token: token}, actor: user)
+         |> Ash.read_one(),
+       # The invitee is not a member yet, so the organization is read without
+       # the actor: holding the token is what authorizes seeing its name.
+       {:ok, invitation} <- Ash.load(invitation, :organization, authorize?: false) do
+    {:ok, socket |> assign(:page_title, "Invitation") |> assign(:invitation, invitation)}
+  else
+    _invalid_or_expired ->
+      {:ok,
+       socket
+       |> put_flash(:error, "This invitation is invalid or has expired")
+       |> push_navigate(to: ~p"/")}
+  end
+end
+
+@impl true
+def handle_event("accept", _params, socket) do
+  %{current_user: user, invitation: invitation} = socket.assigns
+
+  case Ash.update(invitation, %{}, action: :accept, actor: user) do
+    {:ok, _invitation} ->
+      {:noreply,
+       socket
+       |> put_flash(:info, "Welcome to #{invitation.organization.name}")
+       |> push_navigate(to: ~p"/dashboard")}
+
+    {:error, error} ->
+      {:noreply, put_flash(socket, :error, error_message(error))}
+  end
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp error_message(%{errors: [_ | _] = errors}),
+  do: errors |> Enum.map(&error_message/1) |> Enum.uniq() |> Enum.join(", ")
+
+defp error_message(%{message: message}) when is_binary(message), do: message
+defp error_message(error), do: Exception.message(error)
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app flash={@flash} current_user={@current_user} unread_count={@unread_count}>
+    <.header>
+      Join {@invitation.organization.name}
+      <:subtitle>
+        {to_string(@invitation.email)} was invited as {@invitation.role}.
+      </:subtitle>
+    </.header>
+
+    <.button variant="primary" phx-click="accept">Accept invitation</.button>
+  </Layouts.app>
+  """
+end

@@ -1,0 +1,22 @@
+<Layouts.app flash={@flash} current_user={assigns[:current_user]}>
+  <div class="hero py-20">
+    <div class="hero-content text-center">
+      <div class="max-w-lg">
+        <h1 class="text-5xl font-bold"><%= inspect(@prefix) %></h1>
+        <p class="py-6 text-lg">
+          Organizations, teammates and billing, ready to build on.
+        </p>
+        <.link
+          :if={assigns[:current_user]}
+          navigate={~p"/dashboard"}
+          class="btn btn-primary"
+        >
+          Go to dashboard
+        </.link>
+        <.link :if={!assigns[:current_user]} href={~p"/sign-in"} class="btn btn-primary">
+          Sign in
+        </.link>
+      </div>
+    </div>
+  </div>
+</Layouts.app>

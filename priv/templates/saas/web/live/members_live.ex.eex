@@ -1,0 +1,226 @@
+@moduledoc """
+The people in the current organization: change their role, remove them, and
+invite new ones by email. Owners and admins manage; members see the list.
+
+Every change goes through the Ash actions with the signed-in user as the actor,
+so what the policies forbid (for example demoting the last owner) surfaces as a
+flash message rather than being re-checked here.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Invitation
+alias <%= inspect(@accounts) %>.Membership
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@roles ~w(owner admin member)
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok,
+   socket
+   |> assign(:page_title, "Members")
+   |> assign(:roles, @roles)
+   |> assign(:manager?, manager?(socket.assigns.current_membership))
+   |> load()
+   |> assign_invite_form()}
+end
+
+@impl true
+def handle_event("validate_invite", %{"invitation" => params}, socket) do
+  {:noreply, assign(socket, :invite_form, AshPhoenix.Form.validate(socket.assigns.invite_form, params))}
+end
+
+def handle_event("invite", %{"invitation" => params}, socket) do
+  case AshPhoenix.Form.submit(socket.assigns.invite_form, params: params) do
+    {:ok, invitation} ->
+      {:noreply,
+       socket
+       |> put_flash(:info, "Invitation sent to #{invitation.email}")
+       |> load()
+       |> assign_invite_form()}
+
+    {:error, form} ->
+      {:noreply, assign(socket, :invite_form, form)}
+  end
+end
+
+def handle_event("change_role", %{"membership_id" => id, "role" => role}, socket) when role in @roles do
+  user = socket.assigns.current_user
+
+  result =
+    with {:ok, membership} <- find(Membership, id, socket) do
+      Ash.update(membership, %{role: role}, action: :change_role, actor: user)
+    end
+
+  {:noreply, result |> report(socket, "Role updated") |> load()}
+end
+
+def handle_event("remove", %{"id" => id}, socket) do
+  user = socket.assigns.current_user
+
+  result =
+    with {:ok, membership} <- find(Membership, id, socket) do
+      Ash.destroy(membership, actor: user)
+    end
+
+  {:noreply, result |> report(socket, "Member removed") |> load()}
+end
+
+def handle_event("revoke", %{"id" => id}, socket) do
+  user = socket.assigns.current_user
+
+  result =
+    with {:ok, invitation} <- find(Invitation, id, socket) do
+      Ash.destroy(invitation, actor: user)
+    end
+
+  {:noreply, result |> report(socket, "Invitation revoked") |> load()}
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  memberships =
+    Membership
+    |> Ash.Query.filter(organization_id == ^organization.id)
+    |> Ash.Query.load(:user)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!(actor: user)
+
+  # Members cannot read invitations (the policy lets owners and admins only).
+  invitations =
+    Invitation
+    |> Ash.Query.filter(organization_id == ^organization.id and is_nil(accepted_at))
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!(actor: user)
+
+  assign(socket, memberships: memberships, invitations: invitations)
+end
+
+defp assign_invite_form(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  form =
+    Invitation
+    |> AshPhoenix.Form.for_create(:invite,
+      actor: user,
+      as: "invitation",
+      params: %{"organization_id" => organization.id, "role" => "member"}
+    )
+    |> to_form()
+
+  assign(socket, :invite_form, form)
+end
+
+# Looking the row up with the actor means a forged id for another
+# organization's row is simply not found.
+defp find(resource, id, socket) do
+  Ash.get(resource, id, actor: socket.assigns.current_user)
+end
+
+defp report(:ok, socket, message), do: put_flash(socket, :info, message)
+defp report({:ok, _record}, socket, message), do: put_flash(socket, :info, message)
+defp report({:error, error}, socket, _message), do: put_flash(socket, :error, error_message(error))
+
+defp manager?(%{role: role}), do: role in [:owner, :admin]
+defp manager?(_membership), do: false
+
+defp error_message(%{errors: [_ | _] = errors}),
+  do: errors |> Enum.map(&error_message/1) |> Enum.uniq() |> Enum.join(", ")
+
+defp error_message(%Ash.Error.Forbidden.Policy{}), do: "You are not allowed to do that"
+defp error_message(%{message: message}) when is_binary(message), do: message
+defp error_message(error), do: Exception.message(error)
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+  >
+    <.header>
+      Members of {@current_organization.name}
+      <:subtitle>{length(@memberships)} {if length(@memberships) == 1, do: "person", else: "people"}</:subtitle>
+    </.header>
+
+    <div class="overflow-x-auto">
+      <table class="table" id="memberships">
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Role</th>
+            <th :if={@manager?}><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr :for={membership <- @memberships} id={"membership-#{membership.id}"}>
+            <td>{to_string(membership.user.email)}</td>
+            <td>
+              <form :if={@manager?} phx-change="change_role">
+                <input type="hidden" name="membership_id" value={membership.id} />
+                <select name="role" class="select select-sm" aria-label="Role">
+                  <option :for={role <- @roles} value={role} selected={role == to_string(membership.role)}>
+                    {role}
+                  </option>
+                </select>
+              </form>
+              <span :if={!@manager?}>{membership.role}</span>
+            </td>
+            <td :if={@manager?} class="text-right">
+              <.button
+                phx-click="remove"
+                phx-value-id={membership.id}
+                data-confirm={"Remove #{membership.user.email} from #{@current_organization.name}?"}
+              >
+                Remove
+              </.button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <section :if={@manager?} class="space-y-4">
+      <h2 class="text-lg font-semibold">Pending invitations</h2>
+      <p :if={@invitations == []} class="text-base-content/70">No pending invitations.</p>
+      <table :if={@invitations != []} class="table" id="invitations">
+        <tbody>
+          <tr :for={invitation <- @invitations} id={"invitation-#{invitation.id}"}>
+            <td>{to_string(invitation.email)}</td>
+            <td>{invitation.role}</td>
+            <td class="text-right">
+              <.button phx-click="revoke" phx-value-id={invitation.id}>Revoke</.button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 class="text-lg font-semibold">Invite someone</h2>
+      <.form for={@invite_form} id="invite-form" phx-change="validate_invite" phx-submit="invite">
+        <.input field={@invite_form[:organization_id]} type="hidden" />
+        <.input field={@invite_form[:email]} type="email" label="Email" required />
+        <.input
+          field={@invite_form[:role]}
+          type="select"
+          label="Role"
+          options={@roles}
+        />
+        <.button variant="primary" phx-disable-with="Inviting...">Send invitation</.button>
+      </.form>
+    </section>
+  </Layouts.app>
+  """
+end

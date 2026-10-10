@@ -1,0 +1,22 @@
+@moduledoc """
+Plug that lets only platform admins (`role: :admin`) through.
+
+Anyone else, signed in or not, gets a plain 404: the existence of an admin-only
+area is not confirmed to people who cannot use it. It relies on the router
+pipeline having run `load_from_session`, which assigns `:current_user`.
+"""
+
+@behaviour Plug
+
+import Plug.Conn
+
+@impl Plug
+def init(opts), do: opts
+
+@impl Plug
+def call(conn, _opts) do
+  case conn.assigns[:current_user] do
+    %{role: :admin} -> conn
+    _other -> conn |> send_resp(404, "Not Found") |> halt()
+  end
+end

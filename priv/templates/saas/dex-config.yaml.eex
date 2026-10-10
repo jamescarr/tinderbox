@@ -1,0 +1,34 @@
+# Local OIDC provider (https://dexidp.io) for single sign-on during development.
+# Sign in as admin@example.com / password. Any OIDC issuer works in production:
+# point SSO_BASE_URL, SSO_CLIENT_ID and SSO_CLIENT_SECRET at it instead.
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: <%= @app_dash %>
+    secret: <%= @app_dash %>-dev-secret
+    name: <%= @module %>
+    # AshAuthentication builds the callback as
+    # <redirect_uri>/<subject_name>/<strategy>/callback; the second entry is a
+    # harmless fallback.
+    redirectURIs:
+      - http://localhost:4000/auth/user/sso/callback
+      - http://localhost:4000/auth/sso/callback
+
+enablePasswordDB: true
+
+staticPasswords:
+  - email: admin@example.com
+    # bcrypt of "password" (from Dex's own example config)
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: admin
+    userID: 08a8684b-db88-4b73-90a9-3cd1661f5466
+    emailVerified: true

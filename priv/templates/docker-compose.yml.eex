@@ -126,6 +126,58 @@ services:
       - |
         rpk topic create <%= @app_dash %>-inbound -X brokers=redpanda:9092 || true
         rpk topic create <%= @app_dash %>-outbound -X brokers=redpanda:9092 || true
+<% end %><%= if @extra_service == :nats do %>
+  # NATS with JetStream: the worker stack's broker, the SaaS stack's event bus.
+  nats:
+    image: nats:2.15-alpine
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"  # monitoring, http://localhost:8222
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+<%= if @stack == "worker" do %>
+  # Creates the inbound/outbound streams and the worker's durable pull consumer.
+  # (The SaaS stack creates its own stream from the application.)
+  nats-bootstrap:
+    image: natsio/nats-box:0.20.0
+    depends_on:
+      nats:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        nats --server nats://nats:4222 stream add <%= @app_dash %>-inbound --subjects "<%= @app_dash %>.inbound" --storage file --retention limits --defaults || true
+        nats --server nats://nats:4222 stream add <%= @app_dash %>-outbound --subjects "<%= @app_dash %>.outbound" --storage file --retention limits --defaults || true
+        nats --server nats://nats:4222 consumer add <%= @app_dash %>-inbound <%= @app_dash %>-worker --pull --deliver all --ack explicit --max-deliver 10 --defaults || true
+        echo "nats bootstrap done"
+<% end %><% end %><%= if @stack == "saas" do %>
+  # OIDC provider for local SSO, http://localhost:5556/dex. Sign in with
+  # admin@example.com / password. See docker/dex/config.yaml.
+  dex:
+    image: dexidp/dex:v2.46.0
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./docker/dex/config.yaml:/etc/dex/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # SMTP sink (1025) with a web inbox, http://localhost:8025. Ships its own healthcheck.
+  mailpit:
+    image: axllent/mailpit:v1.31
+    ports:
+      - "1025:1025"
+      - "8025:8025"
 <% end %>
   # Stays up once every bootstrap job above has finished. Compose fails
   # `up --wait` when a job container merely exits, even with status 0, unless a
@@ -145,8 +197,12 @@ services:
         condition: service_completed_successfully
 <%= if @extra_service == :redpanda do %>      redpanda-bootstrap:
         condition: service_completed_successfully
+<% end %><%= if @extra_service == :nats and @stack == "worker" do %>      nats-bootstrap:
+        condition: service_completed_successfully
 <% end %>
 volumes:
 <%= if @db? do %>  pgdata:
 <% end %>  floci-data:
   floci-gcp-data:
+<%= if @extra_service == :nats do %>  nats-data:
+<% end %>

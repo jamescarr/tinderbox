@@ -1,0 +1,24 @@
+@moduledoc """
+`GET /health`: 200 when the application can reach its database, 503 otherwise.
+
+It is mounted without a pipeline (no session, no CSRF, no authentication) so a
+load balancer or orchestrator can probe it.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+def show(conn, _params) do
+  if database_up?() do
+    json(conn, %{status: "ok"})
+  else
+    conn |> put_status(503) |> json(%{status: "degraded"})
+  end
+end
+
+defp database_up? do
+  match?({:ok, _result}, Ecto.Adapters.SQL.query(<%= inspect(@repo) %>, "SELECT 1"))
+rescue
+  _error -> false
+catch
+  :exit, _reason -> false
+end

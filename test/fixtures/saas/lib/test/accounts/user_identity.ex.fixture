@@ -1,0 +1,27 @@
+defmodule Test.Accounts.UserIdentity do
+  use Ash.Resource,
+    otp_app: :test,
+    domain: Test.Accounts,
+    data_layer: AshPostgres.DataLayer,
+    authorizers: [Ash.Policy.Authorizer],
+    extensions: [AshAuthentication.UserIdentity]
+
+  user_identity do
+    user_resource Test.Accounts.User
+  end
+
+  postgres do
+    table "user_identities"
+    repo Test.Repo
+  end
+
+  actions do
+    defaults [:read]
+  end
+
+  policies do
+    bypass AshAuthentication.Checks.AshAuthenticationInteraction do
+      authorize_if always()
+    end
+  end
+end

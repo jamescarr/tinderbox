@@ -2,9 +2,11 @@ defmodule Tinderbox.Gen.Compose do
   @moduledoc """
   Generates `docker-compose.yml` and `.env.example`.
 
-  Both stacks get the same backing services — Postgres (when `db?`), Floci for
+  Every stack gets the same backing services — Postgres (when `db?`), Floci for
   S3/SQS and floci-gcp for GCS/Pub/Sub — plus the broker-specific service the
-  worker stack needs. The application itself is *not* a compose service: it runs
+  worker stack needs. The SaaS stack always adds NATS (its event bus), Dex (a
+  local OIDC provider, configured by `docker/dex/config.yaml`) and Mailpit (an
+  SMTP sink with a web inbox). The application itself is *not* a compose service: it runs
   on the host under `mix`, so every endpoint is published on `localhost`.
 
   The compose file is rendered from `priv/templates`; `.env.example` comes from
@@ -20,21 +22,24 @@ defmodule Tinderbox.Gen.Compose do
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
   def apply(igniter, opts) do
     app = Igniter.Project.Application.app_name(igniter)
+    module = Igniter.Project.Module.module_name_prefix(igniter)
     broker = Broker.parse!(Keyword.get(opts, :broker) || "sqs")
     db? = Keyword.get(opts, :db, true)
+    stack = Keyword.get(opts, :stack, "api")
 
     assigns = [
       app: app,
       app_dash: Broker.app_dash(app),
       db?: db?,
+      stack: stack,
       extra_service: List.first(Broker.compose_services(broker))
     ]
 
     env =
       Env.sections(
         app: app,
-        module: Igniter.Project.Module.module_name_prefix(igniter),
-        stack: Keyword.get(opts, :stack, "api"),
+        module: module,
+        stack: stack,
         broker: broker,
         db?: db?
       )
@@ -45,7 +50,21 @@ defmodule Tinderbox.Gen.Compose do
       "docker-compose.yml",
       assigns
     )
+    |> add_dex_config(stack, assigns, module)
     |> Igniter.create_new_file(".env.example", Env.dotenv(env))
     |> Gen.ignore([".env"])
   end
+
+  # The SaaS stack's local OIDC provider reads its static client and user from
+  # this file, which is mounted into the `dex` service.
+  defp add_dex_config(igniter, "saas", assigns, module) do
+    Igniter.copy_template(
+      igniter,
+      Gen.template_path("saas/dex-config.yaml.eex"),
+      "docker/dex/config.yaml",
+      Keyword.put(assigns, :module, inspect(module))
+    )
+  end
+
+  defp add_dex_config(igniter, _stack, _assigns, _module), do: igniter
 end

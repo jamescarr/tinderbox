@@ -1,0 +1,5 @@
+# OpenTelemetry traces are exported only when an OTLP endpoint is configured.
+# The exporter reads OTEL_EXPORTER_OTLP_ENDPOINT itself and the SDK reads
+# OTEL_SERVICE_NAME; with neither set, spans are created and dropped.
+config :opentelemetry,
+  traces_exporter: if(System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT", "") == "", do: :none, else: :otlp)

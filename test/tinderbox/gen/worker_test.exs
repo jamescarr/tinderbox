@@ -6,7 +6,7 @@ defmodule Tinderbox.Gen.WorkerTest do
   alias Tinderbox.Broker
   alias Tinderbox.Gen.Worker
 
-  @brokers [:sqs, :pubsub, :rabbitmq, :kafka]
+  @brokers [:sqs, :pubsub, :rabbitmq, :kafka, :nats]
 
   @producers [
     sqs: "BroadwaySQS.Producer",
@@ -19,7 +19,8 @@ defmodule Tinderbox.Gen.WorkerTest do
     sqs: "ExAws.SQS.send_message(config[:publish_queue_url]",
     pubsub: ~S(topics/#{config[:topic]}:publish),
     rabbitmq: "Test.Publisher.Connection.publish(config[:routing_key]",
-    kafka: "Test.Publisher.KafkaClient.client()"
+    kafka: "Test.Publisher.KafkaClient.client()",
+    nats: "Gnat.request(:gnat, config[:publish_subject]"
   ]
 
   test "every broker creates the worker modules" do
@@ -76,6 +77,40 @@ defmodule Tinderbox.Gen.WorkerTest do
     kafka = source(worker(:kafka, files: repo_files()), "lib/test/application.ex")
     assert order(kafka, "Test.Repo") < order(kafka, "Test.Publisher.KafkaClient")
     assert order(kafka, "Test.Publisher.KafkaClient") < order(kafka, "Test.Pipeline")
+  end
+
+  test "nats consumes with a JetStream pull consumer, not Broadway, and nacks failures" do
+    igniter = worker(:nats, files: repo_files())
+    pipeline = source(igniter, "lib/test/pipeline.ex")
+
+    assert pipeline =~ "use Gnat.Jetstream.PullConsumer"
+    refute pipeline =~ "use Broadway"
+    refute pipeline =~ "producer_spec"
+    refute pipeline =~ "handle_failed"
+    assert pipeline =~ "{:nack, state}"
+    assert pipeline =~ "{:ack, state}"
+
+    publisher = source(igniter, "lib/test/publisher.ex")
+    assert publisher =~ ~s("Nats-Msg-Id")
+    assert publisher =~ ~s({"stream" => _stream, "seq" => _seq})
+
+    refute_creates(igniter, "lib/test/publisher/connection.ex")
+    refute_creates(igniter, "lib/test/publisher/kafka_client.ex")
+  end
+
+  test "nats supervises the Gnat connection before the pipeline, and configures both" do
+    igniter = worker(:nats, files: repo_files())
+    application = source(igniter, "lib/test/application.ex")
+
+    assert application =~ "Application.fetch_env!(:test, :nats)"
+    assert order(application, "Test.Repo") < order(application, "Gnat.ConnectionSupervisor")
+    assert order(application, "Gnat.ConnectionSupervisor") < order(application, "Test.Pipeline")
+    assert order(application, "Test.Pipeline") < order(application, "{Bandit")
+
+    runtime = source(igniter, "config/runtime.exs")
+    assert runtime =~ "config :test, :nats, %{"
+    assert runtime =~ "config :test, :pipeline"
+    assert runtime =~ "name: :gnat"
   end
 
   test "the health endpoint reads its port from the runtime config" do

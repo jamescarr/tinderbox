@@ -1,0 +1,187 @@
+@moduledoc """
+Plans and subscription for the current organization.
+
+Owners and admins can subscribe (Stripe Checkout), and open the Stripe Billing
+Portal to change plan, update the card or cancel; members see the status. The
+subscription shown is the one synced from Stripe by the webhook, so right after
+checkout the page polls for a few seconds until it appears.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@prefix) %>.Billing
+alias <%= inspect(@prefix) %>.Billing.Plans
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@poll_ms 2_000
+@poll_attempts 10
+
+@impl true
+def mount(_params, _session, socket) do
+  %{current_membership: membership, current_organization: organization} = socket.assigns
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Billing")
+   |> assign(:plans, Plans.all())
+   |> assign(:manager?, membership.role in [:owner, :admin])
+   |> assign(:configured?, Application.get_env(<%= inspect(@app) %>, :stripe_configured?, false))
+   |> assign(:subscription, organization.subscription)}
+end
+
+@impl true
+def handle_params(%{"checkout" => "success"}, _uri, socket) do
+  Process.send_after(self(), {:refresh, @poll_attempts}, @poll_ms)
+
+  {:noreply,
+   put_flash(socket, :info, "Thanks! Your subscription will appear here in a few seconds.")}
+end
+
+def handle_params(%{"checkout" => "canceled"}, _uri, socket) do
+  {:noreply, put_flash(socket, :info, "Checkout canceled. You have not been charged.")}
+end
+
+def handle_params(_params, _uri, socket), do: {:noreply, socket}
+
+@impl true
+def handle_event("subscribe", %{"plan" => plan_key}, socket) do
+  %{current_organization: organization, current_user: user} = socket.assigns
+
+  case Billing.start_checkout(organization, plan_key, user) do
+    {:ok, url} -> {:noreply, redirect(socket, external: url)}
+    {:error, :already_subscribed} -> open_portal(socket)
+    {:error, error} -> {:noreply, put_flash(socket, :error, error_message(error))}
+  end
+end
+
+def handle_event("portal", _params, socket), do: open_portal(socket)
+
+defp open_portal(socket) do
+  case Billing.portal_url(socket.assigns.current_organization) do
+    {:ok, url} -> {:noreply, redirect(socket, external: url)}
+    {:error, error} -> {:noreply, put_flash(socket, :error, error_message(error))}
+  end
+end
+
+# After checkout the webhook sync is asynchronous: look again until it lands.
+@impl true
+def handle_info({:refresh, attempts_left}, socket) do
+  case Billing.subscription(socket.assigns.current_organization) do
+    {:ok, %{} = subscription} ->
+      {:noreply, assign(socket, :subscription, subscription)}
+
+    _not_yet when attempts_left > 1 ->
+      Process.send_after(self(), {:refresh, attempts_left - 1}, @poll_ms)
+      {:noreply, socket}
+
+    _gave_up ->
+      {:noreply, socket}
+  end
+end
+
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp error_message(:no_customer), do: "Subscribe to a plan first: there is no billing account yet."
+defp error_message(:unknown_plan), do: "That plan does not exist."
+defp error_message(:no_checkout_url), do: "Stripe did not return a checkout page. Try again."
+defp error_message(%{message: message}) when is_binary(message), do: message
+defp error_message(error), do: inspect(error)
+
+defp subscribed?(%{status: status}), do: status not in [:canceled, :incomplete_expired]
+defp subscribed?(_none), do: false
+
+defp current_plan?(%{plan_key: key} = subscription, plan),
+  do: subscribed?(subscription) and key == plan.key
+
+defp current_plan?(_none, _plan), do: false
+
+defp status_class(:active), do: "badge-success"
+defp status_class(:trialing), do: "badge-info"
+defp status_class(:past_due), do: "badge-warning"
+defp status_class(_status), do: "badge-error"
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+  >
+    <.header>
+      Billing
+      <:subtitle>Subscription for {@current_organization.name}</:subtitle>
+    </.header>
+
+    <div :if={!@configured?} role="alert" class="alert alert-warning">
+      <.icon name="hero-exclamation-triangle" class="size-5" />
+      <span>
+        Stripe is not configured. Put your test-mode <code>STRIPE_SECRET_KEY</code>,
+        <code>STRIPE_PRICE_STARTER</code> and <code>STRIPE_PRICE_PRO</code> in
+        <code>.mise.local.toml</code> (or <code>.env</code>) and restart.
+      </span>
+    </div>
+
+    <div :if={@subscription} class="card bg-base-100 shadow" id="subscription">
+      <div class="card-body">
+        <h2 class="card-title">
+          {@subscription.plan_key || "Subscription"}
+          <span class={["badge", status_class(@subscription.status)]}>{@subscription.status}</span>
+        </h2>
+        <p :if={@subscription.current_period_end} class="text-sm text-base-content/70">
+          {if @subscription.cancel_at_period_end, do: "Ends", else: "Renews"}
+          on {Calendar.strftime(@subscription.current_period_end, "%Y-%m-%d")}
+        </p>
+        <p :if={@subscription.cancel_at_period_end} class="text-sm text-warning">
+          This subscription will not renew.
+        </p>
+        <div :if={@manager?} class="card-actions justify-end">
+          <.button phx-click="portal">Manage billing</.button>
+        </div>
+      </div>
+    </div>
+
+    <p :if={!@subscription} class="text-base-content/70">
+      This organization has no subscription yet.
+    </p>
+
+    <div class="grid gap-4 sm:grid-cols-2">
+      <div :for={plan <- @plans} class="card bg-base-100 shadow" id={"plan-#{plan.key}"}>
+        <div class="card-body">
+          <h3 class="card-title">{plan.name}</h3>
+          <p class="text-base-content/70">{plan[:description]}</p>
+          <div :if={@manager?} class="card-actions justify-end">
+            <span :if={current_plan?(@subscription, plan)} class="badge badge-outline">
+              Current plan
+            </span>
+            <.button
+              :if={!subscribed?(@subscription)}
+              variant="primary"
+              phx-click="subscribe"
+              phx-value-plan={plan.key}
+              disabled={!@configured?}
+            >
+              Subscribe
+            </.button>
+            <.button
+              :if={subscribed?(@subscription) and !current_plan?(@subscription, plan)}
+              phx-click="portal"
+            >
+              Switch in billing portal
+            </.button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p :if={!@manager?} class="text-sm text-base-content/70">
+      Only owners and admins can change the subscription.
+    </p>
+  </Layouts.app>
+  """
+end

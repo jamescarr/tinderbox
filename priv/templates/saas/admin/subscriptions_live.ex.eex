@@ -1,0 +1,105 @@
+@moduledoc """
+Admin: every subscription synced from Stripe.
+"""
+
+use <%= inspect(@web) %>, :admin_live_view
+
+alias <%= inspect(@prefix) %>.Billing.Subscription
+alias PetalComponents.DataTable.Engine
+alias PetalComponents.DataTable.State
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@fields [
+  :organization_name,
+  :plan_key,
+  :status,
+  :current_period_end,
+  :cancel_at_period_end,
+  :stripe_subscription_id
+]
+@limit 1000
+
+@impl true
+def mount(_params, _session, socket) do
+  rows =
+    Subscription
+    |> Ash.Query.load(:organization)
+    |> Ash.Query.sort(inserted_at: :desc)
+    |> Ash.Query.limit(@limit)
+    |> Ash.read!(actor: socket.assigns.current_user)
+    |> Enum.map(fn subscription ->
+      %{
+        id: subscription.id,
+        organization_id: subscription.organization_id,
+        organization_name: subscription.organization.name,
+        plan_key: subscription.plan_key,
+        status: subscription.status,
+        current_period_end: subscription.current_period_end,
+        cancel_at_period_end: subscription.cancel_at_period_end,
+        stripe_subscription_id: subscription.stripe_subscription_id
+      }
+    end)
+
+  state = %State{order_by: [{:current_period_end, :desc}], page_size: 25}
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Subscriptions")
+   |> assign(:all_rows, rows)
+   |> run(state)}
+end
+
+@impl true
+def handle_event("table", params, socket) do
+  {:noreply, run(socket, State.handle_op(socket.assigns.table, params, fields: @fields))}
+end
+
+defp run(socket, state) do
+  {rows, state} = Engine.List.run(socket.assigns.all_rows, state)
+  assign(socket, rows: rows, table: state)
+end
+
+defp status_color(:active), do: "success"
+defp status_color(:trialing), do: "info"
+defp status_color(:past_due), do: "warning"
+defp status_color(_status), do: "danger"
+
+defp date(nil), do: "—"
+defp date(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d")
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:subscriptions}>
+    <.data_table
+      id="subscriptions"
+      rows={@rows}
+      state={@table}
+      on_change="table"
+      searchable
+      page_size_options={[25, 50, 100]}
+    >
+      <:col :let={row} field={:organization_name} label="Organization" sortable filterable="text">
+        <.link navigate={~p"/admin/organizations/#{row.organization_id}"} class="underline">
+          {row.organization_name}
+        </.link>
+      </:col>
+      <:col :let={row} field={:plan_key} label="Plan" sortable>{row.plan_key || "—"}</:col>
+      <:col :let={row} field={:status} label="Status" sortable>
+        <.badge color={status_color(row.status)} label={to_string(row.status)} />
+      </:col>
+      <:col :let={row} field={:current_period_end} label="Period ends" sortable>
+        {date(row.current_period_end)}
+      </:col>
+      <:col :let={row} field={:cancel_at_period_end} label="Cancels" sortable>
+        {if row.cancel_at_period_end, do: "yes", else: "no"}
+      </:col>
+      <:col :let={row} field={:stripe_subscription_id} label="Stripe id">
+        <code class="text-xs">{row.stripe_subscription_id}</code>
+      </:col>
+    </.data_table>
+  </AdminLayouts.admin>
+  """
+end

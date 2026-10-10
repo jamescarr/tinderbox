@@ -1,0 +1,17 @@
+@moduledoc """
+The notification keys the application sends, with the label shown on the
+notification settings page. Add an entry here when you add a `trigger/3` call
+site that users should be able to mute.
+"""
+
+@type entry :: %{key: String.t(), label: String.t()}
+
+@spec keys() :: [entry()]
+def keys do
+  [
+    %{key: "member.invited", label: "You are invited to an organization"},
+    %{key: "member.joined", label: "A member joined your organization"},
+    %{key: "subscription.updated", label: "Your organization's subscription changed"},
+    %{key: "payment.failed", label: "A payment failed"}
+  ]
+end
