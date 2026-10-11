@@ -37,6 +37,10 @@ defmodule Mix.Tasks.Tinderbox.Install do
   pull in the Broadway clients, a worker project does not pull in
   AshJsonApi/AshPhoenix, and neither pulls in the SaaS stack's authentication,
   billing and admin packages.
+
+  When it is done, the task removes the `tinderbox` dependency from `mix.exs`:
+  `--install tinderbox@path:…` adds a path that exists only on the generating
+  machine, so `mix deps.get` would fail anywhere else.
   """
 
   use Igniter.Mix.Task
@@ -94,15 +98,40 @@ defmodule Mix.Tasks.Tinderbox.Install do
         igniter
       end
 
-    if opts[:mise] do
-      Igniter.compose_task(
-        igniter,
-        "tinderbox.gen.mise",
-        ["--stack", opts[:stack], "--broker", broker] ++
-          if(opts[:compose], do: [], else: ["--no-compose"])
-      )
-    else
-      igniter
+    igniter =
+      if opts[:mise] do
+        Igniter.compose_task(
+          igniter,
+          "tinderbox.gen.mise",
+          ["--stack", opts[:stack], "--broker", broker] ++
+            if(opts[:compose], do: [], else: ["--no-compose"])
+        )
+      else
+        igniter
+      end
+
+    drop_self_dependency(igniter)
+  end
+
+  # `mix igniter.new … --install tinderbox@path:…` leaves a path dependency that
+  # exists only on the generating machine, so `mix deps.get` fails anywhere else
+  # (CI first). A path dependency has no `mix.lock` entry, so the line in
+  # `mix.exs` is all there is to remove; the notice repeats it for re-runs.
+  defp drop_self_dependency(igniter) do
+    case Igniter.Project.Deps.get_dep(igniter, :tinderbox) do
+      {:ok, declaration} when is_binary(declaration) ->
+        igniter
+        |> Igniter.Project.Deps.remove_dep(:tinderbox)
+        |> Igniter.add_notice("""
+        The tinderbox dependency was removed from mix.exs: `mix igniter.new --install tinderbox@path:…`
+        adds a path that exists only on this machine, and `mix deps.get` would fail anywhere else (CI).
+        To re-run a generator, add it back for the run:
+
+            #{declaration}
+        """)
+
+      _missing_or_unreadable ->
+        igniter
     end
   end
 

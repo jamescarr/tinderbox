@@ -250,6 +250,13 @@ defmodule Tinderbox.Gen.SaasTest do
     assert_has_notice(igniter, &(&1 =~ "Stripe: create two recurring Prices"))
   end
 
+  test "CI installs Hex and fetches deps before running the check", %{igniter: igniter} do
+    ci = source(igniter, ".github/workflows/ci.yml")
+
+    assert order(ci, "mix local.hex --force") < order(ci, "- run: mix deps.get")
+    assert order(ci, "- run: mix deps.get") < order(ci, "- run: mise run check")
+  end
+
   test "adds the storage dependencies the Phoenix project lacks and keeps its req", %{
     igniter: igniter
   } do

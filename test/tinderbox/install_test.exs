@@ -68,8 +68,47 @@ defmodule Tinderbox.InstallTest do
     end
   end
 
+  test "removes the tinderbox path dependency and says so" do
+    igniter =
+      [files: %{"mix.exs" => mix_exs_with_tinderbox()}]
+      |> test_project()
+      |> Igniter.compose_task("tinderbox.install", ["--stack", "worker"])
+
+    mix_exs = source(igniter, "mix.exs")
+
+    refute mix_exs =~ ":tinderbox"
+    assert mix_exs =~ ~s({:jason, "~> 1.4"})
+    assert_has_notice(igniter, &(&1 =~ "tinderbox dependency was removed"))
+    assert_has_notice(igniter, &(&1 =~ ~s({:tinderbox, path: "/nowhere/tinderbox")))
+  end
+
+  test "a project without the tinderbox dependency gets no removal notice" do
+    igniter = install(["--stack", "worker"])
+
+    refute Enum.any?(igniter.notices, &(&1 =~ "tinderbox dependency was removed"))
+  end
+
   defp install(argv) do
     Igniter.compose_task(test_project(), "tinderbox.install", argv)
+  end
+
+  defp mix_exs_with_tinderbox do
+    """
+    defmodule Test.MixProject do
+      use Mix.Project
+
+      def project do
+        [app: :test, version: "0.1.0", elixir: "~> 1.17", deps: deps()]
+      end
+
+      defp deps do
+        [
+          {:jason, "~> 1.4"},
+          {:tinderbox, path: "/nowhere/tinderbox", only: [:dev, :test], runtime: false}
+        ]
+      end
+    end
+    """
   end
 
   defp source(igniter, path) do

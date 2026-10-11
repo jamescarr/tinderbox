@@ -94,7 +94,10 @@ them, and then writes nothing at all. The edits it makes to files that already e
 are guarded and not applied twice: dependencies, `config/runtime.exs`, `ash_domains`,
 the supervisor children, `.gitignore`, and the `/api` mount in the router (the
 guarded edits of the SaaS stack are covered by a test that applies it twice; the
-real re-run was only seen to refuse, see below).
+real re-run was only seen to refuse, see below). `tinderbox.install` removes the
+`tinderbox` path dependency from `mix.exs` when it finishes, because the path only
+exists on the generating machine and `mix deps.get` fails anywhere else (CI first);
+add it back for the run, as its notice says, before re-running a task.
 
 ## mise: toolchain, environment, tasks
 
@@ -236,7 +239,8 @@ Ash packages the other stacks use, then adds:
   (not authenticated: keep it off the public internet), OpenTelemetry for Phoenix,
   Ecto, Oban and Bandit (exports when `OTEL_EXPORTER_OTLP_ENDPOINT` is set),
   `Dockerfile` and `rel/` from `mix phx.gen.release --docker`, and
-  `.github/workflows/ci.yml` running `mise run check`.
+  `.github/workflows/ci.yml`, which installs Hex, fetches deps and runs
+  `mise run check`.
 
 In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
