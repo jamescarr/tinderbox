@@ -18,7 +18,9 @@ staticClients:
     name: <%= @module %>
     # AshAuthentication builds the callback as
     # <redirect_uri>/<subject_name>/<strategy>/callback; the second entry is a
-    # harmless fallback.
+    # harmless fallback. Moving the app off port 4000 (PORT and SSO_REDIRECT_URI
+    # in .mise.local.toml) needs the new callback listed here too, or Dex
+    # answers "Unregistered redirect_uri".
     redirectURIs:
       - http://localhost:4000/auth/user/sso/callback
       - http://localhost:4000/auth/sso/callback

@@ -21,7 +21,9 @@ def plugins do
     {Plugins.Phoenix, router: <%= inspect(@router) %>, endpoint: <%= inspect(@endpoint) %>},
     Plugins.Ecto,
     Plugins.Oban,
-    Plugins.PhoenixLiveView
+    Plugins.PhoenixLiveView,
+    # The application's own metrics.
+    <%= inspect(@prefix) %>.PromEx.Plugins.App
   ]
 end
 

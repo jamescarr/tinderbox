@@ -37,8 +37,9 @@ defmodule Tinderbox.Env do
     postgres =
       if db? do
         [
-          {"Postgres (MIX_ENV=prod runs; dev and test read config/dev.exs and config/test.exs)",
+          {"Postgres: PGPORT is the host port compose publishes and config/dev.exs + config/test.exs read; DATABASE_URL and POOL_SIZE are for MIX_ENV=prod",
            [
+             {"PGPORT", "5432"},
              {"DATABASE_URL", "ecto://postgres:postgres@localhost:5432/#{app}_dev"},
              {"POOL_SIZE", "10"}
            ]}
@@ -92,10 +93,11 @@ defmodule Tinderbox.Env do
          {"SSO_CLIENT_SECRET", "#{app_dash}-dev-secret"},
          {"SSO_REDIRECT_URI", "http://localhost:4000/auth"}
        ]},
-      {"Mail: Mailpit (UI http://localhost:8025)",
+      {"Mail: Mailpit (UI http://localhost:8025; SMTP_PORT and MAILPIT_UI_PORT are the host ports compose publishes)",
        [
          {"SMTP_HOST", "localhost"},
          {"SMTP_PORT", "1025"},
+         {"MAILPIT_UI_PORT", "8025"},
          {"MAIL_FROM", "noreply@#{app_dash}.local"}
        ]},
       {"Stripe test mode: replace in .mise.local.toml, never commit real keys",

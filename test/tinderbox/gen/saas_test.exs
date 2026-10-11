@@ -41,8 +41,10 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/events/consumer.ex
           lib/test/events/ash_notifier.ex
           lib/test/prom_ex.ex
+          lib/test/prom_ex/plugins/app.ex
           lib/test/feature_flags.ex
           lib/test_web/dashboard_live.ex
+          lib/test_web/live_helpers.ex
           lib/test_web/inbox_live.ex
           lib/test_web/billing_live.ex
           lib/test_web/admin/dashboard_live.ex
@@ -51,6 +53,10 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/organization_controller.ex
           lib/test_web/stripe_webhook_handler.ex
           .github/workflows/ci.yml
+          lib/mix/tasks/test.gen.domain.ex
+          test/support/fixtures.ex
+          test/support/live_test_helpers.ex
+          test/test_web/live/members_live_test.exs
           priv/repo/migrations/20250101000000_create_fun_with_flags_toggles.exs
         ) do
       assert_creates(igniter, path)
@@ -140,6 +146,10 @@ defmodule Tinderbox.Gen.SaasTest do
     assert order(endpoint, "plug PromEx.Plug") < order(endpoint, "plug Plug.RequestId")
   end
 
+  test "PromEx serves the application's own plugin next to the stock ones", %{igniter: igniter} do
+    assert_has(source(igniter, "lib/test/prom_ex.ex"), "Test.PromEx.Plugins.App")
+  end
+
   test "the supervision tree starts metrics first and NATS before its consumers",
        %{igniter: igniter} do
     application = source(igniter, "lib/test/application.ex")
@@ -201,6 +211,7 @@ defmodule Tinderbox.Gen.SaasTest do
     layouts = source(igniter, "lib/test_web/components/layouts.ex")
 
     assert_has(layouts, "attr :current_user")
+    assert_has(layouts, "attr :wide, :boolean")
     assert_has(layouts, ~s|action={~p"/organizations/switch"}|)
     assert_has(layouts, "def flash_group(assigns)")
     assert_has(layouts, "def theme_toggle(assigns)")
@@ -224,6 +235,26 @@ defmodule Tinderbox.Gen.SaasTest do
     refute admin =~ "import TestWeb.CoreComponents"
   end
 
+  test "the organization pages share LiveHelpers, and a manager-only hook exists",
+       %{igniter: igniter} do
+    assert_has(source(igniter, "lib/test_web/live_helpers.ex"), "def manager?(%{role: role})")
+
+    for page <- ~w(members_live invitation_live billing_live) do
+      live_view = source(igniter, "lib/test_web/#{page}.ex")
+
+      assert_has(live_view, "import TestWeb.LiveHelpers")
+      refute_has(live_view, "defp manager?")
+    end
+
+    refute_has(source(igniter, "lib/test_web/members_live.ex"), "defp error_message")
+    refute_has(source(igniter, "lib/test_web/invitation_live.ex"), "defp error_message")
+
+    assert_has(
+      source(igniter, "lib/test_web/live_organization.ex"),
+      "def on_mount(:require_manager, params, session, socket)"
+    )
+  end
+
   test "the Accounts domain carries versions and JSON:API", %{igniter: igniter} do
     accounts = source(igniter, "lib/test/accounts.ex")
 
@@ -234,6 +265,16 @@ defmodule Tinderbox.Gen.SaasTest do
     for resource <- ~w(Organization Membership Invitation UserIdentity) do
       assert_has(accounts, "resource Test.Accounts.#{resource}")
     end
+
+    assert_has(accounts, "def managers(organization_id)")
+  end
+
+  test "billing notifies the organization's managers through Accounts.managers/1",
+       %{igniter: igniter} do
+    sync = source(igniter, "lib/test/billing/changes/sync_subscription.ex")
+
+    assert_has(sync, "recipients: Test.Accounts.managers(organization.id)")
+    refute_has(sync, "defp managers")
   end
 
   test "queues the release image, one migration run and the notices", %{igniter: igniter} do
@@ -248,6 +289,31 @@ defmodule Tinderbox.Gen.SaasTest do
 
     assert_has_notice(igniter, &(&1 =~ "mise trust && mise run dev"))
     assert_has_notice(igniter, &(&1 =~ "Stripe: create two recurring Prices"))
+  end
+
+  test "Phoenix's stock README becomes one about running and extending the app",
+       %{igniter: igniter} do
+    readme = source(igniter, "README.md")
+
+    assert readme =~ "# Test\n"
+    assert readme =~ "mise run dev"
+    assert readme =~ "Test.Accounts.managers/1"
+    refute readme =~ "mix setup"
+  end
+
+  test "a README that is no longer Phoenix's stock one is left alone" do
+    custom = "# Test\n\nRun it with `mise run dev`, then read the wiki.\n"
+
+    igniter = Saas.apply(saas_project(files: [{"README.md", custom}]), [])
+
+    assert source(igniter, "README.md") == custom
+  end
+
+  test "CI installs Hex and fetches deps before running the check", %{igniter: igniter} do
+    ci = source(igniter, ".github/workflows/ci.yml")
+
+    assert order(ci, "mix local.hex --force") < order(ci, "- run: mix deps.get")
+    assert order(ci, "- run: mix deps.get") < order(ci, "- run: mise run check")
   end
 
   test "adds the storage dependencies the Phoenix project lacks and keeps its req", %{
@@ -288,6 +354,7 @@ defmodule Tinderbox.Gen.SaasTest do
           config/runtime.exs
           config/config.exs
           mix.exs
+          README.md
         ) do
       assert source(again, path) == source(igniter, path), "#{path} changed on the second run"
     end

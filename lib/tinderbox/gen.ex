@@ -55,8 +55,8 @@ defmodule Tinderbox.Gen do
   missing. Lines already present are left alone, so this is safe to re-run.
 
   Used for the files a developer creates locally and must not commit: `.env`
-  (copied from `.env.example`) and `.mise.local.toml` (machine-specific mise
-  overrides).
+  (copied from `.env.example`), `docker-compose.override.yml` and
+  `.mise.local.toml` (machine-specific overrides).
   """
   @spec ignore(Igniter.t(), [String.t()]) :: Igniter.t()
   def ignore(igniter, lines) do

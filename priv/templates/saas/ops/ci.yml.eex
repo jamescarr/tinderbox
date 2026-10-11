@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v4
+      # mise's Elixir ships without Hex, and `mise run check` does not fetch deps.
+      - run: mix local.hex --force && mix local.rebar --force
+      - run: mix deps.get
       # `mise run check` brings the backing services up (docker compose), then
       # runs formatting, a warnings-as-errors compile and the tests.
       - run: mise run check

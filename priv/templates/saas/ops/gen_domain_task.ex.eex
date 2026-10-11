@@ -1,0 +1,109 @@
+if Code.ensure_loaded?(Igniter) do
+  defmodule <%= @task_module %> do
+    @shortdoc "Adds an Ash domain, registered in ash_domains, with its Oban queues"
+    @moduledoc """
+    Adds an Ash domain the way this application expects one:
+
+        mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Upstreams --queues upstreams:5,dead_letters
+
+    * creates the domain with `mix ash.gen.domain` unless it exists already,
+    * registers it in `config :<%= @app %>, ash_domains:` in `config/config.exs`
+      (AshOban only sees the triggers of registered domains),
+    * adds each queue to `config :<%= @app %>, Oban, queues:` as `name:limit`, with a
+      limit of 10 when it is omitted. A queue that is already configured keeps its limit.
+    """
+
+    use Igniter.Mix.Task
+
+    @default_limit 10
+
+    @impl Igniter.Mix.Task
+    def info(_argv, _composing_task) do
+      %Igniter.Mix.Task.Info{
+        group: :<%= @app %>,
+        example:
+          "mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Upstreams --queues upstreams:5,dead_letters",
+        positional: [:domain],
+        schema: [queues: :csv]
+      }
+    end
+
+    @impl Igniter.Mix.Task
+    def igniter(igniter) do
+      app = Igniter.Project.Application.app_name(igniter)
+      domain = Igniter.Project.Module.parse(igniter.args.positional.domain)
+      queues = Enum.map(igniter.args.options[:queues] || [], &parse_queue!/1)
+
+      if queues != [] and
+           not Igniter.Project.Config.configures_key?(igniter, "config.exs", app, [Oban, :queues]) do
+        Mix.raise(
+          "--queues needs `config :#{app}, Oban, queues: [...]` in config/config.exs, and there is none."
+        )
+      end
+
+      {exists?, igniter} = Igniter.Project.Module.module_exists(igniter, domain)
+
+      igniter =
+        if exists?,
+          do: igniter,
+          else: Igniter.compose_task(igniter, "ash.gen.domain", [inspect(domain)])
+
+      igniter
+      |> Igniter.Project.Config.configure("config.exs", app, [:ash_domains], [domain],
+        updater: fn zipper -> Igniter.Code.List.prepend_new_to_list(zipper, domain) end
+      )
+      |> add_queues(app, queues)
+    end
+
+    defp add_queues(igniter, app, queues) do
+      Enum.reduce(queues, igniter, fn {name, limit}, igniter ->
+        Igniter.Project.Config.configure(
+          igniter,
+          "config.exs",
+          app,
+          [Oban, :queues],
+          [{name, limit}],
+          updater: fn zipper ->
+            Igniter.Code.Keyword.set_keyword_key(zipper, name, limit, fn queue -> {:ok, queue} end)
+          end
+        )
+      end)
+    end
+
+    defp parse_queue!(entry) do
+      with [name | rest] when length(rest) <= 1 <- String.split(entry, ":"),
+           true <- name =~ ~r/\A[a-z][a-z0-9_]*\z/,
+           {:ok, limit} <- parse_limit(rest) do
+        {String.to_atom(name), limit}
+      else
+        _ ->
+          Mix.raise(
+            ~s|Invalid --queues entry #{inspect(entry)}: expected name or name:limit, for example upstreams:5|
+          )
+      end
+    end
+
+    defp parse_limit([]), do: {:ok, @default_limit}
+
+    defp parse_limit([limit]) do
+      case Integer.parse(limit) do
+        {limit, ""} when limit > 0 -> {:ok, limit}
+        _ -> :error
+      end
+    end
+  end
+else
+  defmodule <%= @task_module %> do
+    @shortdoc "Adds an Ash domain, registered in ash_domains, with its Oban queues"
+    @moduledoc false
+
+    use Mix.Task
+
+    @impl Mix.Task
+    def run(_argv) do
+      Mix.raise(
+        "mix <%= @app %>.gen.domain needs igniter, a :dev/:test dependency. Run it in dev or test."
+      )
+    end
+  end
+end

@@ -5,9 +5,10 @@ defmodule Tinderbox.Gen.Saas.Ops do
 
   * `GET /health` (`<App>Web.HealthController`): 200 while the database answers,
     503 otherwise; no session, CSRF or authentication,
-  * PromEx: `<App>.PromEx`, its config, its supervisor child (first, so
-    startup metrics are not missed) and `PromEx.Plug` ahead of the endpoint's
-    request logging, serving `/metrics`,
+  * PromEx: `<App>.PromEx`, `<App>.PromEx.Plugins.App` for the application's own
+    metrics, its config, its supervisor child (first, so startup metrics are not
+    missed) and `PromEx.Plug` ahead of the endpoint's request logging, serving
+    `/metrics`,
   * OpenTelemetry: the Bandit, Phoenix, Ecto and Oban instrumentation is set up
     first thing in `Application.start/2`; traces are exported only when
     `OTEL_EXPORTER_OTLP_ENDPOINT` is set,
@@ -16,7 +17,12 @@ defmodule Tinderbox.Gen.Saas.Ops do
   * `mix phx.gen.release --docker`, run after the files are written: a release
     `Dockerfile`, `.dockerignore`, `<App>.Release` and the `bin/server`/`bin/migrate`
     overlays, from the toolchain that ran the generator,
-  * `.github/workflows/ci.yml`, which runs `mise run check`,
+  * `.github/workflows/ci.yml`, which installs Hex, fetches deps and runs
+    `mise run check`,
+  * `mix <app>.gen.domain` (`lib/mix/tasks/<app>.gen.domain.ex`): a new Ash domain
+    through `ash.gen.domain`, registered in `ash_domains`, with its Oban queues,
+  * `README.md`: how to run and configure the application, and the conventions
+    the generated code follows (replacing Phoenix's stock README once),
   * the notice about the Stripe prerequisites.
   """
 
@@ -42,7 +48,42 @@ defmodule Tinderbox.Gen.Saas.Ops do
       ".github/workflows/ci.yml",
       Gen.render_template("saas/ops/ci.yml.eex", assigns)
     )
+    |> add_domain_task(assigns)
+    |> add_readme(assigns)
     |> add_notices(assigns[:opts])
+  end
+
+  # The task module is named after the OTP app, not the module prefix: Mix finds
+  # `mix <app>.gen.domain` as `Mix.Tasks.<Macro.camelize(app)>.Gen.Domain`. Strings,
+  # not aliases: `Gen` is this package's own module here.
+  defp add_domain_task(igniter, assigns) do
+    app = assigns[:app]
+
+    task_module =
+      inspect(Module.concat([Mix.Tasks, Macro.camelize(to_string(app)), "Gen", "Domain"]))
+
+    Igniter.create_new_file(
+      igniter,
+      "lib/mix/tasks/#{app}.gen.domain.ex",
+      Gen.render_template(
+        "saas/ops/gen_domain_task.ex.eex",
+        Keyword.put(assigns, :task_module, task_module)
+      )
+    )
+  end
+
+  # Phoenix's stock README is replaced once; a README that already mentions
+  # `mise run dev` was written by an earlier run (or by hand) and is left alone.
+  defp add_readme(igniter, assigns) do
+    content = Gen.render_template("saas/README.md.eex", assigns)
+
+    Igniter.create_or_update_file(igniter, "README.md", content, fn source ->
+      if Rewrite.Source.get(source, :content) =~ "mise run dev" do
+        source
+      else
+        Igniter.update_source(source, igniter, :content, content)
+      end
+    end)
   end
 
   # -- health ----------------------------------------------------------------
@@ -82,6 +123,10 @@ defmodule Tinderbox.Gen.Saas.Ops do
     |> Igniter.Project.Module.create_module(
       prom_ex,
       Gen.render_template("saas/ops/prom_ex.ex.eex", assigns)
+    )
+    |> Igniter.Project.Module.create_module(
+      Module.concat([assigns[:prefix], "PromEx", "Plugins", "App"]),
+      Gen.render_template("saas/ops/prom_ex_plugin.ex.eex", assigns)
     )
     |> Igniter.Project.Config.configure(
       "config.exs",

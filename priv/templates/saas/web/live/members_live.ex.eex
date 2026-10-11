@@ -9,6 +9,8 @@ flash message rather than being re-checked here.
 
 use <%= inspect(@web) %>, :live_view
 
+import <%= inspect(@web) %>.LiveHelpers
+
 require Ash.Query
 
 alias <%= inspect(@accounts) %>.Invitation
@@ -121,26 +123,6 @@ defp assign_invite_form(socket) do
   assign(socket, :invite_form, form)
 end
 
-# Looking the row up with the actor means a forged id for another
-# organization's row is simply not found.
-defp find(resource, id, socket) do
-  Ash.get(resource, id, actor: socket.assigns.current_user)
-end
-
-defp report(:ok, socket, message), do: put_flash(socket, :info, message)
-defp report({:ok, _record}, socket, message), do: put_flash(socket, :info, message)
-defp report({:error, error}, socket, _message), do: put_flash(socket, :error, error_message(error))
-
-defp manager?(%{role: role}), do: role in [:owner, :admin]
-defp manager?(_membership), do: false
-
-defp error_message(%{errors: [_ | _] = errors}),
-  do: errors |> Enum.map(&error_message/1) |> Enum.uniq() |> Enum.join(", ")
-
-defp error_message(%Ash.Error.Forbidden.Policy{}), do: "You are not allowed to do that"
-defp error_message(%{message: message}) when is_binary(message), do: message
-defp error_message(error), do: Exception.message(error)
-
 @impl true
 def render(assigns) do
   ~H"""
@@ -169,7 +151,7 @@ def render(assigns) do
           <tr :for={membership <- @memberships} id={"membership-#{membership.id}"}>
             <td>{to_string(membership.user.email)}</td>
             <td>
-              <form :if={@manager?} phx-change="change_role">
+              <form :if={@manager?} id={"role-form-#{membership.id}"} phx-change="change_role">
                 <input type="hidden" name="membership_id" value={membership.id} />
                 <select name="role" class="select select-sm" aria-label="Role">
                   <option :for={role <- @roles} value={role} selected={role == to_string(membership.role)}>

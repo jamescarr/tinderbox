@@ -1,0 +1,41 @@
+@moduledoc """
+What the organization-scoped LiveViews share: looking a row up as the signed-in
+user, turning an Ash result into a flash message, and whether the current
+membership manages the organization. `import <%= inspect(@web) %>.LiveHelpers` in
+a LiveView that mounts `<%= inspect(@web) %>.LiveOrganization`.
+"""
+
+import Phoenix.LiveView, only: [put_flash: 3]
+
+@doc """
+Gets `resource` by `id` with the signed-in user as the actor, so a forged id for
+another organization's row is simply not found.
+"""
+@spec find(Ash.Resource.t(), term(), Phoenix.LiveView.Socket.t(), keyword()) ::
+        {:ok, Ash.Resource.record()} | {:error, term()}
+def find(resource, id, socket, opts \\ []) do
+  Ash.get(resource, id, Keyword.put(opts, :actor, socket.assigns.current_user))
+end
+
+@doc """
+Flashes `message` when an action succeeded, or what went wrong when it did not.
+"""
+@spec report(:ok | {:ok, term()} | {:error, term()}, Phoenix.LiveView.Socket.t(), String.t()) ::
+        Phoenix.LiveView.Socket.t()
+def report(:ok, socket, message), do: put_flash(socket, :info, message)
+def report({:ok, _record}, socket, message), do: put_flash(socket, :info, message)
+def report({:error, error}, socket, _message), do: put_flash(socket, :error, error_message(error))
+
+@doc "Whether a membership is an owner's or an admin's."
+@spec manager?(map() | nil) :: boolean()
+def manager?(%{role: role}), do: role in [:owner, :admin]
+def manager?(_membership), do: false
+
+@doc "A sentence for an Ash error, fit for a flash message."
+@spec error_message(term()) :: String.t()
+def error_message(%{errors: [_ | _] = errors}),
+  do: errors |> Enum.map(&error_message/1) |> Enum.uniq() |> Enum.join(", ")
+
+def error_message(%Ash.Error.Forbidden.Policy{}), do: "You are not allowed to do that"
+def error_message(%{message: message}) when is_binary(message), do: message
+def error_message(error), do: Exception.message(error)

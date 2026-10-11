@@ -1,0 +1,11 @@
+@moduledoc """
+Signs a user into a test conn the way the password sign-in does, for
+`Phoenix.LiveViewTest.live/2`.
+"""
+
+@doc "Stores `user`'s token in the conn's session."
+def sign_in(conn, user) do
+  conn
+  |> Phoenix.ConnTest.init_test_session(%{})
+  |> AshAuthentication.Plug.Helpers.store_in_session(user)
+end

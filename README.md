@@ -67,6 +67,12 @@ mise run dev                 # start the services, set up the database, run the 
 SaaS, `http://localhost:4000`, admin at `/admin`) or `mix run --no-halt` (worker,
 `http://localhost:4001/health`).
 
+Run bare `mix` commands through `mise exec -- mix …` when `.mise.local.toml` sets
+anything: a plain shell does not load it, so `mix test` would reach for the default
+ports. `mix ash.codegen` prints "this migration includes destructive operations" for
+every migration whose `down/0` drops what its `up/0` creates, the first one included;
+on a new resource that is expected.
+
 Without mise:
 
 ```bash
@@ -94,7 +100,10 @@ them, and then writes nothing at all. The edits it makes to files that already e
 are guarded and not applied twice: dependencies, `config/runtime.exs`, `ash_domains`,
 the supervisor children, `.gitignore`, and the `/api` mount in the router (the
 guarded edits of the SaaS stack are covered by a test that applies it twice; the
-real re-run was only seen to refuse, see below).
+real re-run was only seen to refuse, see below). `tinderbox.install` removes the
+`tinderbox` path dependency from `mix.exs` when it finishes, because the path only
+exists on the generating machine and `mix deps.get` fails anywhere else (CI first);
+add it back for the run, as its notice says, before re-running a task.
 
 ## mise: toolchain, environment, tasks
 
@@ -109,9 +118,10 @@ Generated projects carry a `.mise.toml` (skip it with `--no-mise`):
   package was verified with, `1.20.4-otp-29` and `29.1`, and the generator prints a
   notice. The Kafka worker also pins CMake, because `brod`'s `crc32cer` NIF is built
   from source.
-* **`[env]`** — the local environment: the emulator endpoints, `STORAGE_BACKEND`, and
-  for the worker `HEALTH_PORT` plus the broker's variables. `.env.example` is rendered
-  from the same data, so the two cannot drift.
+* **`[env]`** — the local environment: `PGPORT` (the host port compose publishes for
+  Postgres, read by `config/dev.exs` and `config/test.exs`), the emulator endpoints,
+  `STORAGE_BACKEND`, and for the worker `HEALTH_PORT` plus the broker's variables.
+  `.env.example` is rendered from the same data, so the two cannot drift.
 * **`[tasks.*]`**:
 
 | Task | Does |
@@ -216,7 +226,8 @@ Ash packages the other stacks use, then adds:
   `<app>.events.<type>`. Every create, update and destroy of an organization,
   membership, invitation or subscription is published as `<resource>.<action>` through
   an `Ash.Notifier`; `<App>.Events.Handler` is where consumers go. A handler that
-  raises is nacked.
+  raises is nacked. The payload is the record's public attributes, so `public?` on
+  an attribute also puts it on the event bus.
 * **API** — AshJsonApi at `/api/json` and `/api` (organizations), OpenAPI at
   `/api/json/open_api`, Swagger UI at `/api/json/swaggerui`, bearer-token sign-in
   through the installer's `:api` pipeline. A request without a token gets `200` with
@@ -236,7 +247,20 @@ Ash packages the other stacks use, then adds:
   (not authenticated: keep it off the public internet), OpenTelemetry for Phoenix,
   Ecto, Oban and Bandit (exports when `OTEL_EXPORTER_OTLP_ENDPOINT` is set),
   `Dockerfile` and `rel/` from `mix phx.gen.release --docker`, and
-  `.github/workflows/ci.yml` running `mise run check`.
+  `.github/workflows/ci.yml`, which installs Hex, fetches deps and runs
+  `mise run check`.
+* **For the code you add** — `<App>.Accounts.managers/1` (an organization's owners and
+  admins, the recipients the billing and invitation notifications use);
+  `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
+  shared by the organization pages); a `:require_manager` hook in
+  `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
+  for pages made of tables; `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
+  the application's own metrics; `<App>.Fixtures` and
+  `<App>Web.LiveTestHelpers.sign_in/2` in `test/support`, used by
+  `test/<app>_web/live/members_live_test.exs`; `mix <app>.gen.domain`, which runs
+  `ash.gen.domain`, registers the domain in `ash_domains` and adds its `--queues` to
+  the Oban config; and a `README.md` in place of Phoenix's (running it,
+  configuration, and these conventions), written once.
 
 In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
@@ -250,10 +274,11 @@ locks 0.6.x, so the generator adds `{:websock_adapter, "~> 0.6", override: true}
 
 ### All stacks
 
-* `docker-compose.yml` — Postgres, Floci (`:4566`, S3 + SQS), floci-gcp (`:4588`,
-  GCS + Pub/Sub) and their bootstrap jobs, plus RabbitMQ, Redpanda or NATS (JetStream,
-  `:4222`) for those brokers; the SaaS stack adds NATS, Dex (`:5556`) and Mailpit
-  (SMTP `:1025`, UI `:8025`). A worker on `nats` also gets a `nats-bootstrap` job that
+* `docker-compose.yml` — Postgres (host port `$PGPORT`, default 5432), Floci (`:4566`,
+  S3 + SQS), floci-gcp (`:4588`, GCS + Pub/Sub) and their bootstrap jobs, plus
+  RabbitMQ, Redpanda or NATS (JetStream, `:4222`) for those brokers; the SaaS stack
+  adds NATS, Dex (`:5556`) and Mailpit (SMTP `$SMTP_PORT`, UI `$MAILPIT_UI_PORT`,
+  default 1025 and 8025). A worker on `nats` also gets a `nats-bootstrap` job that
   creates its two streams and the consumer. The app itself runs on the host, so
   `FLOCI_HOSTNAME` is deliberately unset: Floci then embeds `localhost` in the SQS
   queue URLs and pre-signed URLs.
@@ -263,7 +288,8 @@ locks 0.6.x, so the generator adds `{:websock_adapter, "~> 0.6", override: true}
   and `docker compose down` would otherwise wait out Docker's 10 s stop timeout.
 * `.env.example` — the same variables as `[env]`, every line `export`ed.
 * `.mise.toml` — see above.
-* `.gitignore` — gains `.env` and `.mise.local.toml`.
+* `config/dev.exs`, `config/test.exs` — the repo's `port:` reads `PGPORT`.
+* `.gitignore` — gains `.env`, `docker-compose.override.yml` and `.mise.local.toml`.
 * `config/runtime.exs` — appended, *outside* the `if config_env() == :prod` block, so
   it applies in every environment: `:ex_aws` (with the `AWS_ENDPOINT_URL` host/port
   override and `ExAws.Request.Req` as the HTTP client, which keeps hackney out),
@@ -343,11 +369,12 @@ Beyond that, generated projects were run end to end against the emulators:
   both deliveries acked (no pending, none redelivered). `mise run check` passed.
 * **saas** — generated with `mix igniter.new … --with phx.new --install
   tinderbox@path:… --stack saas --yes` (about four minutes). `mise run check` passes
-  on the fresh project: formatting, warnings-as-errors compile and the five tests
-  Phoenix generates. They are the only tests the project has; none cover the SaaS
-  features. Under `mise run dev`, against compose (the first group on the generation
-  before the last, which differs from the last only in how FunWithFlags starts, the
-  formatting of the generated migration and a compile-warning pragma):
+  on the fresh project: formatting, warnings-as-errors compile and seven tests, the
+  five Phoenix generates and the generated members page test (the owner sees the
+  invite form, a member does not); the generated tests cover no other SaaS feature.
+  Under `mise run dev`, against compose (the first group on an earlier generation,
+  which differed from the next one only in how FunWithFlags starts, the formatting
+  of the generated migration and a compile-warning pragma):
   * password registration (it signs the user in) and SSO through Dex; the SSO user in
     `ADMIN_EMAILS` is an admin, a password user is not, and the SSO user gets no
     confirmation email;
@@ -359,11 +386,30 @@ Beyond that, generated projects were run end to end against the emulators:
     `404`; anonymous `/admin` redirects to `/sign-in`;
   * `GET /api/organizations` without a token is `200` with an empty `data` list.
 
-  On the last generation: SSO sign-in, creating an organization, the flag dashboard
-  creating a flag that lands in `fun_with_flags_toggles`, `organization.create` and
-  `membership.add` in the `<app>-events` stream and acked once each by
-  `Events.Handler`, `/health` `200` and `/metrics` serving over a thousand `<app>_`
-  series.
+  On that next generation, before the shared helpers: SSO sign-in, creating an
+  organization, the flag dashboard creating a flag that lands in
+  `fun_with_flags_toggles`, `organization.create` and `membership.add` in the
+  `<app>-events` stream and acked once each by `Events.Handler`, `/health` `200` and
+  `/metrics` serving over a thousand `<app>_` series.
+
+  On the latest generation (shared helpers, test support, ports from the
+  environment): the install task removed the `tinderbox` path dependency from
+  `mix.exs` and printed it; with `PGPORT=5456`, `SMTP_PORT=1027`,
+  `MAILPIT_UI_PORT=8027` and `PORT=4112` in `.mise.local.toml` (this machine's 5432,
+  1025 and 8025 belong to other projects), compose published Postgres on 5456 and
+  Mailpit on 1027/8027 and `mise run check` passed against them. Pushed unchanged to
+  a private repository, the generated `.github/workflows/ci.yml` passed (Hex, deps,
+  `mise run check` with the seven tests, about twelve minutes on `ubuntu-latest`).
+  On the generation just before it, which differed only in the members page's
+  role-form id and two documentation comments, `/metrics` served 360 `<app>_` series
+  with the empty `<App>.PromEx.Plugins.App`, `/health` was `200`, and throwaway tests
+  showed `:require_manager` continuing for the owner, sending a member to
+  `/dashboard` with an error flash and a user with no organization to
+  `/organizations/new`, and `Accounts.managers/1` returning the owner and an admin
+  but not a member. A worker generated the same way (`--stack worker --broker sqs`)
+  got the `port:` line inside the repo's block in `config/dev.exs` and
+  `config/test.exs` (both imported by `config.exs`) and passed `mise run check` with
+  Postgres on `PGPORT=5457`.
 
   On an earlier generation, not repeated since: a live inbox row and badge update
   without a reload, the `member.joined` notification and email to the owner, the
@@ -396,6 +442,16 @@ Beyond that, generated projects were run end to end against the emulators:
 * **saas re-run** — `mix tinderbox.gen.saas` in a generated project reports
   "File already exists" for each module it would create and writes nothing; the
   guarded edits are only covered by the test that applies the generator twice.
+* **saas `mix <app>.gen.domain`** — in a project generated from this branch
+  (`saas_check`, ports as above),
+  `mix saas_check.gen.domain SaasCheck.Upstreams --queues upstreams:5,dead_letters --yes`
+  created `SaasCheck.Upstreams` (`use Ash.Domain, otp_app: :saas_check`), put it first
+  in `ash_domains` and appended `upstreams: 5, dead_letters: 10` to the Oban queues
+  (`default: 10, billing: 5, notifications: 10` kept). Run again with
+  `--queues upstreams:9` it changed nothing; `--queues "bad name"` exited 1 with
+  `Invalid --queues entry "bad name"` and changed nothing. `mise run check` then
+  passed (7 tests). `MIX_ENV=prod mix compile --force --warnings-as-errors` compiled
+  the task without igniter, and running it in prod exited 1 saying it needs igniter.
 
 Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
 runs were made on never gated `.mise.toml` (a config with templates and hooks was
@@ -405,9 +461,14 @@ instructions because mise refuses untrusted configs where it is set up to.
 Not exercised for the SaaS stack: a real Stripe account (Checkout, the portal's plan
 switch, `mise run stripe` — the Stripe CLI installs through mise and starts, but
 `stripe listen` needs a login), a real OIDC issuer other than Dex, an SMTP server other
-than Mailpit, a collector for the OpenTelemetry export, and the GitHub Actions
-workflow.
+than Mailpit, a collector for the OpenTelemetry export, and SSO with the app moved
+off port 4000.
 
-If something else already owns 5432 on your machine, override the Postgres host port
-in a `docker-compose.override.yml` (`ports: !override ["5455:5432"]`) and set the same
-`port:` in `config/dev.exs` and `config/test.exs`.
+If something else already owns 5432, 1025 or 8025 on your machine, set `PGPORT`,
+`SMTP_PORT` or `MAILPIT_UI_PORT` in `.mise.local.toml`: compose publishes
+`${PGPORT:-5432}:5432` and friends, and `config/dev.exs` and `config/test.exs` read
+`PGPORT`. To move the app off 4000, set `PORT` and `SSO_REDIRECT_URI` there and add
+the new `…/auth/user/sso/callback` to `redirectURIs` in `docker/dex/config.yaml`,
+which Dex reads as a file (it otherwise refuses the SSO callback as an unregistered
+redirect URI). `docker-compose.override.yml` is gitignored for any other local
+change to the services.

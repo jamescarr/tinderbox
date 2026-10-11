@@ -8,6 +8,9 @@ defmodule Tinderbox.InstallTest do
   # the stack generator, and which files and notices come out. (What a test
   # project cannot do is fetch the packages the tasks declare in `installs:`.)
 
+  # Long enough that igniter prints the dependency over several lines.
+  @long_path "/Users/someone/projects/a-rather-deep/checkout/of/tinderbox"
+
   test "a worker gets the stack, docker compose, mise, and a mise-first notice" do
     igniter = install(["--stack", "worker", "--broker", "sqs"])
 
@@ -68,8 +71,52 @@ defmodule Tinderbox.InstallTest do
     end
   end
 
+  test "removes the tinderbox path dependency and repeats it, on one line, in a notice" do
+    igniter =
+      [files: %{"mix.exs" => mix_exs_with_tinderbox()}]
+      |> test_project()
+      |> Igniter.compose_task("tinderbox.install", ["--stack", "worker"])
+
+    mix_exs = source(igniter, "mix.exs")
+
+    refute mix_exs =~ ":tinderbox"
+    assert mix_exs =~ ~s({:jason, "~> 1.4"})
+    assert_has_notice(igniter, &(&1 =~ "tinderbox dependency was removed"))
+
+    assert_has_notice(
+      igniter,
+      &(&1 =~
+          ~s({:tinderbox, path: "#{@long_path}", override: true, only: [:dev, :test], runtime: false}))
+    )
+  end
+
+  test "a project without the tinderbox dependency gets no removal notice" do
+    igniter = install(["--stack", "worker"])
+
+    refute Enum.any?(igniter.notices, &(&1 =~ "tinderbox dependency was removed"))
+  end
+
   defp install(argv) do
     Igniter.compose_task(test_project(), "tinderbox.install", argv)
+  end
+
+  defp mix_exs_with_tinderbox do
+    """
+    defmodule Test.MixProject do
+      use Mix.Project
+
+      def project do
+        [app: :test, version: "0.1.0", elixir: "~> 1.17", deps: deps()]
+      end
+
+      defp deps do
+        [
+          {:jason, "~> 1.4"},
+          {:tinderbox, path: "#{@long_path}", override: true, only: [:dev, :test], runtime: false}
+        ]
+      end
+    end
+    """
   end
 
   defp source(igniter, path) do
