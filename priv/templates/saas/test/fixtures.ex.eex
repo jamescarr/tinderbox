@@ -1,0 +1,47 @@
+@moduledoc """
+Records for tests, written through the resources' own actions.
+"""
+
+alias <%= inspect(@accounts) %>.Membership
+alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@user) %>
+
+@password "password123!"
+
+@doc "The password every `user_fixture/1` user signs in with."
+def password, do: @password
+
+@doc "A user registered with a password; `attrs` override the email and password."
+def user_fixture(attrs \\ %{}) do
+  params =
+    Map.merge(
+      %{
+        email: "user#{System.unique_integer([:positive])}@example.com",
+        password: @password,
+        password_confirmation: @password
+      },
+      attrs
+    )
+
+  User
+  |> Ash.Changeset.for_create(:register_with_password, params, authorize?: false)
+  |> Ash.create!(authorize?: false)
+end
+
+@doc "An organization created by `user`, who becomes its owner."
+def organization_fixture(user, attrs \\ %{}) do
+  Organization
+  |> Ash.Changeset.for_create(:create, Map.merge(%{name: "Acme"}, attrs), actor: user)
+  |> Ash.create!(actor: user)
+end
+
+@doc "Adds `user` to `organization` with `role` (`:owner`, `:admin` or `:member`)."
+def membership_fixture(organization, user, role) do
+  Membership
+  |> Ash.Changeset.for_create(:add, %{
+    organization_id: organization.id,
+    user_id: user.id,
+    role: role
+  })
+  |> Ash.create!(authorize?: false)
+end

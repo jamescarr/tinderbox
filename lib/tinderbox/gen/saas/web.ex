@@ -13,7 +13,10 @@ defmodule Tinderbox.Gen.Saas.Web do
     `/dashboard`, `/organizations/new`, `/organizations/members`,
     `/invitations/:token`, `/inbox`, `/settings/notifications`, `/billing`,
     and `<App>Web.LiveHelpers`, what the organization-scoped ones share,
-  * `POST /organizations/switch`, the organization switcher's target.
+  * `POST /organizations/switch`, the organization switcher's target,
+  * test support: `<App>.Fixtures` (users, organizations, memberships),
+    `<App>Web.LiveTestHelpers.sign_in/2`, and a test of the members page that
+    uses both.
 
   The signed-in pages use Phoenix's own CoreComponents (daisyUI); the admin
   section is the only part that uses Petal Components
@@ -44,6 +47,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> create_live_helpers(assigns)
     |> create_live_views(assigns)
     |> add_routes(assigns)
+    |> add_test_support(assigns)
   end
 
   # -- Petal Components ------------------------------------------------------
@@ -282,5 +286,27 @@ defmodule Tinderbox.Gen.Saas.Web do
         router: router
       )
     end
+  end
+
+  # -- test support ----------------------------------------------------------
+
+  # `test/support` is in Phoenix's `elixirc_paths(:test)`; `:test_support` drops
+  # the app prefix, so `<App>.Fixtures` lands in `test/support/fixtures.ex`.
+  defp add_test_support(igniter, assigns) do
+    igniter
+    |> Igniter.Project.Module.create_module(
+      Module.concat(assigns[:prefix], "Fixtures"),
+      Gen.render_template("saas/test/fixtures.ex.eex", assigns),
+      location: :test_support
+    )
+    |> Igniter.Project.Module.create_module(
+      Module.concat(assigns[:web], "LiveTestHelpers"),
+      Gen.render_template("saas/test/live_test_helpers.ex.eex", assigns),
+      location: :test_support
+    )
+    |> Igniter.create_new_file(
+      "test/#{assigns[:app]}_web/live/members_live_test.exs",
+      Gen.render_template("saas/test/members_live_test.exs.eex", assigns)
+    )
   end
 end

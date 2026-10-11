@@ -53,6 +53,9 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/organization_controller.ex
           lib/test_web/stripe_webhook_handler.ex
           .github/workflows/ci.yml
+          test/support/fixtures.ex
+          test/support/live_test_helpers.ex
+          test/test_web/live/members_live_test.exs
           priv/repo/migrations/20250101000000_create_fun_with_flags_toggles.exs
         ) do
       assert_creates(igniter, path)

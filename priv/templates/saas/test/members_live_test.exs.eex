@@ -1,0 +1,29 @@
+defmodule <%= inspect(@web) %>.MembersLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  setup do
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  test "the owner sees the members and can invite", %{conn: conn, owner: owner} do
+    {:ok, view, html} = live(sign_in(conn, owner), ~p"/organizations/members")
+
+    assert html =~ to_string(owner.email)
+    assert has_element?(view, "#invite-form")
+  end
+
+  test "a member sees the list but no invite form", %{conn: conn, organization: organization} do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    {:ok, view, _html} = live(sign_in(conn, member), ~p"/organizations/members")
+
+    assert has_element?(view, "#memberships", to_string(member.email))
+    refute has_element?(view, "#invite-form")
+  end
+end
