@@ -127,12 +127,21 @@ defmodule Mix.Tasks.Tinderbox.Install do
         adds a path that exists only on this machine, and `mix deps.get` would fail anywhere else (CI).
         To re-run a generator, add it back for the run:
 
-            #{declaration}
+            #{one_line(declaration)}
         """)
 
       _missing_or_unreadable ->
         igniter
     end
+  end
+
+  # `get_dep/2` prints a long tuple over several lines; the notice wants one.
+  defp one_line(declaration) do
+    declaration
+    |> Code.string_to_quoted!()
+    |> Code.quoted_to_algebra()
+    |> Inspect.Algebra.format(:infinity)
+    |> IO.iodata_to_binary()
   end
 
   # The SaaS stack's event bus is NATS JetStream, so compose and mise get the
