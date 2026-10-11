@@ -367,11 +367,12 @@ Beyond that, generated projects were run end to end against the emulators:
   both deliveries acked (no pending, none redelivered). `mise run check` passed.
 * **saas** — generated with `mix igniter.new … --with phx.new --install
   tinderbox@path:… --stack saas --yes` (about four minutes). `mise run check` passes
-  on the fresh project: formatting, warnings-as-errors compile and the five tests
-  Phoenix generates. They are the only tests the project has; none cover the SaaS
-  features. Under `mise run dev`, against compose (the first group on the generation
-  before the last, which differs from the last only in how FunWithFlags starts, the
-  formatting of the generated migration and a compile-warning pragma):
+  on the fresh project: formatting, warnings-as-errors compile and seven tests, the
+  five Phoenix generates and the generated members page test (the owner sees the
+  invite form, a member does not); the generated tests cover no other SaaS feature.
+  Under `mise run dev`, against compose (the first group on an earlier generation,
+  which differed from the next one only in how FunWithFlags starts, the formatting
+  of the generated migration and a compile-warning pragma):
   * password registration (it signs the user in) and SSO through Dex; the SSO user in
     `ADMIN_EMAILS` is an admin, a password user is not, and the SSO user gets no
     confirmation email;
@@ -383,11 +384,30 @@ Beyond that, generated projects were run end to end against the emulators:
     `404`; anonymous `/admin` redirects to `/sign-in`;
   * `GET /api/organizations` without a token is `200` with an empty `data` list.
 
-  On the last generation: SSO sign-in, creating an organization, the flag dashboard
-  creating a flag that lands in `fun_with_flags_toggles`, `organization.create` and
-  `membership.add` in the `<app>-events` stream and acked once each by
-  `Events.Handler`, `/health` `200` and `/metrics` serving over a thousand `<app>_`
-  series.
+  On that next generation, before the shared helpers: SSO sign-in, creating an
+  organization, the flag dashboard creating a flag that lands in
+  `fun_with_flags_toggles`, `organization.create` and `membership.add` in the
+  `<app>-events` stream and acked once each by `Events.Handler`, `/health` `200` and
+  `/metrics` serving over a thousand `<app>_` series.
+
+  On the latest generation (shared helpers, test support, ports from the
+  environment): the install task removed the `tinderbox` path dependency from
+  `mix.exs` and printed it; with `PGPORT=5456`, `SMTP_PORT=1027`,
+  `MAILPIT_UI_PORT=8027` and `PORT=4112` in `.mise.local.toml` (this machine's 5432,
+  1025 and 8025 belong to other projects), compose published Postgres on 5456 and
+  Mailpit on 1027/8027 and `mise run check` passed against them. Pushed unchanged to
+  a private repository, the generated `.github/workflows/ci.yml` passed (Hex, deps,
+  `mise run check` with the seven tests, about twelve minutes on `ubuntu-latest`).
+  On the generation just before it, which differed only in the members page's
+  role-form id and two documentation comments, `/metrics` served 360 `<app>_` series
+  with the empty `<App>.PromEx.Plugins.App`, `/health` was `200`, and throwaway tests
+  showed `:require_manager` continuing for the owner, sending a member to
+  `/dashboard` with an error flash and a user with no organization to
+  `/organizations/new`, and `Accounts.managers/1` returning the owner and an admin
+  but not a member. A worker generated the same way (`--stack worker --broker sqs`)
+  got the `port:` line inside the repo's block in `config/dev.exs` and
+  `config/test.exs` (both imported by `config.exs`) and passed `mise run check` with
+  Postgres on `PGPORT=5457`.
 
   On an earlier generation, not repeated since: a live inbox row and badge update
   without a reload, the `member.joined` notification and email to the owner, the
@@ -429,8 +449,8 @@ instructions because mise refuses untrusted configs where it is set up to.
 Not exercised for the SaaS stack: a real Stripe account (Checkout, the portal's plan
 switch, `mise run stripe` — the Stripe CLI installs through mise and starts, but
 `stripe listen` needs a login), a real OIDC issuer other than Dex, an SMTP server other
-than Mailpit, a collector for the OpenTelemetry export, and the GitHub Actions
-workflow.
+than Mailpit, a collector for the OpenTelemetry export, and SSO with the app moved
+off port 4000.
 
 If something else already owns 5432, 1025 or 8025 on your machine, set `PGPORT`,
 `SMTP_PORT` or `MAILPIT_UI_PORT` in `.mise.local.toml`: compose publishes
