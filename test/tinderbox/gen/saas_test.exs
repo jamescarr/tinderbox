@@ -43,6 +43,7 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/prom_ex.ex
           lib/test/feature_flags.ex
           lib/test_web/dashboard_live.ex
+          lib/test_web/live_helpers.ex
           lib/test_web/inbox_live.ex
           lib/test_web/billing_live.ex
           lib/test_web/admin/dashboard_live.ex
@@ -222,6 +223,26 @@ defmodule Tinderbox.Gen.SaasTest do
     # CoreComponents stay out of the admin helpers: both define `button/1` and `table/1`.
     assert [_html, admin] = String.split(web, "defp admin_html_helpers", parts: 2)
     refute admin =~ "import TestWeb.CoreComponents"
+  end
+
+  test "the organization pages share LiveHelpers, and a manager-only hook exists",
+       %{igniter: igniter} do
+    assert_has(source(igniter, "lib/test_web/live_helpers.ex"), "def manager?(%{role: role})")
+
+    for page <- ~w(members_live invitation_live billing_live) do
+      live_view = source(igniter, "lib/test_web/#{page}.ex")
+
+      assert_has(live_view, "import TestWeb.LiveHelpers")
+      refute_has(live_view, "defp manager?")
+    end
+
+    refute_has(source(igniter, "lib/test_web/members_live.ex"), "defp error_message")
+    refute_has(source(igniter, "lib/test_web/invitation_live.ex"), "defp error_message")
+
+    assert_has(
+      source(igniter, "lib/test_web/live_organization.ex"),
+      "def on_mount(:require_manager, params, session, socket)"
+    )
   end
 
   test "the Accounts domain carries versions and JSON:API", %{igniter: igniter} do

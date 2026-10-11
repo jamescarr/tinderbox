@@ -9,6 +9,8 @@ home with an error.
 
 use <%= inspect(@web) %>, :live_view
 
+import <%= inspect(@web) %>.LiveHelpers, only: [error_message: 1]
+
 alias <%= inspect(@accounts) %>.Invitation
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
@@ -53,12 +55,6 @@ end
 
 @impl true
 def handle_info(_message, socket), do: {:noreply, socket}
-
-defp error_message(%{errors: [_ | _] = errors}),
-  do: errors |> Enum.map(&error_message/1) |> Enum.uniq() |> Enum.join(", ")
-
-defp error_message(%{message: message}) when is_binary(message), do: message
-defp error_message(error), do: Exception.message(error)
 
 @impl true
 def render(assigns) do

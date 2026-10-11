@@ -9,6 +9,8 @@ checkout the page polls for a few seconds until it appears.
 
 use <%= inspect(@web) %>, :live_view
 
+import <%= inspect(@web) %>.LiveHelpers, only: [manager?: 1]
+
 alias <%= inspect(@prefix) %>.Billing
 alias <%= inspect(@prefix) %>.Billing.Plans
 
@@ -27,7 +29,7 @@ def mount(_params, _session, socket) do
    socket
    |> assign(:page_title, "Billing")
    |> assign(:plans, Plans.all())
-   |> assign(:manager?, membership.role in [:owner, :admin])
+   |> assign(:manager?, manager?(membership))
    |> assign(:configured?, Application.get_env(<%= inspect(@app) %>, :stripe_configured?, false))
    |> assign(:subscription, organization.subscription)}
 end

@@ -12,6 +12,10 @@ subscription loaded) and `:current_membership` (the user's membership in it).
     `/organizations/new`, the onboarding page.
   * `:optional_organization` assigns `nil`s instead of redirecting; the
     onboarding page itself uses it.
+  * `:require_manager` is `:require_organization`, then sends a plain member to
+    `/dashboard` with an error flash. For pages that are owner/admin-only
+    throughout; the generated pages instead gate each control with
+    `<%= inspect(@web) %>.LiveHelpers.manager?/1`.
 
 The organization switcher (`<%= inspect(@web) %>.OrganizationController`) is what
 writes `:current_organization_id` to the session.
@@ -37,6 +41,23 @@ end
 
 def on_mount(:optional_organization, _params, session, socket) do
   {:cont, resolve(socket, session)}
+end
+
+def on_mount(:require_manager, params, session, socket) do
+  case on_mount(:require_organization, params, session, socket) do
+    {:cont, socket} ->
+      if <%= inspect(@web) %>.LiveHelpers.manager?(socket.assigns.current_membership) do
+        {:cont, socket}
+      else
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(:error, "Only owners and admins can open that page")
+         |> Phoenix.LiveView.redirect(to: ~p"/dashboard")}
+      end
+
+    halt ->
+      halt
+  end
 end
 
 defp resolve(socket, session) do

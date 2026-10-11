@@ -12,6 +12,7 @@ defmodule Tinderbox.Gen.Saas.Web do
   * LiveViews inside the installer's `ash_authentication_live_session`:
     `/dashboard`, `/organizations/new`, `/organizations/members`,
     `/invitations/:token`, `/inbox`, `/settings/notifications`, `/billing`,
+    and `<App>Web.LiveHelpers`, what the organization-scoped ones share,
   * `POST /organizations/switch`, the organization switcher's target.
 
   The signed-in pages use Phoenix's own CoreComponents (daisyUI); the admin
@@ -40,6 +41,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> install_petal_js()
     |> replace_layouts(assigns)
     |> replace_landing_page(assigns)
+    |> create_live_helpers(assigns)
     |> create_live_views(assigns)
     |> add_routes(assigns)
   end
@@ -188,6 +190,14 @@ defmodule Tinderbox.Gen.Saas.Web do
   end
 
   # -- LiveViews and routes --------------------------------------------------
+
+  defp create_live_helpers(igniter, assigns) do
+    Igniter.Project.Module.create_module(
+      igniter,
+      Module.concat(assigns[:web], LiveHelpers),
+      Gen.render_template("saas/web/live_helpers.ex.eex", assigns)
+    )
+  end
 
   defp create_live_views(igniter, assigns) do
     Enum.reduce(@live_views, igniter, fn name, igniter ->

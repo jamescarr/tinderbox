@@ -66,14 +66,9 @@ defp notify(_changeset, invitation, actor) do
   organization = Ash.get!(Organization, invitation.organization_id, authorize?: false)
 
   managers =
-    Membership
-    |> Ash.Query.filter(
-      organization_id == ^invitation.organization_id and role in [:owner, :admin] and
-        user_id != ^actor.id
-    )
-    |> Ash.Query.load(:user)
-    |> Ash.read!(authorize?: false)
-    |> Enum.map(& &1.user)
+    invitation.organization_id
+    |> <%= inspect(@accounts) %>.managers()
+    |> Enum.reject(&(&1.id == actor.id))
 
   Notifications.trigger("member.joined", %{
     recipients: managers,
