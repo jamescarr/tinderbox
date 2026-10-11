@@ -49,7 +49,7 @@ defmodule Tinderbox.EnvTest do
     for name <- ~w(
           NATS_HOST NATS_PORT
           SSO_BASE_URL SSO_CLIENT_ID SSO_CLIENT_SECRET SSO_REDIRECT_URI
-          SMTP_HOST SMTP_PORT MAIL_FROM
+          SMTP_HOST SMTP_PORT MAILPIT_UI_PORT MAIL_FROM
           STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_STARTER STRIPE_PRICE_PRO
           ADMIN_EMAILS OTEL_SERVICE_NAME
         ) do
@@ -78,8 +78,10 @@ defmodule Tinderbox.EnvTest do
 
   test "db?: false leaves out the Postgres variables" do
     assert "DATABASE_URL" in names(sections())
+    assert "PGPORT" in names(sections())
     refute "DATABASE_URL" in names(sections(db?: false))
     refute "POOL_SIZE" in names(sections(db?: false))
+    refute "PGPORT" in names(sections(db?: false))
   end
 
   test "dotenv/1 exports every assignment" do

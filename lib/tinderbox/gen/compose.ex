@@ -11,7 +11,11 @@ defmodule Tinderbox.Gen.Compose do
 
   The compose file is rendered from `priv/templates`; `.env.example` comes from
   `Tinderbox.Env`, the same data `Tinderbox.Gen.Mise` puts in `.mise.toml`.
-  `.env` is added to `.gitignore` because it is the copy developers edit.
+  Compose publishes the host ports from the environment (`PGPORT`, and for the
+  SaaS stack `SMTP_PORT`/`MAILPIT_UI_PORT`), and `config/dev.exs` and
+  `config/test.exs` read `PGPORT` for the repo, so moving Postgres is one line in
+  `.mise.local.toml`. `.env` and `docker-compose.override.yml` are added to
+  `.gitignore`: they are the copies developers edit.
   Called by `mix tinderbox.gen.compose`.
   """
 
@@ -52,8 +56,23 @@ defmodule Tinderbox.Gen.Compose do
     )
     |> add_dex_config(stack, assigns, module)
     |> Igniter.create_new_file(".env.example", Env.dotenv(env))
-    |> Gen.ignore([".env"])
+    |> configure_repo_port(app, module, db?)
+    |> Gen.ignore([".env", "docker-compose.override.yml"])
   end
+
+  # Ecto's Postgres pool defaults the port to 5432 itself (only `mix ecto.create`
+  # falls back to PGPORT), so the published port has to be read explicitly.
+  # Re-running replaces the value with the same code.
+  defp configure_repo_port(igniter, app, module, true) do
+    port = Sourceror.parse_string!(~s|String.to_integer(System.get_env("PGPORT", "5432"))|)
+    repo = Module.concat(module, "Repo")
+
+    Enum.reduce(["dev.exs", "test.exs"], igniter, fn file, igniter ->
+      Igniter.Project.Config.configure(igniter, file, app, [repo, :port], {:code, port})
+    end)
+  end
+
+  defp configure_repo_port(igniter, _app, _module, false), do: igniter
 
   # The SaaS stack's local OIDC provider reads its static client and user from
   # this file, which is mounted into the `dex` service.

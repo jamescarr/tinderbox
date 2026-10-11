@@ -67,6 +67,12 @@ mise run dev                 # start the services, set up the database, run the 
 SaaS, `http://localhost:4000`, admin at `/admin`) or `mix run --no-halt` (worker,
 `http://localhost:4001/health`).
 
+Run bare `mix` commands through `mise exec -- mix …` when `.mise.local.toml` sets
+anything: a plain shell does not load it, so `mix test` would reach for the default
+ports. `mix ash.codegen` prints "this migration includes destructive operations" for
+every migration whose `down/0` drops what its `up/0` creates, the first one included;
+on a new resource that is expected.
+
 Without mise:
 
 ```bash
@@ -112,9 +118,10 @@ Generated projects carry a `.mise.toml` (skip it with `--no-mise`):
   package was verified with, `1.20.4-otp-29` and `29.1`, and the generator prints a
   notice. The Kafka worker also pins CMake, because `brod`'s `crc32cer` NIF is built
   from source.
-* **`[env]`** — the local environment: the emulator endpoints, `STORAGE_BACKEND`, and
-  for the worker `HEALTH_PORT` plus the broker's variables. `.env.example` is rendered
-  from the same data, so the two cannot drift.
+* **`[env]`** — the local environment: `PGPORT` (the host port compose publishes for
+  Postgres, read by `config/dev.exs` and `config/test.exs`), the emulator endpoints,
+  `STORAGE_BACKEND`, and for the worker `HEALTH_PORT` plus the broker's variables.
+  `.env.example` is rendered from the same data, so the two cannot drift.
 * **`[tasks.*]`**:
 
 | Task | Does |
@@ -254,10 +261,11 @@ locks 0.6.x, so the generator adds `{:websock_adapter, "~> 0.6", override: true}
 
 ### All stacks
 
-* `docker-compose.yml` — Postgres, Floci (`:4566`, S3 + SQS), floci-gcp (`:4588`,
-  GCS + Pub/Sub) and their bootstrap jobs, plus RabbitMQ, Redpanda or NATS (JetStream,
-  `:4222`) for those brokers; the SaaS stack adds NATS, Dex (`:5556`) and Mailpit
-  (SMTP `:1025`, UI `:8025`). A worker on `nats` also gets a `nats-bootstrap` job that
+* `docker-compose.yml` — Postgres (host port `$PGPORT`, default 5432), Floci (`:4566`,
+  S3 + SQS), floci-gcp (`:4588`, GCS + Pub/Sub) and their bootstrap jobs, plus
+  RabbitMQ, Redpanda or NATS (JetStream, `:4222`) for those brokers; the SaaS stack
+  adds NATS, Dex (`:5556`) and Mailpit (SMTP `$SMTP_PORT`, UI `$MAILPIT_UI_PORT`,
+  default 1025 and 8025). A worker on `nats` also gets a `nats-bootstrap` job that
   creates its two streams and the consumer. The app itself runs on the host, so
   `FLOCI_HOSTNAME` is deliberately unset: Floci then embeds `localhost` in the SQS
   queue URLs and pre-signed URLs.
@@ -267,7 +275,8 @@ locks 0.6.x, so the generator adds `{:websock_adapter, "~> 0.6", override: true}
   and `docker compose down` would otherwise wait out Docker's 10 s stop timeout.
 * `.env.example` — the same variables as `[env]`, every line `export`ed.
 * `.mise.toml` — see above.
-* `.gitignore` — gains `.env` and `.mise.local.toml`.
+* `config/dev.exs`, `config/test.exs` — the repo's `port:` reads `PGPORT`.
+* `.gitignore` — gains `.env`, `docker-compose.override.yml` and `.mise.local.toml`.
 * `config/runtime.exs` — appended, *outside* the `if config_env() == :prod` block, so
   it applies in every environment: `:ex_aws` (with the `AWS_ENDPOINT_URL` host/port
   override and `ExAws.Request.Req` as the HTTP client, which keeps hackney out),
@@ -412,6 +421,8 @@ switch, `mise run stripe` — the Stripe CLI installs through mise and starts, b
 than Mailpit, a collector for the OpenTelemetry export, and the GitHub Actions
 workflow.
 
-If something else already owns 5432 on your machine, override the Postgres host port
-in a `docker-compose.override.yml` (`ports: !override ["5455:5432"]`) and set the same
-`port:` in `config/dev.exs` and `config/test.exs`.
+If something else already owns 5432, 1025 or 8025 on your machine, set `PGPORT`,
+`SMTP_PORT` or `MAILPIT_UI_PORT` (and `PORT` plus `SSO_REDIRECT_URI` for the app) in
+`.mise.local.toml`: compose publishes `${PGPORT:-5432}:5432` and friends, and
+`config/dev.exs` and `config/test.exs` read `PGPORT`. `docker-compose.override.yml` is
+gitignored for any other local change to the services.

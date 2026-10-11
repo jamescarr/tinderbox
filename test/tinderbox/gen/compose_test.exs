@@ -81,8 +81,8 @@ defmodule Tinderbox.Gen.ComposeTest do
     assert content =~ "image: dexidp/dex:v2.46.0"
     assert content =~ "./docker/dex/config.yaml:/etc/dex/config.yaml:ro"
     assert content =~ "image: axllent/mailpit:v1.31"
-    assert content =~ ~s|"1025:1025"|
-    assert content =~ ~s|"8025:8025"|
+    assert content =~ ~s|"${SMTP_PORT:-1025}:1025"|
+    assert content =~ ~s|"${MAILPIT_UI_PORT:-8025}:8025"|
     assert content =~ "image: nats:2.15-alpine"
     # The application creates its own stream (`Test.Events.StreamBootstrap`).
     refute content =~ "nats-bootstrap"
@@ -137,11 +137,37 @@ defmodule Tinderbox.Gen.ComposeTest do
     refute compose_content(:sqs) =~ "redpanda-bootstrap"
   end
 
-  test "postgres is generated unless --no-db" do
+  test "postgres is generated unless --no-db, on the host port PGPORT names" do
     assert compose_content(:sqs) =~ "postgres:17-alpine"
+    assert compose_content(:sqs) =~ ~s|"${PGPORT:-5432}:5432"|
+    assert compose_content(:sqs, path: ".env.example") =~ "export PGPORT=5432"
 
     refute compose_content(:sqs, db: false) =~ "postgres:17-alpine"
     refute compose_content(:sqs, db: false, path: ".env.example") =~ "DATABASE_URL"
+    refute compose_content(:sqs, db: false, path: ".env.example") =~ "PGPORT"
+  end
+
+  test "the repo's dev and test config read PGPORT, inside the existing block and once" do
+    port = ~s|port: String.to_integer(System.get_env("PGPORT", "5432"))|
+
+    igniter =
+      [
+        files: %{
+          "config/dev.exs" =>
+            ~s|import Config\n\nconfig :test, Test.Repo,\n  database: "test_dev"\n|
+        }
+      ]
+      |> test_project()
+      |> Compose.apply(broker: "sqs")
+
+    dev = source(igniter, "config/dev.exs")
+
+    assert dev =~ port
+    assert [_one] = Regex.scan(~r/config :test, Test\.Repo/, dev)
+    assert source(igniter, "config/test.exs") =~ port
+
+    assert source(Compose.apply(igniter, broker: "sqs"), "config/dev.exs") == dev
+    refute_creates(compose(:sqs, db: false), "config/dev.exs")
   end
 
   test "the worker .env.example carries the health port and the broker block" do
@@ -182,10 +208,11 @@ defmodule Tinderbox.Gen.ComposeTest do
     assert env =~ "export HEALTH_PORT=4001"
   end
 
-  test "keeps the developer's .env out of git, and leaves .env.example tracked" do
+  test "keeps the developer's .env and compose override out of git, and leaves .env.example tracked" do
     gitignore = source(compose(:sqs), ".gitignore")
 
     assert gitignore =~ ~r/^\.env$/m
+    assert gitignore =~ ~r/^docker-compose\.override\.yml$/m
     refute gitignore =~ ".env.example"
   end
 

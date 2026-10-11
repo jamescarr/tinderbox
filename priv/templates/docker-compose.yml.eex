@@ -13,8 +13,9 @@ name: <%= @app %>
 services:
 <%= if @db? do %>  postgres:
     image: postgres:17-alpine
+    # Host ports come from the environment (.mise.toml, overridable in .mise.local.toml).
     ports:
-      - "5432:5432"
+      - "${PGPORT:-5432}:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -172,12 +173,13 @@ services:
       timeout: 5s
       retries: 30
 
-  # SMTP sink (1025) with a web inbox, http://localhost:8025. Ships its own healthcheck.
+  # SMTP sink (1025) with a web inbox, http://localhost:8025 (host ports:
+  # SMTP_PORT, MAILPIT_UI_PORT). Ships its own healthcheck.
   mailpit:
     image: axllent/mailpit:v1.31
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "${SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
 <% end %>
   # Stays up once every bootstrap job above has finished. Compose fails
   # `up --wait` when a job container merely exits, even with status 0, unless a
