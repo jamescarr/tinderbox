@@ -70,8 +70,10 @@ without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
   attributes: `public?` also means "goes onto the event bus", so keep large or
   sensitive attributes private.
 * The application's own metrics go in `<%= inspect(@prefix) %>.PromEx.Plugins.App`.
-* A new Ash domain goes into `config :<%= @app %>, ash_domains:` and a new Oban queue
-  into `config :<%= @app %>, Oban, queues:`, both in `config/config.exs`: AshOban only
+* Add an Ash domain with
+  `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things --queues things:5`: it
+  creates the domain (`mix ash.gen.domain`), registers it in `ash_domains` and adds
+  its Oban queues in `config/config.exs`. Register by hand otherwise: AshOban only
   sees the triggers of registered domains.
 * In tests, `<%= inspect(@prefix) %>.Fixtures` creates users, organizations and
   memberships, and `<%= inspect(@web) %>.LiveTestHelpers.sign_in/2` signs a user into

@@ -257,8 +257,10 @@ Ash packages the other stacks use, then adds:
   for pages made of tables; `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
   the application's own metrics; `<App>.Fixtures` and
   `<App>Web.LiveTestHelpers.sign_in/2` in `test/support`, used by
-  `test/<app>_web/live/members_live_test.exs`; and a `README.md` in place of
-  Phoenix's (running it, configuration, and these conventions), written once.
+  `test/<app>_web/live/members_live_test.exs`; `mix <app>.gen.domain`, which runs
+  `ash.gen.domain`, registers the domain in `ash_domains` and adds its `--queues` to
+  the Oban config; and a `README.md` in place of Phoenix's (running it,
+  configuration, and these conventions), written once.
 
 In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;

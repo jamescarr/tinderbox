@@ -53,6 +53,7 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/organization_controller.ex
           lib/test_web/stripe_webhook_handler.ex
           .github/workflows/ci.yml
+          lib/mix/tasks/test.gen.domain.ex
           test/support/fixtures.ex
           test/support/live_test_helpers.ex
           test/test_web/live/members_live_test.exs
