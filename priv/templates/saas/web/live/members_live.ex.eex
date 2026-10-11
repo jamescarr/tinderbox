@@ -151,7 +151,7 @@ def render(assigns) do
           <tr :for={membership <- @memberships} id={"membership-#{membership.id}"}>
             <td>{to_string(membership.user.email)}</td>
             <td>
-              <form :if={@manager?} phx-change="change_role">
+              <form :if={@manager?} id={"role-form-#{membership.id}"} phx-change="change_role">
                 <input type="hidden" name="membership_id" value={membership.id} />
                 <select name="role" class="select select-sm" aria-label="Role">
                   <option :for={role <- @roles} value={role} selected={role == to_string(membership.role)}>
