@@ -442,6 +442,16 @@ Beyond that, generated projects were run end to end against the emulators:
 * **saas re-run** — `mix tinderbox.gen.saas` in a generated project reports
   "File already exists" for each module it would create and writes nothing; the
   guarded edits are only covered by the test that applies the generator twice.
+* **saas `mix <app>.gen.domain`** — in a project generated from this branch
+  (`saas_check`, ports as above),
+  `mix saas_check.gen.domain SaasCheck.Upstreams --queues upstreams:5,dead_letters --yes`
+  created `SaasCheck.Upstreams` (`use Ash.Domain, otp_app: :saas_check`), put it first
+  in `ash_domains` and appended `upstreams: 5, dead_letters: 10` to the Oban queues
+  (`default: 10, billing: 5, notifications: 10` kept). Run again with
+  `--queues upstreams:9` it changed nothing; `--queues "bad name"` exited 1 with
+  `Invalid --queues entry "bad name"` and changed nothing. `mise run check` then
+  passed (7 tests). `MIX_ENV=prod mix compile --force --warnings-as-errors` compiled
+  the task without igniter, and running it in prod exited 1 saying it needs igniter.
 
 Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
 runs were made on never gated `.mise.toml` (a config with templates and hooks was
