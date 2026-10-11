@@ -290,6 +290,24 @@ defmodule Tinderbox.Gen.SaasTest do
     assert_has_notice(igniter, &(&1 =~ "Stripe: create two recurring Prices"))
   end
 
+  test "Phoenix's stock README becomes one about running and extending the app",
+       %{igniter: igniter} do
+    readme = source(igniter, "README.md")
+
+    assert readme =~ "# Test\n"
+    assert readme =~ "mise run dev"
+    assert readme =~ "Test.Accounts.managers/1"
+    refute readme =~ "mix setup"
+  end
+
+  test "a README that is no longer Phoenix's stock one is left alone" do
+    custom = "# Test\n\nRun it with `mise run dev`, then read the wiki.\n"
+
+    igniter = Saas.apply(saas_project(files: [{"README.md", custom}]), [])
+
+    assert source(igniter, "README.md") == custom
+  end
+
   test "CI installs Hex and fetches deps before running the check", %{igniter: igniter} do
     ci = source(igniter, ".github/workflows/ci.yml")
 
@@ -335,6 +353,7 @@ defmodule Tinderbox.Gen.SaasTest do
           config/runtime.exs
           config/config.exs
           mix.exs
+          README.md
         ) do
       assert source(again, path) == source(igniter, path), "#{path} changed on the second run"
     end

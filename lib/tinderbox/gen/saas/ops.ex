@@ -17,7 +17,10 @@ defmodule Tinderbox.Gen.Saas.Ops do
   * `mix phx.gen.release --docker`, run after the files are written: a release
     `Dockerfile`, `.dockerignore`, `<App>.Release` and the `bin/server`/`bin/migrate`
     overlays, from the toolchain that ran the generator,
-  * `.github/workflows/ci.yml`, which runs `mise run check`,
+  * `.github/workflows/ci.yml`, which installs Hex, fetches deps and runs
+    `mise run check`,
+  * `README.md`: how to run and configure the application, and the conventions
+    the generated code follows (replacing Phoenix's stock README once),
   * the notice about the Stripe prerequisites.
   """
 
@@ -43,7 +46,22 @@ defmodule Tinderbox.Gen.Saas.Ops do
       ".github/workflows/ci.yml",
       Gen.render_template("saas/ops/ci.yml.eex", assigns)
     )
+    |> add_readme(assigns)
     |> add_notices(assigns[:opts])
+  end
+
+  # Phoenix's stock README is replaced once; a README that already mentions
+  # `mise run dev` was written by an earlier run (or by hand) and is left alone.
+  defp add_readme(igniter, assigns) do
+    content = Gen.render_template("saas/README.md.eex", assigns)
+
+    Igniter.create_or_update_file(igniter, "README.md", content, fn source ->
+      if Rewrite.Source.get(source, :content) =~ "mise run dev" do
+        source
+      else
+        Igniter.update_source(source, igniter, :content, content)
+      end
+    end)
   end
 
   # -- health ----------------------------------------------------------------

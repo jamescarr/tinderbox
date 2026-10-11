@@ -1,0 +1,76 @@
+# <%= inspect(@prefix) %>
+
+A Phoenix and Ash application generated with tinderbox's SaaS stack: sign-in with a
+password or SSO (OpenID Connect), organizations with members and invitations,
+notifications (in-app and email), Stripe billing, an admin section, a JSON:API,
+events over NATS JetStream, feature flags, and health, metrics and tracing.
+
+## Running it
+
+```bash
+mise trust && mise install   # once: allow .mise.toml, install Elixir and Erlang
+mise run dev                 # start the services, set up the database, run the app
+mise run check               # format, warnings-as-errors compile, tests
+mise tasks                   # everything else
+```
+
+`mise run dev` starts the backing services with docker compose, then the app:
+
+| What | Where |
+|---|---|
+| The app | http://localhost:4000 |
+| Admin (users whose email is in `ADMIN_EMAILS`) | http://localhost:4000/admin |
+| Mailpit, every email the app sends | http://localhost:8025 |
+| Dex, the local SSO provider | user `admin@example.com`, password `password` |
+| Metrics | http://localhost:4000/metrics |
+
+Run bare `mix` commands through `mise exec -- mix …` (for example
+`mise exec -- mix test`): a plain shell does not load `.mise.toml` and
+`.mise.local.toml`, so it would use the default ports and keys.
+
+## Configuration
+
+The `[env]` table of `.mise.toml` is the local environment. Put your own values,
+and anything secret, in `.mise.local.toml`, which is gitignored and overrides it.
+When a port is taken on your machine, move it there:
+
+```toml
+[env]
+PGPORT = "5433"            # Postgres, published by compose and read by config/dev.exs and config/test.exs
+SMTP_PORT = "1026"         # Mailpit's SMTP
+MAILPIT_UI_PORT = "8026"   # Mailpit's inbox
+PORT = "4001"              # the app
+SSO_REDIRECT_URI = "http://localhost:4001/auth"
+```
+
+Production (the release image, `mix phx.gen.release --docker`) refuses to start
+without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
+`PHX_HOST`, `PHX_SERVER=true`, and the `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*` and
+`ADMIN_EMAILS` values of `.mise.toml`. Run migrations with the release's
+`bin/migrate`.
+
+## Conventions
+
+* Every organization-scoped resource has an `organization_id` attribute, and its
+  write policies use
+  `{<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}`,
+  which reads the id off the changeset. A resource whose organization comes from a
+  parent copies the id with a plain change, not a hook, so the policy sees it.
+* New organization pages mount `<%= inspect(@web) %>.LiveOrganization`
+  (`:require_organization`, or `:require_manager` for owner/admin-only pages) and
+  import `<%= inspect(@web) %>.LiveHelpers` (`find/4`, `report/3`, `manager?/1`,
+  `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables.
+* Notify an organization's owners and admins with
+  `<%= inspect(@accounts) %>.managers/1` as the recipients.
+* `<%= inspect(@prefix) %>.Events.AshNotifier` publishes a record's **public**
+  attributes: `public?` also means "goes onto the event bus", so keep large or
+  sensitive attributes private.
+* The application's own metrics go in `<%= inspect(@prefix) %>.PromEx.Plugins.App`.
+* A new Ash domain goes into `config :<%= @app %>, ash_domains:` and a new Oban queue
+  into `config :<%= @app %>, Oban, queues:`, both in `config/config.exs`: AshOban only
+  sees the triggers of registered domains.
+* In tests, `<%= inspect(@prefix) %>.Fixtures` creates users, organizations and
+  memberships, and `<%= inspect(@web) %>.LiveTestHelpers.sign_in/2` signs a user into
+  a conn for `live/2` (see `test/<%= @app %>_web/live/members_live_test.exs`).
+  `AshOban.schedule_and_run_triggers/2` only runs the jobs with
+  `drain_queues?: true`.

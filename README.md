@@ -226,7 +226,8 @@ Ash packages the other stacks use, then adds:
   `<app>.events.<type>`. Every create, update and destroy of an organization,
   membership, invitation or subscription is published as `<resource>.<action>` through
   an `Ash.Notifier`; `<App>.Events.Handler` is where consumers go. A handler that
-  raises is nacked.
+  raises is nacked. The payload is the record's public attributes, so `public?` on
+  an attribute also puts it on the event bus.
 * **API** — AshJsonApi at `/api/json` and `/api` (organizations), OpenAPI at
   `/api/json/open_api`, Swagger UI at `/api/json/swaggerui`, bearer-token sign-in
   through the installer's `:api` pipeline. A request without a token gets `200` with
@@ -248,6 +249,16 @@ Ash packages the other stacks use, then adds:
   `Dockerfile` and `rel/` from `mix phx.gen.release --docker`, and
   `.github/workflows/ci.yml`, which installs Hex, fetches deps and runs
   `mise run check`.
+* **For the code you add** — `<App>.Accounts.managers/1` (an organization's owners and
+  admins, the recipients the billing and invitation notifications use);
+  `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
+  shared by the organization pages); a `:require_manager` hook in
+  `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
+  for pages made of tables; `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
+  the application's own metrics; `<App>.Fixtures` and
+  `<App>Web.LiveTestHelpers.sign_in/2` in `test/support`, used by
+  `test/<app>_web/live/members_live_test.exs`; and a `README.md` in place of
+  Phoenix's (running it, configuration, and these conventions), written once.
 
 In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;

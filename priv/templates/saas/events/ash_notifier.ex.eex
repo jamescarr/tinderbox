@@ -4,8 +4,10 @@ resources it is attached to (`notifiers: [<%= inspect(@prefix) %>.Events.AshNoti
 event named `<resource short name>.<action name>`, for example
 `organization.create` or `membership.change_role`.
 
-The payload is the record's public attributes. A failed publish is logged and
-never fails the action: the database write already happened.
+The payload is the record's public attributes, so `public?` on an attribute also
+means it is published: keep large or sensitive attributes private. A failed
+publish is logged and never fails the action: the database write already
+happened.
 """
 
 use Ash.Notifier
