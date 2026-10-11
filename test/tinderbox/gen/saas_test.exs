@@ -210,6 +210,7 @@ defmodule Tinderbox.Gen.SaasTest do
     layouts = source(igniter, "lib/test_web/components/layouts.ex")
 
     assert_has(layouts, "attr :current_user")
+    assert_has(layouts, "attr :wide, :boolean")
     assert_has(layouts, ~s|action={~p"/organizations/switch"}|)
     assert_has(layouts, "def flash_group(assigns)")
     assert_has(layouts, "def theme_toggle(assigns)")
