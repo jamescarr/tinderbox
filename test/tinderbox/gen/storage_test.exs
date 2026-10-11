@@ -23,6 +23,9 @@ defmodule Tinderbox.Gen.StorageTest do
     assert storage =~ "defmodule Test.Storage do"
     assert storage =~ "ExAws.S3.put_object(config()[:s3_bucket], key, body)"
     assert storage =~ "ExAws.S3.get_object(config()[:s3_bucket], key)"
+    assert storage =~ "ExAws.S3.delete_object(config()[:s3_bucket], key)"
+    assert storage =~ "ExAws.S3.presigned_url("
+    assert storage =~ "{:error, :not_supported}"
     assert storage =~ ~s({:error, {:http_error, 404, _}} -> {:error, :not_found})
     assert storage =~ "Req.post(url"
     assert storage =~ ~s(unknown STORAGE_BACKEND)

@@ -2,9 +2,16 @@
 Object storage with two interchangeable backends, selected by the
 `STORAGE_BACKEND` env var (`"s3"` | `"gcs"`).
 
+  * `put/2` and `get/1` write and read an object,
+  * `delete/1` removes it; a missing object counts as deleted,
+  * `presign/2` returns a time-limited download URL (S3 only).
+
 Both backends honour the Floci emulator endpoints: S3 through `AWS_ENDPOINT_URL`
 (via the `<%= inspect(@module) %>` runtime config for `:ex_aws`), GCS through
 `STORAGE_EMULATOR_HOST`.
+
+`presign/2` answers `{:error, :not_supported}` on GCS: its V4 signed URLs need a
+service-account key, and the GCS backend only has a bearer token.
 """
 
 @spec put(String.t(), iodata()) :: :ok | {:error, term()}
@@ -20,6 +27,31 @@ def get(key) when is_binary(key) do
   case backend() do
     :s3 -> get_s3(key)
     :gcs -> get_gcs(key)
+  end
+end
+
+@spec delete(String.t()) :: :ok | {:error, term()}
+def delete(key) when is_binary(key) do
+  case backend() do
+    :s3 -> delete_s3(key)
+    :gcs -> delete_gcs(key)
+  end
+end
+
+@doc """
+A URL that serves the object without credentials until it expires.
+
+Options:
+
+  * `:expires_in` - seconds the URL stays valid, 300 by default,
+  * `:disposition` - the `Content-Disposition` the object is served with, e.g.
+    `~s|attachment; filename="a.pdf"|`; the object's own when absent.
+"""
+@spec presign(String.t(), keyword()) :: {:ok, String.t()} | {:error, :not_supported | term()}
+def presign(key, opts \\ []) when is_binary(key) do
+  case backend() do
+    :s3 -> presign_s3(key, opts)
+    :gcs -> {:error, :not_supported}
   end
 end
 
@@ -54,6 +86,27 @@ defp get_s3(key) do
   end
 end
 
+# S3 answers 204 for a key that is not there, so a missing object is already `:ok`.
+defp delete_s3(key) do
+  case ExAws.S3.delete_object(config()[:s3_bucket], key) |> ExAws.request() do
+    {:ok, _response} -> :ok
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp presign_s3(key, opts) do
+  params =
+    case opts[:disposition] do
+      nil -> []
+      disposition -> [{"response-content-disposition", disposition}]
+    end
+
+  ExAws.S3.presigned_url(ExAws.Config.new(:s3), :get, config()[:s3_bucket], key,
+    expires_in: Keyword.get(opts, :expires_in, 300),
+    query_params: params
+  )
+end
+
 defp put_gcs(key, body) do
   config = config()
   url = "#{config[:gcs_endpoint]}/upload/storage/v1/b/#{config[:gcs_bucket]}/o"
@@ -79,6 +132,17 @@ defp get_gcs(key) do
        ) do
     {:ok, %{status: 200, body: body}} -> {:ok, body}
     {:ok, %{status: 404}} -> {:error, :not_found}
+    {:ok, %{status: status, body: body}} -> {:error, {:gcs, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp delete_gcs(key) do
+  config = config()
+  url = "#{config[:gcs_endpoint]}/storage/v1/b/#{config[:gcs_bucket]}/o/#{URI.encode_www_form(key)}"
+
+  case Req.delete(url, headers: [authorization: "Bearer #{config[:gcs_token]}"]) do
+    {:ok, %{status: status}} when status in [200, 204, 404] -> :ok
     {:ok, %{status: status, body: body}} -> {:error, {:gcs, status, body}}
     {:error, reason} -> {:error, reason}
   end

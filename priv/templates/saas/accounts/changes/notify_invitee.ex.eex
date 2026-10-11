@@ -3,31 +3,46 @@ Tells the invitee they were invited: an email always, and an in-app notification
 too when the address already belongs to a user.
 
 The notification carries the link to `/invitations/<token>`.
+
+This runs after the transaction, so a notification that fails (the local adapter
+raises) is logged and never rolls the invitation back.
 """
 
 use Ash.Resource.Change
+
+require Logger
 
 alias <%= inspect(@accounts) %>.Organization
 alias <%= inspect(@prefix) %>.Notifications
 
 @impl true
 def change(changeset, _opts, context) do
-  Ash.Changeset.after_action(changeset, fn _changeset, invitation ->
-    organization = Ash.get!(Organization, invitation.organization_id, authorize?: false)
-    inviter = context.actor
+  Ash.Changeset.after_transaction(changeset, fn
+    _changeset, {:ok, invitation} = result ->
+      notify(invitation, context.actor)
+      result
 
-    Notifications.trigger("member.invited", %{
-      recipients: [%{email: to_string(invitation.email)}],
-      actor: inviter,
-      data: %{
-        title: "You're invited to #{organization.name}",
-        body: "#{inviter_name(inviter)} invited you as #{invitation.role}.",
-        url: "/invitations/#{invitation.token}"
-      }
-    })
-
-    {:ok, invitation}
+    _changeset, error ->
+      error
   end)
+end
+
+defp notify(invitation, inviter) do
+  organization = Ash.get!(Organization, invitation.organization_id, authorize?: false)
+
+  Notifications.trigger("member.invited", %{
+    recipients: [%{email: to_string(invitation.email)}],
+    actor: inviter,
+    data: %{
+      title: "You're invited to #{organization.name}",
+      body: "#{inviter_name(inviter)} invited you as #{invitation.role}.",
+      url: "/invitations/#{invitation.token}"
+    }
+  })
+
+  :ok
+rescue
+  error -> Logger.warning("notification member.invited failed: " <> Exception.message(error))
 end
 
 defp inviter_name(%{email: email}), do: to_string(email)

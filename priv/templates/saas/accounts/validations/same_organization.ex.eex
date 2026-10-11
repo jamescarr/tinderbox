@@ -1,0 +1,71 @@
+@moduledoc """
+Every referenced record must belong to the same organization as the one being
+written:
+
+    validate {<%= inspect(@accounts) %>.Validations.SameOrganization, fields: [other_id: MyApp.Projects.Task]}
+
+Each entry names an attribute or argument and the resource its id points at.
+A `nil` value is skipped, and so is an id that does not exist (the foreign key
+reports that). The referenced record is read with `authorize?: false`.
+
+The changeset's `organization_id` must be set before this runs, so list it
+after `<%= inspect(@accounts) %>.Changes.InheritOrganization` in the action.
+
+Validations run before policies, so a foreign id gets this `Invalid` error
+rather than `Forbidden`, which tells the caller the id exists. Never read data
+the actor may not see before the policy runs.
+"""
+
+use Ash.Resource.Validation
+
+@impl true
+def init(opts) do
+  fields = opts[:fields]
+
+  if is_list(fields) and fields != [] and
+       Enum.all?(
+         fields,
+         &match?({field, resource} when is_atom(field) and is_atom(resource), &1)
+       ) do
+    {:ok, opts}
+  else
+    {:error, "`fields` must be a non-empty list of {attribute_or_argument, resource}"}
+  end
+end
+
+@impl true
+def validate(changeset, opts, _context) do
+  case Ash.Changeset.get_attribute(changeset, :organization_id) do
+    nil -> :ok
+    organization_id -> check(changeset, opts[:fields], organization_id)
+  end
+end
+
+@impl true
+def describe(opts) do
+  [
+    message: "must belong to the same organization",
+    vars: [fields: Enum.map(opts[:fields], &elem(&1, 0))]
+  ]
+end
+
+defp check(changeset, fields, organization_id) do
+  errors =
+    for {field, resource} <- fields,
+        id = Ash.Changeset.get_argument_or_attribute(changeset, field),
+        other?(resource, id, organization_id) do
+      [field: field, message: "belongs to another organization"]
+    end
+
+  case errors do
+    [] -> :ok
+    errors -> {:error, errors}
+  end
+end
+
+defp other?(resource, id, organization_id) do
+  case Ash.get(resource, id, authorize?: false, not_found_error?: false) do
+    {:ok, %{organization_id: found}} -> found != organization_id
+    _missing_or_error -> false
+  end
+end

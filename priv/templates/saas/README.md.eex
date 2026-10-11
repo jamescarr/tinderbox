@@ -53,23 +53,37 @@ without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
 `ADMIN_EMAILS` values of `.mise.toml`. Run migrations with the release's
 `bin/migrate`.
 
+With `SMTP_USERNAME` (and `SMTP_PASSWORD`) set, mail is authenticated and upgraded
+with verified STARTTLS. Behind PgBouncer set `DATABASE_POOLER=pgbouncer`. On an
+IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
+`force_ssl`, so a platform's plain-HTTP health check is not redirected.
+
 ## Conventions
 
 * Every organization-scoped resource has an `organization_id` attribute, and its
   write policies use
   `{<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}`,
   which reads the id off the changeset. A resource whose organization comes from a
-  parent copies the id with a plain change, not a hook, so the policy sees it.
+  parent uses
+  `change {<%= inspect(@accounts) %>.Changes.InheritOrganization, from: :parent_id, resource: Parent}`
+  (a plain change, so the policy sees the id), and
+  `validate {<%= inspect(@accounts) %>.Validations.SameOrganization, fields: [other_id: Other]}`
+  for any further ids it references.
 * New organization pages mount `<%= inspect(@web) %>.LiveOrganization`
   (`:require_organization`, or `:require_manager` for owner/admin-only pages) and
   import `<%= inspect(@web) %>.LiveHelpers` (`find/4`, `report/3`, `manager?/1`,
   `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables.
 * Notify an organization's owners and admins with
-  `<%= inspect(@accounts) %>.managers/1` as the recipients.
+  `<%= inspect(@accounts) %>.managers/1` as the recipients. From an action,
+  `change {<%= inspect(@accounts) %>.Changes.NotifyManagers, key: "thing.created", data: {Module, :function}}`
+  does it after commit; add the key to `<%= inspect(@prefix) %>.Notifications.Catalog`.
 * `<%= inspect(@prefix) %>.Events.AshNotifier` publishes a record's **public**
   attributes: `public?` also means "goes onto the event bus", so keep large or
   sensitive attributes private.
 * The application's own metrics go in `<%= inspect(@prefix) %>.PromEx.Plugins.App`.
+* `<%= inspect(@prefix) %>.Storage` has `put/2`, `get/1`, `delete/1` and `presign/2`
+  (S3 only; GCS answers `{:error, :not_supported}`). Prefix keys with the
+  organization id.
 * Add an Ash domain with
   `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things --queues things:5`: it
   creates the domain (`mix ash.gen.domain`), registers it in `ash_domains` and adds
@@ -78,5 +92,6 @@ without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
 * In tests, `<%= inspect(@prefix) %>.Fixtures` creates users, organizations and
   memberships, and `<%= inspect(@web) %>.LiveTestHelpers.sign_in/2` signs a user into
   a conn for `live/2` (see `test/<%= @app %>_web/live/members_live_test.exs`).
-  `AshOban.schedule_and_run_triggers/2` only runs the jobs with
-  `drain_queues?: true`.
+  `AshOban.schedule_and_run_triggers/2` only runs the jobs with `drain_queues?: true`,
+  which raises outside `MIX_ENV=test`; elsewhere call it without, and the running
+  queues do the work.
