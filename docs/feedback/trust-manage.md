@@ -237,7 +237,9 @@ mix igniter.new trust_manage --with phx.new \
 * The production image (`docker build`, 1 min 55 s) builds with the generated
   Dockerfile; `bin/migrate` migrated an empty database; the release started, said
   `JetStream stream and consumer are ready`, and answered `/health` as above.
-* Not exercised: the SSO login (Dex or Google), the Fly deployment (Managed
-  Postgres behind PgBouncer, Tigris, NATS on a volume, the IPv6 settings, the Resend
-  relay), more than one node, and the Stripe pages (hidden from the navigation,
-  still routable at `/billing`).
+* GitHub Actions: the generated workflow passed on `main` (12 min 47 s) and on draft
+  PR `jamescarr/trust-manage#1` (10 min 14 s), with no change to the workflow.
+* Not exercised: the SSO login (Dex or Google), the Fly deployment (deferred: `flyctl`
+  was not logged in; so Managed Postgres behind PgBouncer, Tigris, NATS on a volume,
+  the IPv6 settings and the Resend relay are untested), more than one node, and the
+  Stripe pages (hidden from the navigation, still routable at `/billing`).
