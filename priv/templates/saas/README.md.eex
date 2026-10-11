@@ -43,6 +43,10 @@ PORT = "4001"              # the app
 SSO_REDIRECT_URI = "http://localhost:4001/auth"
 ```
 
+Moving the app off 4000 also needs `http://localhost:4001/auth/user/sso/callback`
+(your port) in `redirectURIs` in `docker/dex/config.yaml`, then `mise run down` and
+`mise run up`; Dex refuses a callback it does not list.
+
 Production (the release image, `mix phx.gen.release --docker`) refuses to start
 without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
 `PHX_HOST`, `PHX_SERVER=true`, and the `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*` and

@@ -433,7 +433,10 @@ than Mailpit, a collector for the OpenTelemetry export, and the GitHub Actions
 workflow.
 
 If something else already owns 5432, 1025 or 8025 on your machine, set `PGPORT`,
-`SMTP_PORT` or `MAILPIT_UI_PORT` (and `PORT` plus `SSO_REDIRECT_URI` for the app) in
-`.mise.local.toml`: compose publishes `${PGPORT:-5432}:5432` and friends, and
-`config/dev.exs` and `config/test.exs` read `PGPORT`. `docker-compose.override.yml` is
-gitignored for any other local change to the services.
+`SMTP_PORT` or `MAILPIT_UI_PORT` in `.mise.local.toml`: compose publishes
+`${PGPORT:-5432}:5432` and friends, and `config/dev.exs` and `config/test.exs` read
+`PGPORT`. To move the app off 4000, set `PORT` and `SSO_REDIRECT_URI` there and add
+the new `…/auth/user/sso/callback` to `redirectURIs` in `docker/dex/config.yaml`,
+which Dex reads as a file (it otherwise refuses the SSO callback as an unregistered
+redirect URI). `docker-compose.override.yml` is gitignored for any other local
+change to the services.
