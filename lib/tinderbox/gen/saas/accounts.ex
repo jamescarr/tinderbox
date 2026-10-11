@@ -17,6 +17,8 @@ defmodule Tinderbox.Gen.Saas.Accounts do
   * the `Organization`, `Membership` and `Invitation` resources with their
     changes, validation and policy check, registered in the accounts domain
     together with AshPaperTrail and AshJsonApi,
+  * `<App>.Accounts.managers/1`, an organization's owners and admins (the
+    recipients of what happens to it),
   * the organization switcher (`<App>Web.OrganizationController`) and the
     `<App>Web.LiveOrganization` hooks,
   * removal of the `magic_sign_in_route` the Phoenix installer adds, which does
@@ -55,6 +57,7 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     |> add_user_policies(assigns)
     |> add_resources(assigns)
     |> configure_domain(assigns)
+    |> add_managers(assigns)
     |> remove_magic_link_route(assigns)
     |> add_organization_web(assigns)
   end
@@ -263,6 +266,21 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     |> Spark.Igniter.add_extension(accounts, Ash.Domain, :extensions, AshPaperTrail.Domain)
     |> Spark.Igniter.add_extension(accounts, Ash.Domain, :extensions, AshJsonApi.Domain)
     |> Spark.Igniter.set_option(accounts, [:paper_trail, :include_versions?], true)
+  end
+
+  defp add_managers(igniter, assigns) do
+    accounts = assigns[:accounts]
+    {igniter, present?} = Edits.source_contains?(igniter, accounts, "def managers(")
+
+    if present? do
+      igniter
+    else
+      Edits.append_to_module(
+        igniter,
+        accounts,
+        Gen.render_template("saas/accounts/managers.eex", assigns)
+      )
+    end
   end
 
   defp remove_magic_link_route(igniter, assigns) do

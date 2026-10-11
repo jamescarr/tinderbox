@@ -234,6 +234,16 @@ defmodule Tinderbox.Gen.SaasTest do
     for resource <- ~w(Organization Membership Invitation UserIdentity) do
       assert_has(accounts, "resource Test.Accounts.#{resource}")
     end
+
+    assert_has(accounts, "def managers(organization_id)")
+  end
+
+  test "billing notifies the organization's managers through Accounts.managers/1",
+       %{igniter: igniter} do
+    sync = source(igniter, "lib/test/billing/changes/sync_subscription.ex")
+
+    assert_has(sync, "recipients: Test.Accounts.managers(organization.id)")
+    refute_has(sync, "defp managers")
   end
 
   test "queues the release image, one migration run and the notices", %{igniter: igniter} do

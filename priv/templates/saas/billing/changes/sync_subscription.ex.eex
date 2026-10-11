@@ -21,7 +21,6 @@ use Ash.Resource.Change
 require Ash.Query
 require Logger
 
-alias <%= inspect(@accounts) %>.Membership
 alias <%= inspect(@accounts) %>.Organization
 alias <%= inspect(@prefix) %>.Billing.Plans
 alias <%= inspect(@prefix) %>.Billing.Subscription
@@ -163,7 +162,7 @@ end
 
 defp subscription_updated(organization, subscription) do
   Notifications.trigger("subscription.updated", %{
-    recipients: managers(organization),
+    recipients: <%= inspect(@accounts) %>.managers(organization.id),
     data: %{
       title: "Subscription #{humanize(subscription.status)}",
       body: "#{plan_name(subscription)} is now #{humanize(subscription.status)} for #{organization.name}.",
@@ -174,21 +173,13 @@ end
 
 defp payment_failed(organization, subscription) do
   Notifications.trigger("payment.failed", %{
-    recipients: managers(organization),
+    recipients: <%= inspect(@accounts) %>.managers(organization.id),
     data: %{
       title: "A payment failed",
       body: "We could not charge the card for #{plan_name(subscription)} (#{organization.name}).",
       url: "/billing"
     }
   })
-end
-
-defp managers(organization) do
-  Membership
-  |> Ash.Query.filter(organization_id == ^organization.id and role in [:owner, :admin])
-  |> Ash.Query.load(:user)
-  |> Ash.read!(authorize?: false)
-  |> Enum.map(& &1.user)
 end
 
 defp plan_name(%{stripe_price_id: price_id}) do

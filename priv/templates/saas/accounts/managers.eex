@@ -1,0 +1,14 @@
+require Ash.Query
+
+@doc """
+The owners and admins of an organization: who gets notified about what
+happens to it.
+"""
+@spec managers(Ecto.UUID.t()) :: [<%= inspect(@user) %>.t()]
+def managers(organization_id) do
+  <%= inspect(@accounts) %>.Membership
+  |> Ash.Query.filter(organization_id == ^organization_id and role in [:owner, :admin])
+  |> Ash.Query.load(:user)
+  |> Ash.read!(authorize?: false)
+  |> Enum.map(& &1.user)
+end
