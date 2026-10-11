@@ -80,19 +80,22 @@ mix igniter.new trust_manage --with phx.new \
   a `mix trust_manage.gen.resource TrustManage.Finances.Account name:string …
   --org-scoped` next to `gen.domain` would write it. A resource that must hide data
   from platform admins has to *leave out* the
-  `bypass actor_attribute_equals(:role, :admin)` that the generated `Organization` and
-  `Membership` resources carry; a flag (`--no-admin-bypass`) would say so.
+  `bypass actor_attribute_equals(:role, :admin)` that the six generated resources
+  carry (`Organization`, `Membership`, `Invitation`, `Billing.Subscription`,
+  `Notifications.Notification` and `Notifications.Preference`); a flag
+  (`--no-admin-bypass`) would say so.
 * **`InheritOrganization` and `SameOrganization`**
-  (`lib/trust_manage/finances/changes/inherit_organization.ex`,
-  `lib/trust_manage/finances/validations/same_organization.ex`). The README says a
+  (`lib/trust_manage/accounts/changes/inherit_organization.ex`,
+  `lib/trust_manage/accounts/validations/same_organization.ex`). The README says a
   child resource copies `organization_id` with a plain change; each project writes
   that change. Its sibling, a validation that every referenced id belongs to the same
   organization, is needed as soon as a child points at two parents (a transfer's
   second account, a payment's account, a document's links). Both belong in the stack.
   One behaviour worth documenting: validations run before policies, so a forged id
-  from another trust gets `belongs to another trust` (an `Invalid` error) where one
-  that is consistent but foreign gets `Forbidden`
-  (`test/trust_manage/finances/transfer_test.exs`).
+  from another organization gets `belongs to another organization` (an `Invalid`
+  error) where one that is consistent but foreign gets `Forbidden`
+  (`test/trust_manage/finances/transfer_test.exs`). Generated since
+  jamescarr/tinderbox#3; trust_manage uses the generated module.
 * **An activity feed**: `lib/trust_manage/finances/activity_event.ex`,
   `activity.ex`, `changes/record_activity.ex`, `lib/trust_manage_web/live/activity_live.ex`.
   The stack ships AshPaperTrail on the accounts resources but nothing that reads
@@ -100,11 +103,16 @@ mix igniter.new trust_manage --with phx.new \
   2026-10-11", and nothing org-scoped to page through. `RecordActivity` writes the row
   in an `after_action` (so it exists exactly when the change committed) and diffs the
   action's `accept` list. Any SaaS app with an audit trail needs this.
-* **Notifying managers from an action**: `lib/trust_manage/finances/changes/notify_trustees.ex`
+* **Notifying managers from an action**: `lib/trust_manage/accounts/changes/notify_managers.ex`
   plus `Activity.notification/2` and five keys in `TrustManage.Notifications.Catalog`.
   `Accounts.managers/1` exists, but the `after_action` that calls `trigger/2` with it
   was written by hand for every call site; a `change {Notify, key: …, to: :managers}`
   would remove it. The catalog and the call site must also be kept in step by hand.
+  The hand-written change started as an `after_action`: a raising adapter (the local
+  one raises on `Ash.create!` and `Oban.insert!`) rolled back the transfer, and
+  PubSub fired before the commit. Generated since jamescarr/tinderbox#3 as
+  `change {NotifyManagers, key: …, data: {Module, :function}}`, which runs in an
+  `after_transaction` and only logs a failure; trust_manage uses the generated module.
 * **An organization-scoped CRUD LiveView template.** Ten pages
   (`lib/trust_manage_web/live/{accounts,account,transfers,transfer,bills,bill,assets,asset,documents,activity}_live.ex`)
   and the rewritten dashboard repeat one shape: the three `on_mount`
@@ -118,8 +126,8 @@ mix igniter.new trust_manage --with phx.new \
   `lib/trust_manage_web/live/document_upload_component.ex`,
   `lib/trust_manage_web/controllers/document_controller.ex`,
   `lib/trust_manage/finances/documents.ex` (an org-prefixed storage key). `TrustManage.Storage`
-  has only `put/2` and `get/1`:
-  * no `delete/1`, so an object is orphaned when the `:upload` action fails after the
+  (`lib/trust_manage/storage.ex`) had only `put/2` and `get/1`:
+  * no `delete/1`, so an object was orphaned when the `:upload` action failed after the
     `put` (a document is archived, never destroyed, for the same reason);
   * no `presign/2`, so every download proxies the whole object through the app and
     holds it in memory (`Storage.get/1` returns a binary).
@@ -127,7 +135,11 @@ mix igniter.new trust_manage --with phx.new \
   The stack should ship `Storage.delete/1` and `Storage.presign/2`, and an upload
   component with the server-side-values-win rule (the browser must not choose the
   key, size or organization) and the content-type rule (only PDF and common images
-  inline, `nosniff`, everything else `application/octet-stream`).
+  inline, `nosniff`, everything else `application/octet-stream`). Storage delete and
+  presign are generated since jamescarr/tinderbox#3; trust_manage uses the generated
+  module, and the upload component deletes the object when the row is refused.
+  Downloads stay proxied through `DocumentController`, with no presign: inline versus
+  attachment and `nosniff` are decided per request there.
 * **Money**: `lib/trust_manage/money.ex` (`format/1`, `sum/1`) and
   `lib/trust_manage_web/components/finance_components.ex` (`<.money>`, status badges,
   `humanize/1`, `enum_options/2` for selects over a `one_of` constraint). The stack has
@@ -137,26 +149,31 @@ mix igniter.new trust_manage --with phx.new \
   nothing describes how to run the app, NATS, Postgres and storage on Fly. Candidates:
   generate both files behind `--deploy fly`.
 * **SMTP authentication and TLS**: `config/runtime.exs`, the mail block. The generated
-  block hard-codes `tls: :never, auth: :never` (right for Mailpit, wrong for every
+  block hard-coded `tls: :never, auth: :never` (right for Mailpit, wrong for every
   real relay). trust_manage reads `SMTP_USERNAME` and `SMTP_PASSWORD` and, when the
   username is set, uses `auth: :always, tls: :always` with `verify_peer`,
   `:public_key.cacerts_get()`, SNI and a hostname check. Evaluating the block with
   `SMTP_USERNAME` set shows the options in place; no connection to Resend was made.
-* **NATS over IPv6**: the `:nats` block of `config/runtime.exs` passes no `tcp_opts`.
+  Generated since jamescarr/tinderbox#3; trust_manage uses the generated module.
+* **NATS over IPv6**: the `:nats` block of `config/runtime.exs` passed no `tcp_opts`.
   Fly's private network is IPv6-only, so trust_manage adds
-  `tcp_opts: [:inet6, :binary]` when `NATS_INET6=true`.
+  `tcp_opts: [:inet6, :binary]` when `NATS_INET6=true`. Generated since
+  jamescarr/tinderbox#3; trust_manage uses the generated module.
 * **Oban and PgBouncer**: `config/runtime.exs`, inside `if config_env() == :prod`.
   Fly Managed Postgres sits behind PgBouncer, which breaks LISTEN/NOTIFY (Oban's
   default notifier) and named prepared statements, so trust_manage sets
-  `Oban.Notifiers.PG` and `prepare: :unnamed`. A `DATABASE_POOLER=pgbouncer` switch
-  would cover both.
+  `Oban.Notifiers.PG` and `prepare: :unnamed`. Generated since jamescarr/tinderbox#3
+  behind `DATABASE_POOLER=pgbouncer`, which `fly.toml` sets; trust_manage uses the
+  generated block.
 * **A health-check header for `force_ssl`**: the `[[http_service.checks]]` block of
   `fly.toml`. `config/prod.exs` redirects plain HTTP unless the host is `localhost`
   (its `paths: ["/health"]` exclusion is commented out). A request to
   `/health` with `Host: trust-manage.fly.dev` and no `X-Forwarded-Proto` got `301`; with
   `X-Forwarded-Proto: https` it got `200 {"status":"ok"}` (production image, run
-  locally). Fly's check reaches the machine the first way, so `fly.toml` sends the
-  header. Excluding `/health` in `prod.exs` would make it generic.
+  locally). Fly's check reaches the machine the first way, so `fly.toml` sent the
+  header. Generated since jamescarr/tinderbox#3: `/health` is exempt in
+  `config/prod.exs` (`paths: ["/health"]`) instead of through the header, which
+  trust_manage no longer sends.
 
 ## Rough edges hit
 
@@ -166,12 +183,14 @@ mix igniter.new trust_manage --with phx.new \
   ("run `schedule_and_run_triggers(…, drain_queues?: true)` in `iex -S mix`") cannot
   work. In dev the call without `drain_queues?` schedules the trigger and the running
   queues do the rest: both trustees got `Sunrise Senior Living due …` by email. The
-  README convention that mentions `drain_queues?` now says so.
+  README convention that mentions `drain_queues?` now says so; the generated README
+  says so since jamescarr/tinderbox#3.
 * **`<.button>` has no `type` attribute** (`rest` is `:global` plus `href navigate
   patch method download name value disabled`), and a `<button>` inside a form submits
   it. The Archive and Restore buttons therefore sit outside the `<.form>` they
   belong beside (`lib/trust_manage_web/live/account_live.ex`, `bill_live.ex`,
-  `asset_live.ex`).
+  `asset_live.ex`). Fixed in the generator since jamescarr/tinderbox#3 (it adds `type`
+  to the list); trust_manage's own `core_components.ex` still has the stock list.
 * **A hidden input named `id` is a compile warning** (HEEx: it overrides the form's
   id), which `mix compile --warnings-as-errors` turns into a failure. The void form's
   field is `entry_id`.
@@ -184,38 +203,47 @@ mix igniter.new trust_manage --with phx.new \
   libsctp.so.1`** on every start. Harmless (the app serves). The Dockerfile's
   `apt-get install` list has no `libsctp1`.
 * **Validations run before authorization.** An outsider proposing a transfer from one
-  of this trust's accounts into one of their own gets `belongs to another trust`
+  of this trust's accounts into one of their own gets `belongs to another organization`
   instead of `Forbidden`, which tells them the id exists. The reconcile change
   (`lib/trust_manage/finances/changes/reconcile.ex`) therefore reads the account's
   balance as the actor, not with `authorize?: false`: a forged account id finds
   nothing, where a balance read before the policy would leak another trust's balance
   through "already matches the current balance".
-* **The identity that stops a double post**: two trustees completing one approved
+* **The identity stops a double complete only.** Two trustees completing one approved
   transfer at once both pass the status validation, because `require_atomic? false`
   updates validate against the row they read. A unique index on
   `transactions (transfer_id, account_id)` (an Ash `identity`) makes the second post
   fail and roll back (`transfer_test.exs`, "completing the same approved transfer
-  twice posts to the ledger once"). Ash's `get_and_lock_for_update` change would not
-  have helped: by its source it re-reads the row in a `before_action`, after the
-  validations.
+  twice posts to the ledger once"). Cancel against complete and approve against
+  reject post nothing, so no index sees them; each transition carries
+  `change filter(expr(status == …))` instead (`transfer.ex`). AshPostgres puts the
+  filter in the UPDATE's `WHERE`, the loser matches no row and gets `StaleRecord`,
+  and it fails before `PostTransfer` posts anything (`transfer_test.exs`, "cancelling
+  a transfer that was completed meanwhile …", "a second trustee's reject …"). The
+  validations stay: they give a friendly message on a stale page. Ash's
+  `get_and_lock_for_update` change would not have helped: by its source it re-reads
+  the row in a `before_action`, after the validations.
 
 ## Verified / not verified
 
-* `mise run check` passes: formatting, warnings-as-errors compile, 41 tests:
+* `mise run check` passes: formatting, warnings-as-errors compile, 47 tests:
   * the 7 generated ones;
-  * 19 on the finance domain: the two-person rule (the proposer's `:approve` is
+  * 22 on the finance domain: the two-person rule (the proposer's `:approve` is
     forbidden; a view-only member cannot propose; completing before approval is
     refused), the ledger (reconcile, void, a transfer's postings cannot be voided),
     bill payments (a monthly bill due 2026-01-31 moves to 2026-02-28; a one-time
     bill is archived), the hourly reminder (each trustee gets one notification, a
-    second run sends none), notifications to the co-trustee, and isolation between
-    two trusts;
-  * 15 on the web side: the document download (200 inline for a member, 404 for
+    second run sends none), notifications to the co-trustee, isolation between two
+    trusts, and the transition races (cancelling a transfer completed meanwhile, and
+    rejecting one a co-trustee approved meanwhile, are refused; a raising
+    notification adapter is logged and never undoes the action);
+  * 18 on the web side: the document download (200 inline for a member, 404 for
     another trust, redirect when signed out, attachment for a type the browser could
     run, 404 for a missing object, against Floci), the transfer pages (the proposer
     waits, the co-trustee approves, a view-only member sees no controls, a lone
-    trustee is warned), and the account page including a file upload through the
-    LiveView upload component.
+    trustee is warned), the account page including a file upload through the
+    LiveView upload component (and a refused row leaving no object behind), and every
+    finance page rendering for a trustee and a view-only member.
 * Smoke test with `mise run dev` on port 4113 and a headless Chromium:
   * password registration, creating the trust, inviting a co-trustee as admin (the
     invitation email arrived in Mailpit), the co-trustee registering and accepting;
