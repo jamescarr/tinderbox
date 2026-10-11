@@ -41,6 +41,7 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/events/consumer.ex
           lib/test/events/ash_notifier.ex
           lib/test/prom_ex.ex
+          lib/test/prom_ex/plugins/app.ex
           lib/test/feature_flags.ex
           lib/test_web/dashboard_live.ex
           lib/test_web/live_helpers.ex
@@ -139,6 +140,10 @@ defmodule Tinderbox.Gen.SaasTest do
     assert order(endpoint, "plug Stripe.WebhookPlug") < order(endpoint, "plug Plug.Parsers")
     assert_has(endpoint, "secret: {Application, :get_env, [:test, :stripe_webhook_secret]}")
     assert order(endpoint, "plug PromEx.Plug") < order(endpoint, "plug Plug.RequestId")
+  end
+
+  test "PromEx serves the application's own plugin next to the stock ones", %{igniter: igniter} do
+    assert_has(source(igniter, "lib/test/prom_ex.ex"), "Test.PromEx.Plugins.App")
   end
 
   test "the supervision tree starts metrics first and NATS before its consumers",

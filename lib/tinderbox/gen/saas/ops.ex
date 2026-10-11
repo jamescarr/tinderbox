@@ -5,9 +5,10 @@ defmodule Tinderbox.Gen.Saas.Ops do
 
   * `GET /health` (`<App>Web.HealthController`): 200 while the database answers,
     503 otherwise; no session, CSRF or authentication,
-  * PromEx: `<App>.PromEx`, its config, its supervisor child (first, so
-    startup metrics are not missed) and `PromEx.Plug` ahead of the endpoint's
-    request logging, serving `/metrics`,
+  * PromEx: `<App>.PromEx`, `<App>.PromEx.Plugins.App` for the application's own
+    metrics, its config, its supervisor child (first, so startup metrics are not
+    missed) and `PromEx.Plug` ahead of the endpoint's request logging, serving
+    `/metrics`,
   * OpenTelemetry: the Bandit, Phoenix, Ecto and Oban instrumentation is set up
     first thing in `Application.start/2`; traces are exported only when
     `OTEL_EXPORTER_OTLP_ENDPOINT` is set,
@@ -82,6 +83,10 @@ defmodule Tinderbox.Gen.Saas.Ops do
     |> Igniter.Project.Module.create_module(
       prom_ex,
       Gen.render_template("saas/ops/prom_ex.ex.eex", assigns)
+    )
+    |> Igniter.Project.Module.create_module(
+      Module.concat([assigns[:prefix], "PromEx", "Plugins", "App"]),
+      Gen.render_template("saas/ops/prom_ex_plugin.ex.eex", assigns)
     )
     |> Igniter.Project.Config.configure(
       "config.exs",

@@ -1,0 +1,36 @@
+@moduledoc """
+The application's own Prometheus metrics, next to the stock plugins in
+`<%= inspect(@prefix) %>.PromEx`.
+
+Emit an event where the work happens:
+
+    :telemetry.execute(
+      [:<%= @app %>, :invoice, :send, :stop],
+      %{duration: System.monotonic_time() - started},
+      %{status: :ok}
+    )
+
+and declare it here, naming metrics `<%= @app %>.<area>.<name>`:
+
+    def event_metrics(_opts) do
+      Event.build(:<%= @app %>_invoice_event_metrics, [
+        counter("<%= @app %>.invoice.send.count",
+          event_name: [:<%= @app %>, :invoice, :send, :stop],
+          tags: [:status]
+        ),
+        distribution("<%= @app %>.invoice.send.duration.milliseconds",
+          event_name: [:<%= @app %>, :invoice, :send, :stop],
+          measurement: :duration,
+          unit: {:native, :millisecond},
+          reporter_options: [buckets: [10, 100, 1_000, 10_000]]
+        )
+      ])
+    end
+
+`PromEx.Plugin` documents the polling and manual metrics callbacks.
+"""
+
+use PromEx.Plugin
+
+@impl true
+def event_metrics(_opts), do: []
