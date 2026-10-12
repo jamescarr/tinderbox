@@ -11,6 +11,9 @@ The actor is not notified of their own action (the notification platform leaves
 them out); an action without an actor, such as one run by an AshOban trigger,
 notifies every manager.
 
+On an update action set `require_atomic? false`: the change only adds a hook, but it
+does not implement `atomic/3`, so Ash refuses it in an atomic update.
+
 This runs after the transaction, not in it: the local adapter raises
 (`Ash.create!`, `Oban.insert!`), and inside the transaction that would roll the
 change back, and a LiveView reloading on `{:notification_created, _}` could miss
