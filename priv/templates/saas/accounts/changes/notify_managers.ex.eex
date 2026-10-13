@@ -1,0 +1,72 @@
+@moduledoc """
+Tells the organization's owners and admins about what the action did:
+
+    change {<%= inspect(@accounts) %>.Changes.NotifyManagers, key: "thing.created", data: {MyApp.Things.Text, :notification}}
+
+`data` is called as `apply(module, fun, [key, record])` and returns the
+notification's `%{title:, body:, url:}`. The record needs an `organization_id`,
+and `key` has to be in `<%= inspect(@prefix) %>.Notifications.Catalog`.
+
+The actor is not notified of their own action (the notification platform leaves
+them out); an action without an actor, such as one run by an AshOban trigger,
+notifies every manager.
+
+On an update action set `require_atomic? false`: the change only adds a hook, but it
+does not implement `atomic/3`, so Ash refuses it in an atomic update.
+
+This runs after the transaction, not in it: the local adapter raises
+(`Ash.create!`, `Oban.insert!`), and inside the transaction that would roll the
+change back, and a LiveView reloading on `{:notification_created, _}` could miss
+rows that are not committed yet. A failure is logged and never undoes the change.
+"""
+
+use Ash.Resource.Change
+
+require Logger
+
+alias <%= inspect(@accounts) %>
+alias <%= inspect(@prefix) %>.Notifications
+
+@impl true
+def init(opts) do
+  case {opts[:key], opts[:data]} do
+    {key, {module, fun}} when is_binary(key) and is_atom(module) and is_atom(fun) ->
+      {:ok, opts}
+
+    _invalid ->
+      {:error, "expected `key: \"a.key\"` and `data: {Module, :function}`"}
+  end
+end
+
+@impl true
+def change(changeset, opts, context) do
+  key = Keyword.fetch!(opts, :key)
+  data = Keyword.fetch!(opts, :data)
+
+  Ash.Changeset.after_transaction(changeset, fn
+    _changeset, {:ok, record} = result ->
+      notify(key, data, record, context.actor)
+      result
+
+    _changeset, error ->
+      error
+  end)
+end
+
+defp notify(key, {module, fun}, record, actor) do
+  params = %{
+    recipients: Accounts.managers(record.organization_id),
+    actor: actor,
+    data: apply(module, fun, [key, record])
+  }
+
+  case Notifications.trigger(key, params) do
+    {:error, error} -> Logger.warning("notification #{key} failed: #{inspect(error)}")
+    _sent -> :ok
+  end
+
+  :ok
+rescue
+  error -> Logger.warning("notification #{key} failed: " <> Exception.message(error))
+  :ok
+end

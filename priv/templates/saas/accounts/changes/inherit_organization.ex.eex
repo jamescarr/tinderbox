@@ -1,0 +1,35 @@
+@moduledoc """
+Sets `organization_id` from the parent record an action points at, for
+resources whose organization is not supplied by the caller:
+
+    change {<%= inspect(@accounts) %>.Changes.InheritOrganization, from: :project_id, resource: MyApp.Projects.Project}
+
+This is a plain change, not a hook, on purpose: `ActorManagesOrganization` reads
+`organization_id` off the changeset when policies run, which is before any
+`before_action` hook. A forged id from another organization therefore copies
+*that* organization's id, and the policy then forbids the action.
+
+The parent is looked up with `authorize?: false`; the policy is what protects.
+"""
+
+use Ash.Resource.Change
+
+@impl true
+def change(changeset, opts, _context) do
+  from = Keyword.fetch!(opts, :from)
+  resource = Keyword.fetch!(opts, :resource)
+
+  case Ash.Changeset.get_attribute(changeset, from) do
+    nil ->
+      changeset
+
+    id ->
+      case Ash.get(resource, id, authorize?: false, not_found_error?: false) do
+        {:ok, %{organization_id: organization_id}} ->
+          Ash.Changeset.force_change_attribute(changeset, :organization_id, organization_id)
+
+        _missing_or_error ->
+          Ash.Changeset.add_error(changeset, field: from, message: "not found")
+      end
+  end
+end

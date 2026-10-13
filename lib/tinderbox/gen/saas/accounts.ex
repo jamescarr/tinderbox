@@ -15,8 +15,12 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     resource, the register action, the secrets and the runtime config it needs,
   * the user's read policies (yourself, admins, people in your organizations),
   * the `Organization`, `Membership` and `Invitation` resources with their
-    changes, validation and policy check, registered in the accounts domain
+    changes, validations and policy check, registered in the accounts domain
     together with AshPaperTrail and AshJsonApi,
+  * the building blocks every organization-scoped resource of the application
+    reuses: `Changes.InheritOrganization` (copy the organization from a parent),
+    `Validations.SameOrganization` (reject ids of another organization's records)
+    and `Changes.NotifyManagers` (notify an organization's managers after commit),
   * `<App>.Accounts.managers/1`, an organization's owners and admins (the
     recipients of what happens to it),
   * the organization switcher (`<App>Web.OrganizationController`) and the
@@ -35,7 +39,7 @@ defmodule Tinderbox.Gen.Saas.Accounts do
 
   @resources ~w(Organization Membership Invitation)a
 
-  @changes ~w(SetSlug AddOwnerMembership NotifyInvitee AcceptInvitation AssignRole)a
+  @changes ~w(SetSlug AddOwnerMembership NotifyInvitee AcceptInvitation AssignRole InheritOrganization NotifyManagers)a
 
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
@@ -60,6 +64,9 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     |> add_managers(assigns)
     |> remove_magic_link_route(assigns)
     |> add_organization_web(assigns)
+    # Without it Ash logs a warning for every `after_transaction` hook that runs
+    # inside the test sandbox's transaction.
+    |> Igniter.Project.Config.configure("test.exs", :ash, [:warn_on_transaction_hooks?], false)
   end
 
   # `ash_authentication_phoenix.install` only adds the password strategy when the
@@ -244,6 +251,8 @@ defmodule Tinderbox.Gen.Saas.Accounts do
         [
           {Module.concat([accounts, Validations, NotLastOwner]),
            "saas/accounts/validations/not_last_owner.ex.eex"},
+          {Module.concat([accounts, Validations, SameOrganization]),
+           "saas/accounts/validations/same_organization.ex.eex"},
           {Module.concat([accounts, Checks, ActorManagesOrganization]),
            "saas/accounts/checks/actor_manages_organization.ex.eex"}
         ]

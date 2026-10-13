@@ -25,7 +25,8 @@ and a live component gallery at `/dev/ui`. See [UI kit](#ui-kit-mix-tinderboxgen
 
 All stacks also get object storage (`<App>.Storage`) with two interchangeable
 backends — `s3` through `ex_aws` and `gcs` through `Req` — both pointed at the local
-emulators.
+emulators. It has `put/2`, `get/1`, `delete/1` and `presign/2` (S3 only: GCS needs a
+service-account key to sign URLs and answers `{:error, :not_supported}`).
 
 ## Usage
 
@@ -104,14 +105,16 @@ mix phx.server                     # or: mix run --no-halt
 | `--no-demo` | api | demo generated | skip the demo `Catalog` domain + `Catalog.Item` resource |
 | `--no-db` | `tinderbox.gen.compose`, `tinderbox.gen.mise` | Postgres service | skip the Postgres service and `DATABASE_URL` |
 
-The individual tasks (`tinderbox.gen.api`, `.worker`, `.saas`, `.ui`, `.compose`, `.mise`) can
+The individual tasks (`tinderbox.gen.api`, `.worker`, `.saas`, `.compose`, `.mise`) can
 be re-run in an existing project. Re-running fails on the files a task *creates* —
 compose, `.env.example`, `.mise.toml`, generated modules — rather than overwriting
 them, and then writes nothing at all. The edits it makes to files that already exist
 are guarded and not applied twice: dependencies, `config/runtime.exs`, `ash_domains`,
 the supervisor children, `.gitignore`, and the `/api` mount in the router (the
 guarded edits of the SaaS stack are covered by a test that applies it twice; the
-real re-run was only seen to refuse, see below). `tinderbox.install` removes the
+real re-run was only seen to refuse, see below). `tinderbox.gen.ui` is the exception:
+it skips kit modules that exist and is meant to be re-run, to switch packs.
+`tinderbox.install` removes the
 `tinderbox` path dependency from `mix.exs` when it finishes, because the path only
 exists on the generating machine and `mix deps.get` fails anywhere else (CI first);
 add it back for the run, as its notice says, before re-running a task.
@@ -262,6 +265,12 @@ Ash packages the other stacks use, then adds:
   `mise run check`.
 * **For the code you add** — `<App>.Accounts.managers/1` (an organization's owners and
   admins, the recipients the billing and invitation notifications use);
+  `<App>.Accounts.Changes.InheritOrganization` (copy `organization_id` from a parent
+  record, as a plain change so the policy sees it),
+  `<App>.Accounts.Validations.SameOrganization` (reject referenced ids that belong to
+  another organization) and `<App>.Accounts.Changes.NotifyManagers` (notify the
+  managers after the transaction commits; a failure is logged, never undoes the
+  change);
   `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
   shared by the organization pages); a `:require_manager` hook in
   `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
@@ -278,7 +287,12 @@ In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
 `runtime.exs` raises when it is missing). Also set `PHX_HOST`, `PHX_SERVER=true`, the
 `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*` and `ADMIN_EMAILS` values of `.mise.toml`.
-Run migrations with the release's `bin/migrate`.
+Run migrations with the release's `bin/migrate`. With `SMTP_USERNAME` (and
+`SMTP_PASSWORD`) set, mail is authenticated and upgraded with verified STARTTLS;
+behind PgBouncer set `DATABASE_POOLER=pgbouncer` (unnamed prepared statements and
+Oban's PG notifier); on an IPv6-only private network (Fly) set `NATS_INET6=true`.
+`/health` is exempt from `force_ssl`, so a platform's plain-HTTP health check is not
+redirected.
 
 Every page uses the UI kit (`<App>Web.UI`, see below) next to Phoenix's daisyUI core
 components; the stack applies the `--themepack` (default `ember`) before anything
@@ -523,6 +537,20 @@ Beyond that, generated projects were run end to end against the emulators:
   Registered, Make admin), organizations → View and subscriptions pages; the flag
   dashboard; light and dark. SSO was not exercised in this run (another project held
   Dex's port); `ADMIN_EMAILS` made the password user an admin.
+* **saas production config and building blocks** — a project generated from this
+  branch (`tb_learn`, ports as above, against the compose services of another
+  project) compiled with `--warnings-as-errors`, passed its 7 tests without the
+  `after_transaction` hook warning, and had `paths: ["/health"]` uncommented in
+  `config/prod.exs` and `type` in `<.button>`'s attribute list. `runtime.exs` read with
+  `Config.Reader.read!(…, env: :prod)` gave `{:unnamed, Oban.Notifiers.PG, :always,
+  :verify_peer, [:inet6, :binary]}` with `DATABASE_POOLER=pgbouncer`, `SMTP_USERNAME`
+  and `NATS_INET6=true` set, and `{nil, nil, :never, nil, [:binary]}` without them.
+  `Storage.put`, `presign(key, expires_in: 60, disposition: …)` and `delete` ran
+  against Floci: the presigned URL answered `200`, body `hello` and the requested
+  `Content-Disposition`; `get` after `delete` was `{:error, :not_found}` and a second
+  `delete` `:ok`. `InheritOrganization`, `SameOrganization` and `NotifyManagers` are
+  exercised by trust_manage's suite, which runs the same module bodies. No connection
+  to a real SMTP relay, PgBouncer or Fly network was made.
 
 Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
 runs were made on never gated `.mise.toml` (a config with templates and hooks was

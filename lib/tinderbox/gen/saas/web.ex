@@ -4,6 +4,8 @@ defmodule Tinderbox.Gen.Saas.Web do
   LiveViews and their routes, all built on the themepack UI kit (`<App>Web.UI`,
   installed first by `Tinderbox.Gen.Ui.install_kit/2`).
 
+  * `type` in `<.button>`'s forwarded attributes in `core_components.ex`, so
+    `<.button type="button">` does not submit its form (edited only when absent),
   * `<App>Web.Layouts.app/1` — the app shell with the navigation, the inbox
     badge, the organization switcher and the user menu, replacing Phoenix's
     demo layout (`flash_group/1` and `theme_toggle/1` are kept as generated),
@@ -27,12 +29,41 @@ defmodule Tinderbox.Gen.Saas.Web do
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
     igniter
+    |> allow_button_type(assigns)
     |> replace_layouts(assigns)
     |> replace_landing_page(assigns)
     |> create_live_helpers(assigns)
     |> create_live_views(assigns)
     |> add_routes(assigns)
     |> add_test_support(assigns)
+  end
+
+  # -- CoreComponents -------------------------------------------------------
+
+  # Phoenix's `<.button>` forwards a fixed list of attributes. Without `type` in
+  # it, `<.button type="button">` is an undefined-attribute warning (an error
+  # under `--warnings-as-errors`) and the button still submits its form.
+  defp allow_button_type(igniter, assigns) do
+    Gen.update_file(
+      igniter,
+      "lib/#{assigns[:app]}_web/components/core_components.ex",
+      fn content ->
+        include = "include: ~w(href navigate patch method download name value disabled)"
+
+        cond do
+          String.contains?(content, "name value disabled type)") ->
+            {:ok, content}
+
+          String.contains?(content, include) ->
+            {:ok, String.replace(content, include, String.replace_suffix(include, ")", " type)"))}
+
+          true ->
+            {:warning,
+             "Could not find <.button>'s :rest include list in core_components.ex; add `type` to " <>
+               "it so <.button type=\"button\"> renders a non-submitting button."}
+        end
+      end
+    )
   end
 
   # -- layout and landing page ----------------------------------------------

@@ -6,7 +6,9 @@ config <%= inspect(@app) %>, :nats, %{
   connection_settings: [
     %{
       host: System.get_env("NATS_HOST", "localhost"),
-      port: String.to_integer(System.get_env("NATS_PORT", "4222"))
+      port: String.to_integer(System.get_env("NATS_PORT", "4222")),
+      # Fly's private network (and any IPv6-only network) needs NATS_INET6=true.
+      tcp_opts: if(System.get_env("NATS_INET6") in ~w(true 1), do: [:inet6, :binary], else: [:binary])
     }
   ]
 }

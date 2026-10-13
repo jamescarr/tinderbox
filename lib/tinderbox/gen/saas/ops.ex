@@ -13,7 +13,9 @@ defmodule Tinderbox.Gen.Saas.Ops do
     first thing in `Application.start/2`; traces are exported only when
     `OTEL_EXPORTER_OTLP_ENDPOINT` is set,
   * mail over SMTP (`SMTP_HOST`, `SMTP_PORT`) in every environment but test: Mailpit
-    locally,
+    locally, and with `SMTP_USERNAME` set an authenticated, verified-STARTTLS relay,
+  * `DATABASE_POOLER=pgbouncer` in production: unnamed prepared statements and
+    Oban's PG notifier, for a database behind PgBouncer in transaction mode,
   * `mix phx.gen.release --docker`, run after the files are written: a release
     `Dockerfile`, `.dockerignore`, `<App>.Release` and the `bin/server`/`bin/migrate`
     overlays, from the toolchain that ran the generator,
@@ -43,6 +45,7 @@ defmodule Tinderbox.Gen.Saas.Ops do
     |> add_prom_ex(assigns)
     |> add_open_telemetry(assigns)
     |> add_mail(assigns)
+    |> add_pooler(assigns)
     |> Igniter.add_task("phx.gen.release", ["--docker"])
     |> Igniter.create_new_file(
       ".github/workflows/ci.yml",
@@ -100,18 +103,43 @@ defmodule Tinderbox.Gen.Saas.Ops do
 
     {igniter, present?} = Edits.source_contains?(igniter, router, "HealthController")
 
-    if present? do
-      igniter
-    else
-      # No `pipe_through`: the endpoint is probed by machines.
-      Igniter.Libs.Phoenix.add_scope(
-        igniter,
-        "/",
-        ~s(get "/health", HealthController, :show),
-        arg2: assigns[:web],
-        router: router
-      )
-    end
+    igniter =
+      if present? do
+        igniter
+      else
+        # No `pipe_through`: the endpoint is probed by machines.
+        Igniter.Libs.Phoenix.add_scope(
+          igniter,
+          "/",
+          ~s(get "/health", HealthController, :show),
+          arg2: assigns[:web],
+          router: router
+        )
+      end
+
+    exempt_health_from_force_ssl(igniter)
+  end
+
+  # Phoenix's `config/prod.exs` ships the exclusion commented out. A platform's
+  # health check is plain HTTP, and `force_ssl` would redirect it to https.
+  defp exempt_health_from_force_ssl(igniter) do
+    exempted = ~r/^\s*paths: \["\/health"\],?$/m
+    commented = ~r/^(\s*)# paths: \["\/health"\],$/m
+
+    Gen.update_file(igniter, "config/prod.exs", fn content ->
+      cond do
+        Regex.match?(exempted, content) ->
+          {:ok, content}
+
+        Regex.match?(commented, content) ->
+          {:ok, Regex.replace(commented, content, ~s(\\1paths: ["/health"],))}
+
+        true ->
+          {:warning,
+           "config/prod.exs has no commented `paths: [\"/health\"]` in force_ssl's exclude; " <>
+             "add it so a platform's plain-HTTP health check is not redirected to https."}
+      end
+    end)
   end
 
   # -- metrics ---------------------------------------------------------------
@@ -172,6 +200,14 @@ defmodule Tinderbox.Gen.Saas.Ops do
       igniter,
       Gen.render_template("saas/ops/mail_runtime.exs.eex", assigns),
       fn igniter -> runtime_contains?(igniter, "Swoosh.Adapters.SMTP") end
+    )
+  end
+
+  defp add_pooler(igniter, assigns) do
+    Gen.append_to_runtime_exs(
+      igniter,
+      Gen.render_template("saas/ops/pooler_runtime.exs.eex", assigns),
+      fn igniter -> runtime_contains?(igniter, "DATABASE_POOLER") end
     )
   end
 

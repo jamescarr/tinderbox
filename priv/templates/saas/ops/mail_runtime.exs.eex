@@ -1,12 +1,38 @@
 # Mail goes to an SMTP server: Mailpit locally (http://localhost:8025 shows the
-# inbox), your provider's relay in production. `config/test.exs` keeps
-# `Swoosh.Adapters.Test` so tests never send anything.
+# inbox), your provider's relay in production. With SMTP_USERNAME set (and
+# SMTP_PASSWORD) the connection is authenticated and upgraded with verified
+# STARTTLS; without it, plain and unauthenticated, which is what Mailpit speaks.
+# `config/test.exs` keeps `Swoosh.Adapters.Test` so tests never send anything.
 if config_env() != :test do
-  config <%= inspect(@app) %>, <%= inspect(@mailer) %>,
-    adapter: Swoosh.Adapters.SMTP,
-    relay: System.get_env("SMTP_HOST", "localhost"),
-    port: String.to_integer(System.get_env("SMTP_PORT", "1025")),
-    tls: :never,
-    auth: :never,
-    retries: 1
+  smtp_host = System.get_env("SMTP_HOST", "localhost")
+
+  smtp_security =
+    if System.get_env("SMTP_USERNAME") in [nil, ""] do
+      [tls: :never, auth: :never]
+    else
+      [
+        username: System.get_env("SMTP_USERNAME"),
+        password: System.get_env("SMTP_PASSWORD"),
+        auth: :always,
+        tls: :always,
+        tls_options: [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: String.to_charlist(smtp_host),
+          depth: 99,
+          customize_hostname_check: [
+            match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+          ]
+        ]
+      ]
+    end
+
+  config <%= inspect(@app) %>,
+         <%= inspect(@mailer) %>,
+         [
+           adapter: Swoosh.Adapters.SMTP,
+           relay: smtp_host,
+           port: String.to_integer(System.get_env("SMTP_PORT", "1025")),
+           retries: 1
+         ] ++ smtp_security
 end
