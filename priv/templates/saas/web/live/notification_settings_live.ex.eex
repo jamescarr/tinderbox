@@ -54,50 +54,55 @@ def render(assigns) do
     current_organization={@current_organization}
     organizations={@organizations}
     unread_count={@unread_count}
+    current_page={:notification_settings}
   >
-    <.header>
+    <.page_header>
       Notification settings
       <:subtitle>Choose how each kind of notification reaches you.</:subtitle>
-    </.header>
+    </.page_header>
 
-    <table class="table" id="notification-settings">
-      <thead>
-        <tr>
-          <th>Notification</th>
-          <th>In the app</th>
-          <th>Email</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr :for={entry <- @keys} id={"preference-#{entry.key}"}>
-          <td>{entry.label}</td>
-          <td>
-            <input
-              type="checkbox"
-              class="checkbox"
-              value="true"
-              checked={@preferences[entry.key].in_app}
-              phx-click="toggle"
-              phx-value-key={entry.key}
-              phx-value-channel="in_app"
-              aria-label={"#{entry.label}: in the app"}
-            />
-          </td>
-          <td>
-            <input
-              type="checkbox"
-              class="checkbox"
-              value="true"
-              checked={@preferences[entry.key].email}
-              phx-click="toggle"
-              phx-value-key={entry.key}
-              phx-value-channel="email"
-              aria-label={"#{entry.label}: email"}
-            />
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <.card padded={false}>
+      <div class="overflow-x-auto">
+        <table class="table" id="notification-settings">
+          <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+            <tr>
+              <th scope="col">Notification</th>
+              <th scope="col" class="w-32 text-center">In the app</th>
+              <th scope="col" class="w-32 text-center">Email</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={entry <- @keys} id={"preference-#{entry.key}"}>
+              <td class="font-medium">{entry.label}</td>
+              <td class="text-center">
+                <input
+                  type="checkbox"
+                  class="toggle toggle-primary toggle-sm"
+                  value="true"
+                  checked={@preferences[entry.key].in_app}
+                  phx-click="toggle"
+                  phx-value-key={entry.key}
+                  phx-value-channel="in_app"
+                  aria-label={"#{entry.label}: in the app"}
+                />
+              </td>
+              <td class="text-center">
+                <input
+                  type="checkbox"
+                  class="toggle toggle-primary toggle-sm"
+                  value="true"
+                  checked={@preferences[entry.key].email}
+                  phx-click="toggle"
+                  phx-value-key={entry.key}
+                  phx-value-channel="email"
+                  aria-label={"#{entry.label}: email"}
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </.card>
   </Layouts.app>
   """
 end

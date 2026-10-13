@@ -10,7 +10,8 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
   * Stripe subscriptions (Checkout, Billing Portal, webhooks, AshOban sync),
   * an in-house notification platform (inbox, per-key channel rules, email)
     behind an adapter facade shaped like Knock,
-  * a Petal Components admin section at `/admin`, FunWithFlags at `/admin/flags`,
+  * a themepack UI kit (`--themepack ember|slate|harbor`, see `mix tinderbox.gen.ui`),
+    an admin section at `/admin`, FunWithFlags at `/admin/flags`,
   * AshJsonApi + OpenAPI, NATS JetStream events, Oban, Swoosh + Mailpit,
     `/health`, OpenTelemetry, PromEx, a release Dockerfile and GitHub Actions CI.
 
@@ -31,7 +32,13 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix tinderbox.gen.saas",
-      schema: [yes: :boolean, compose: :boolean, mise: :boolean, auth_strategy: :csv],
+      schema: [
+        yes: :boolean,
+        compose: :boolean,
+        mise: :boolean,
+        auth_strategy: :csv,
+        themepack: :string
+      ],
       defaults: [compose: true, mise: true],
       composes: [
         "ash.install",
@@ -59,7 +66,6 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
         {:ash_paper_trail, "~> 0.8"}
       ],
       adds_deps: [
-        {:petal_components, "~> 4.17"},
         {:gnat, "~> 1.18"},
         {:stripity_stripe, "~> 3.3"},
         {:slugify, "~> 1.3"},
@@ -78,11 +84,7 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
         {:gen_smtp, "~> 1.3"},
         # The password strategy installer adds exactly this requirement itself; a
         # different one would make it stop and ask whether to replace it.
-        {:bcrypt_elixir, "~> 3.0"},
-        # petal_components 4.17.1 requires `websock_adapter ~> 0.5.7` but never
-        # calls it (its dev playground does), while Phoenix 1.8.15 locks 0.6.x.
-        # Without the override `mix deps.get` fails on "the lock".
-        {:websock_adapter, "~> 0.6", override: true}
+        {:bcrypt_elixir, "~> 3.0"}
       ]
     }
   end

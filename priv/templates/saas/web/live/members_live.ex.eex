@@ -132,77 +132,117 @@ def render(assigns) do
     current_organization={@current_organization}
     organizations={@organizations}
     unread_count={@unread_count}
+    current_page={:members}
   >
-    <.header>
-      Members of {@current_organization.name}
-      <:subtitle>{length(@memberships)} {if length(@memberships) == 1, do: "person", else: "people"}</:subtitle>
-    </.header>
+    <.page_header>
+      Members
+      <:subtitle>
+        {length(@memberships)} {if length(@memberships) == 1, do: "person", else: "people"} in {@current_organization.name}
+      </:subtitle>
+    </.page_header>
 
-    <div class="overflow-x-auto">
-      <table class="table" id="memberships">
-        <thead>
-          <tr>
-            <th>Email</th>
-            <th>Role</th>
-            <th :if={@manager?}><span class="sr-only">Actions</span></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :for={membership <- @memberships} id={"membership-#{membership.id}"}>
-            <td>{to_string(membership.user.email)}</td>
-            <td>
-              <form :if={@manager?} id={"role-form-#{membership.id}"} phx-change="change_role">
-                <input type="hidden" name="membership_id" value={membership.id} />
-                <select name="role" class="select select-sm" aria-label="Role">
-                  <option :for={role <- @roles} value={role} selected={role == to_string(membership.role)}>
-                    {role}
-                  </option>
-                </select>
-              </form>
-              <span :if={!@manager?}>{membership.role}</span>
-            </td>
-            <td :if={@manager?} class="text-right">
-              <.button
-                phx-click="remove"
-                phx-value-id={membership.id}
-                data-confirm={"Remove #{membership.user.email} from #{@current_organization.name}?"}
-              >
-                Remove
-              </.button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="space-y-6">
+      <.card padded={false}>
+        <:title>People</:title>
+        <div class="overflow-x-auto">
+          <table class="table" id="memberships">
+            <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+              <tr>
+                <th scope="col">Email</th>
+                <th scope="col">Role</th>
+                <th :if={@manager?} scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={membership <- @memberships} id={"membership-#{membership.id}"}>
+                <td>
+                  <div class="flex items-center gap-3">
+                    <.avatar name={to_string(membership.user.email)} />
+                    <span class="font-medium">{to_string(membership.user.email)}</span>
+                  </div>
+                </td>
+                <td>
+                  <form :if={@manager?} id={"role-form-#{membership.id}"} phx-change="change_role">
+                    <input type="hidden" name="membership_id" value={membership.id} />
+                    <select name="role" class="select select-sm w-36" aria-label="Role">
+                      <option
+                        :for={role <- @roles}
+                        value={role}
+                        selected={role == to_string(membership.role)}
+                      >
+                        {role}
+                      </option>
+                    </select>
+                  </form>
+                  <.badge :if={!@manager?}>{membership.role}</.badge>
+                </td>
+                <td :if={@manager?} class="text-right">
+                  <.button
+                    class="btn btn-ghost btn-sm text-error"
+                    phx-click="remove"
+                    phx-value-id={membership.id}
+                    data-confirm={"Remove #{membership.user.email} from #{@current_organization.name}?"}
+                  >
+                    Remove
+                  </.button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </.card>
+
+      <.card :if={@manager?} padded={@invitations == []}>
+        <:title>Pending invitations</:title>
+        <table :if={@invitations != []} class="table" id="invitations">
+          <tbody>
+            <tr :for={invitation <- @invitations} id={"invitation-#{invitation.id}"}>
+              <td>
+                <div class="flex items-center gap-3">
+                  <.avatar name={to_string(invitation.email)} />
+                  {to_string(invitation.email)}
+                </div>
+              </td>
+              <td><.badge>{invitation.role}</.badge></td>
+              <td class="text-right">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  phx-click="revoke"
+                  phx-value-id={invitation.id}
+                >
+                  Revoke
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <.empty_state
+          :if={@invitations == []}
+          icon="hero-envelope"
+          title="No pending invitations"
+        >
+          Invite someone below; they show up here until they accept.
+        </.empty_state>
+      </.card>
+
+      <.card :if={@manager?}>
+        <:title>Invite someone</:title>
+        <:description>They get an email with a link to join {@current_organization.name}.</:description>
+        <.form for={@invite_form} id="invite-form" phx-change="validate_invite" phx-submit="invite">
+          <.input field={@invite_form[:organization_id]} type="hidden" />
+          <div class="grid gap-x-4 sm:grid-cols-3">
+            <div class="sm:col-span-2">
+              <.input field={@invite_form[:email]} type="email" label="Email" required />
+            </div>
+            <.input field={@invite_form[:role]} type="select" label="Role" options={@roles} />
+          </div>
+          <div class="mt-2 flex justify-end">
+            <.button variant="primary" phx-disable-with="Inviting...">Send invitation</.button>
+          </div>
+        </.form>
+      </.card>
     </div>
-
-    <section :if={@manager?} class="space-y-4">
-      <h2 class="text-lg font-semibold">Pending invitations</h2>
-      <p :if={@invitations == []} class="text-base-content/70">No pending invitations.</p>
-      <table :if={@invitations != []} class="table" id="invitations">
-        <tbody>
-          <tr :for={invitation <- @invitations} id={"invitation-#{invitation.id}"}>
-            <td>{to_string(invitation.email)}</td>
-            <td>{invitation.role}</td>
-            <td class="text-right">
-              <.button phx-click="revoke" phx-value-id={invitation.id}>Revoke</.button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <h2 class="text-lg font-semibold">Invite someone</h2>
-      <.form for={@invite_form} id="invite-form" phx-change="validate_invite" phx-submit="invite">
-        <.input field={@invite_form[:organization_id]} type="hidden" />
-        <.input field={@invite_form[:email]} type="email" label="Email" required />
-        <.input
-          field={@invite_form[:role]}
-          type="select"
-          label="Role"
-          options={@roles}
-        />
-        <.button variant="primary" phx-disable-with="Inviting...">Send invitation</.button>
-      </.form>
-    </section>
   </Layouts.app>
   """
 end

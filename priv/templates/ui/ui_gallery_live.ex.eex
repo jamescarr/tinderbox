@@ -1,0 +1,363 @@
+@moduledoc """
+Every component of `<%= inspect(@web) %>.UI`, live, in the current themepack: `/dev/ui`,
+mounted only when `:dev_routes` is on. Toggle light and dark with the theme
+switch, and switch packs with `mix tinderbox.gen.ui --themepack <name>`.
+"""
+use <%= inspect(@web) %>, :live_view
+
+@statuses ~w(active trialing past_due canceled)
+@names ~w(Ada Grace Alan Barbara Edsger Margaret Donald Frances Ken Radia Linus Katherine
+          Dennis Hedy Niklaus Sophie John Shafi)
+
+@impl true
+def mount(_params, _session, socket) do
+  config = Application.get_env(:<%= @app %>, <%= inspect(@web) %>.UI, [])
+  now = DateTime.utc_now()
+
+  table =
+    ListState.new(
+      search_fields: [:name, :email],
+      sortable: [:name, :email, :status, :inserted_at],
+      sort_by: :inserted_at,
+      sort_dir: :desc,
+      page_size: 8
+    )
+
+  {:ok,
+   socket
+   |> assign(
+     page_title: "UI kit",
+     themepack: Keyword.get(config, :themepack, "custom"),
+     shell: Keyword.get(config, :shell, :sidebar),
+     now: now,
+     all_rows: demo_rows(now),
+     form: to_form(%{"name" => "", "plan" => "team", "notify" => "true", "notes" => ""}, as: :demo)
+   )
+   |> run(table)}
+end
+
+@impl true
+def handle_params(params, _uri, socket) do
+  {:noreply, assign(socket, tab: Map.get(params, "tab", "overview"))}
+end
+
+@impl true
+def handle_event("table", params, socket) do
+  {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
+end
+
+defp run(socket, state) do
+  {rows, state} = ListState.run(socket.assigns.all_rows, state)
+  assign(socket, rows: rows, table: state)
+end
+
+defp demo_rows(now) do
+  for i <- 1..42 do
+    name = Enum.at(@names, rem(i * 7, length(@names)))
+
+    %{
+      id: i,
+      name: "#{name} #{<<?A + rem(i, 26)>>}.",
+      email: "#{String.downcase(name)}.#{i}@example.com",
+      status: Enum.at(@statuses, rem(i, length(@statuses))),
+      inserted_at: DateTime.add(now, -i * 3_600, :second)
+    }
+  end
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <.app_shell id="gallery-shell" width={:wide}>
+    <:brand>
+      <.link navigate="/dev/ui" class="flex items-center gap-2 font-display text-lg font-semibold">
+        <.icon name="hero-swatch" class="size-6 text-primary" /> UI kit
+      </.link>
+    </:brand>
+    <:nav>
+      <.nav_item href="#layout" icon="hero-rectangle-group" active>Layout</.nav_item>
+      <.nav_item href="#status" icon="hero-tag">Status</.nav_item>
+      <.nav_item href="#forms" icon="hero-pencil-square">Forms</.nav_item>
+      <.nav_item href="#display" icon="hero-queue-list">Data display</.nav_item>
+      <.nav_item href="#overlays" icon="hero-window">Overlays</.nav_item>
+      <.nav_item href="#table" icon="hero-table-cells" badge={@table.total}>Data table</.nav_item>
+      <.nav_section label="App">
+        <.nav_item href="/" icon="hero-home">Home</.nav_item>
+      </.nav_section>
+    </:nav>
+    <:nav_footer>
+      <.nav_item href="https://daisyui.com/components/" icon="hero-arrow-top-right-on-square">
+        daisyUI docs
+      </.nav_item>
+    </:nav_footer>
+    <:topbar>
+      <Layouts.theme_toggle />
+      <.user_menu name="ada@example.com">
+        <:item href="#forms">Settings</:item>
+        <:item href="#">Sign out</:item>
+      </.user_menu>
+    </:topbar>
+
+    <.page_header>
+      Components
+      <:subtitle>
+        Themepack <span class="font-medium text-base-content">{@themepack}</span>
+        · {@shell} shell — switch with
+        <code class="font-mono text-xs">mix tinderbox.gen.ui --themepack &lt;name&gt;</code>;
+        toggle light/dark with the theme switch.
+      </:subtitle>
+      <:breadcrumb href="/">Home</:breadcrumb>
+      <:breadcrumb>UI kit</:breadcrumb>
+      <:actions>
+        <.button>Secondary</.button>
+        <.button variant="primary" phx-click={show_modal("demo-modal")}>Open modal</.button>
+      </:actions>
+    </.page_header>
+
+    <div class="space-y-12">
+      <section id="layout" class="scroll-mt-20 space-y-4">
+        <.section_title title="Layout" text="Page headers, stats, cards and tabs." />
+        <.stat_grid>
+          <:stat label="Revenue" value="$48,210" hint="+12% on last month" icon="hero-banknotes" />
+          <:stat label="Active users" value="1,284" icon="hero-users" navigate="/dev/ui?tab=people" />
+          <:stat label="Churn" value="2.1%" icon="hero-arrow-trending-down">
+            <.badge color="success">Down 0.4 pts</.badge>
+          </:stat>
+          <:stat label="Open tickets" value={12} hint="3 urgent" icon="hero-lifebuoy" />
+        </.stat_grid>
+        <div class="grid gap-4 lg:grid-cols-2">
+          <.card>
+            <:title>A card</:title>
+            <:description>With a description, actions and a footer.</:description>
+            <:actions>
+              <button type="button" class="btn btn-ghost btn-sm">Edit</button>
+            </:actions>
+            Cards group related content. Pass <code class="font-mono text-xs">padded=&lbrace;false&rbrace;</code>
+            for a table that runs edge to edge.
+            <:footer>Updated {relative_time(@now)}</:footer>
+          </.card>
+          <.card>
+            <:title>Tabs</:title>
+            <.tabs id="demo-tabs">
+              <:tab patch="/dev/ui?tab=overview" active={@tab == "overview"}>Overview</:tab>
+              <:tab patch="/dev/ui?tab=people" active={@tab == "people"} count={42}>People</:tab>
+              <:tab patch="/dev/ui?tab=billing" active={@tab == "billing"}>Billing</:tab>
+            </.tabs>
+            <p class="mt-4 text-sm text-base-content/70">
+              The <span class="font-medium text-base-content">{@tab}</span>
+              tab is selected; tabs patch the URL, so it survives a reload.
+            </p>
+          </.card>
+        </div>
+      </section>
+
+      <section id="status" class="scroll-mt-20 space-y-4">
+        <.section_title title="Status" text="Badges, status badges and alerts." />
+        <.card>
+          <:title>Badges</:title>
+          <div class="space-y-3">
+            <div :for={variant <- ~w(soft outline solid)} class="flex flex-wrap items-center gap-2">
+              <span class="w-16 text-xs text-base-content/60">{variant}</span>
+              <.badge
+                :for={color <- ~w(neutral primary secondary accent info success warning error)}
+                color={color}
+                variant={variant}
+              >
+                {color}
+              </.badge>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="w-16 text-xs text-base-content/60">status</span>
+              <.status_badge
+                :for={status <- ~w(active trialing past_due pending canceled draft)a}
+                status={status}
+              />
+            </div>
+          </div>
+        </.card>
+        <div class="grid gap-3 lg:grid-cols-2">
+          <.alert kind="info" title="Heads up">A new version is available.</.alert>
+          <.alert kind="success" title="Saved">Your changes are live.</.alert>
+          <.alert kind="warning" title="Stripe is not configured">
+            Set STRIPE_SECRET_KEY to take payments.
+          </.alert>
+          <.alert kind="error" title="Payment failed">
+            The card was declined.
+            <:actions><button type="button" class="btn btn-sm">Retry</button></:actions>
+          </.alert>
+        </div>
+      </section>
+
+      <section id="forms" class="scroll-mt-20 space-y-4">
+        <.section_title title="Forms" text="CoreComponents inputs and buttons inside form sections." />
+        <.card>
+          <.form for={@form} id="demo-form" class="divide-y divide-base-300">
+            <.form_section title="Profile" description="Shown to your teammates.">
+              <.input field={@form[:name]} label="Name" placeholder="Ada Lovelace" />
+              <.input
+                field={@form[:plan]}
+                type="select"
+                label="Plan"
+                options={[{"Starter", "starter"}, {"Team", "team"}, {"Enterprise", "enterprise"}]}
+              />
+            </.form_section>
+            <.form_section title="Notifications" description="How we reach you.">
+              <.input field={@form[:notify]} type="checkbox" label="Email me about activity" />
+              <.input field={@form[:notes]} type="textarea" label="Notes" />
+            </.form_section>
+          </.form>
+          <:footer>
+            <div class="flex flex-wrap justify-end gap-2">
+              <button type="button" class="btn btn-ghost">Cancel</button>
+              <.button variant="primary">Save</.button>
+            </div>
+          </:footer>
+        </.card>
+        <.card>
+          <:title>Buttons</:title>
+          <div class="flex flex-wrap items-center gap-2">
+            <.button variant="primary">Primary</.button>
+            <.button>Default</.button>
+            <button type="button" class="btn btn-secondary">Secondary</button>
+            <button type="button" class="btn btn-accent">Accent</button>
+            <button type="button" class="btn btn-outline">Outline</button>
+            <button type="button" class="btn btn-ghost">Ghost</button>
+            <button type="button" class="btn btn-error btn-soft">Danger</button>
+            <button type="button" class="btn btn-primary" disabled>Disabled</button>
+            <button type="button" class="btn btn-sm">Small</button>
+            <button type="button" class="btn btn-square btn-ghost" aria-label="Settings">
+              <.icon name="hero-cog-6-tooth" class="size-5" />
+            </button>
+          </div>
+          <div class="mt-4">
+            <.search_input id="demo-search" placeholder="Search anything…" />
+          </div>
+        </.card>
+      </section>
+
+      <section id="display" class="scroll-mt-20 space-y-4">
+        <.section_title title="Data display" text="Feeds, description lists, avatars and empty states." />
+        <div class="grid gap-4 lg:grid-cols-2">
+          <.card>
+            <:title>Feed</:title>
+            <.feed id="demo-feed">
+              <:item title="Grace accepted your invitation" time={@now} icon="hero-user-plus" unread>
+                She joined Acme as a member.
+              </:item>
+              <:item
+                title="Invoice paid"
+                time={DateTime.add(@now, -3 * 3_600, :second)}
+                icon="hero-credit-card"
+              >
+                $49.00 for the Team plan.
+              </:item>
+              <:item title="Weekly report ready" time={DateTime.add(@now, -9 * 86_400, :second)} />
+            </.feed>
+          </.card>
+          <.card>
+            <:title>Description list</:title>
+            <.description_list>
+              <:item label="Organization">Acme Inc.</:item>
+              <:item label="Plan"><.badge color="primary">Team</.badge></:item>
+              <:item label="Status"><.status_badge status={:past_due} /></:item>
+              <:item label="Created">{format_datetime(@now)}</:item>
+            </.description_list>
+          </.card>
+          <.card>
+            <:title>Avatars</:title>
+            <div class="flex flex-wrap items-center gap-3">
+              <.avatar name="Ada Lovelace" size="xs" />
+              <.avatar name="grace.hopper@example.com" />
+              <.avatar name="Alan Turing" size="md" />
+              <.avatar name="Barbara Liskov" size="lg" />
+              <.avatar name="Edsger Dijkstra" size="lg" />
+            </div>
+          </.card>
+          <.empty_state icon="hero-envelope" title="No pending invitations">
+            Invite someone and they show up here until they accept.
+            <:action>
+              <.button variant="primary" phx-click={show_modal("demo-modal")}>Invite</.button>
+            </:action>
+          </.empty_state>
+        </div>
+      </section>
+
+      <section id="overlays" class="scroll-mt-20 space-y-4">
+        <.section_title title="Overlays" text="Modals and dropdown menus." />
+        <.card>
+          <div class="flex flex-wrap items-center gap-3">
+            <.button phx-click={show_modal("demo-modal")}>Open modal</.button>
+            <.dropdown id="demo-dropdown" label="Actions" align={:start}>
+              <:item href="#overlays">Edit</:item>
+              <:item href="#overlays">Duplicate</:item>
+              <:item on_click={show_modal("demo-modal")} danger>Delete…</:item>
+            </.dropdown>
+          </div>
+        </.card>
+      </section>
+
+      <section id="table" class="scroll-mt-20 space-y-4">
+        <.section_title
+          title="Data table"
+          text="Search, sort and paging over ListState; try typing a name."
+        />
+        <.data_table
+          id="gallery-table"
+          rows={@rows}
+          state={@table}
+          searchable
+          search_placeholder="Search people…"
+          row_id={&"person-#{&1.id}"}
+        >
+          <:col :let={person} label="Name" field={:name} sortable>
+            <div class="flex items-center gap-3">
+              <.avatar name={person.name} />
+              <span class="font-medium">{person.name}</span>
+            </div>
+          </:col>
+          <:col :let={person} label="Email" field={:email} sortable>{person.email}</:col>
+          <:col :let={person} label="Status" field={:status} sortable>
+            <.status_badge status={person.status} />
+          </:col>
+          <:col :let={person} label="Joined" field={:inserted_at} sortable>
+            {relative_time(person.inserted_at)}
+          </:col>
+          <:action>
+            <button type="button" class="btn btn-ghost btn-xs">View</button>
+          </:action>
+          <:toolbar>
+            <.button variant="primary">
+              <.icon name="hero-plus" class="size-4" /> Add person
+            </.button>
+          </:toolbar>
+        </.data_table>
+      </section>
+    </div>
+
+    <.modal id="demo-modal">
+      <:title>Invite a teammate</:title>
+      They get an email with a link to join. Escape, the close button or a click
+      outside closes this dialog.
+      <:actions>
+        <button type="button" class="btn btn-ghost" phx-click={hide_modal("demo-modal")}>
+          Cancel
+        </button>
+        <.button variant="primary" phx-click={hide_modal("demo-modal")}>Send invite</.button>
+      </:actions>
+    </.modal>
+  </.app_shell>
+  <Layouts.flash_group flash={@flash} />
+  """
+end
+
+attr :title, :string, required: true
+attr :text, :string, required: true
+
+defp section_title(assigns) do
+  ~H"""
+  <div>
+    <h2 class="font-display text-lg font-semibold tracking-tight">{@title}</h2>
+    <p class="text-sm text-base-content/70">{@text}</p>
+  </div>
+  """
+end

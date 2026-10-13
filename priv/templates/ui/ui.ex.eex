@@ -1,0 +1,34 @@
+@moduledoc """
+The application's UI kit, on top of Phoenix's CoreComponents and daisyUI.
+
+`use <%= inspect(@web) %>.UI` (already in `<%= inspect(@web) %>.html_helpers/0`) imports:
+
+  * `<%= inspect(@web) %>.UI.Components`: page headers, cards, stat grids, badges, alerts,
+    description lists, tabs, modals, dropdowns, avatars, feeds, empty states,
+    form sections, pagination and search inputs,
+  * `<%= inspect(@web) %>.UI.Shell`: the app shell (sidebar or top navigation), nav items and
+    the user menu,
+  * `<%= inspect(@web) %>.UI.DataTable`: a searchable, sortable, paginated table,
+
+and aliases `<%= inspect(@web) %>.UI.ListState`, the in-memory search/sort/paging state the
+table renders.
+
+Every component styles itself with daisyUI's semantic colors (`base-*`,
+`primary`, …) and radii, so the themepack in `assets/css/app.css` restyles all
+of them, in light and dark. The pack and the shell it uses are configured in
+`config/config.exs`:
+
+    config :<%= @app %>, <%= inspect(@web) %>.UI, themepack: "<%= @themepack.name %>", shell: :<%= @themepack.shell %>
+
+Switch packs with `mix tinderbox.gen.ui --themepack <ember|slate|harbor>`. See
+every component, live, at `/dev/ui` (dev only).
+"""
+
+defmacro __using__(_opts) do
+  quote do
+    import <%= inspect(@web) %>.UI.Components
+    import <%= inspect(@web) %>.UI.Shell
+    import <%= inspect(@web) %>.UI.DataTable
+    alias <%= inspect(@web) %>.UI.ListState
+  end
+end

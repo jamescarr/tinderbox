@@ -1,0 +1,255 @@
+@moduledoc """
+The app shell: the frame around every signed-in page, in the shape the
+themepack chose.
+
+  * `:sidebar` - a fixed navigation column on large screens that becomes a
+    drawer (opened by a menu button) on small ones, and a slim top bar,
+  * `:topnav` - a single header with the navigation inline, collapsing into a
+    menu on small screens.
+
+The default comes from `config :<%= @app %>, <%= inspect(@web) %>.UI, shell: …`, which
+`mix tinderbox.gen.ui --themepack` sets; `app_shell/1` takes a `variant` to
+override it per layout.
+"""
+use Phoenix.Component
+
+import <%= inspect(@web) %>.CoreComponents, only: [icon: 1]
+import <%= inspect(@web) %>.UI.Components, only: [avatar: 1]
+
+@default_variant Application.compile_env(:<%= @app %>, [<%= inspect(@web) %>.UI, :shell], :sidebar)
+
+@doc """
+Renders the shell around `inner_block`.
+
+`nav` and `nav_footer` hold `nav_item/1`s and `nav_section/1`s (or other
+`<li>`s); `topbar` holds controls such as the theme toggle and `user_menu/1`.
+The `:topnav` shell repeats `nav` and `nav_footer` in its small-screen menu,
+so their content must not carry DOM ids.
+
+Always renders a "Skip to content" link and the `<main id="main">` it targets.
+
+## Examples
+
+    <.app_shell>
+      <:brand><.link navigate={~p"/"}>Acme</.link></:brand>
+      <:nav>
+        <.nav_item navigate={~p"/dashboard"} icon="hero-squares-2x2" active>Dashboard</.nav_item>
+      </:nav>
+      <:topbar><Layouts.theme_toggle /></:topbar>
+      {render_slot(@inner_block)}
+    </.app_shell>
+"""
+attr :id, :string, default: "app-shell"
+
+attr :variant, :atom,
+  default: nil,
+  values: [nil, :sidebar, :topnav],
+  doc: "the shell's shape; nil uses the configured one"
+
+attr :width, :atom,
+  default: :default,
+  values: [:narrow, :default, :wide, :full],
+  doc: "the content column's maximum width"
+
+slot :brand, required: true
+slot :nav
+slot :nav_footer
+slot :topbar
+slot :inner_block, required: true
+
+def app_shell(assigns) do
+  assigns = assign(assigns, variant: assigns.variant || @default_variant)
+
+  ~H"""
+  <a
+    href="#main"
+    class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-field focus:bg-base-100 focus:px-4 focus:py-2 focus:shadow-lg"
+  >
+    Skip to content
+  </a>
+
+  <div :if={@variant == :sidebar} id={@id} class="drawer min-h-screen bg-base-200 lg:drawer-open">
+    <input id={"#{@id}-nav"} type="checkbox" class="drawer-toggle" />
+    <div class="drawer-content flex min-h-screen flex-col">
+      <header class="navbar sticky top-0 z-30 min-h-14 gap-2 border-b border-base-300 bg-base-100/90 px-4 backdrop-blur sm:px-6 lg:px-10">
+        <label
+          for={"#{@id}-nav"}
+          class="btn btn-ghost btn-sm btn-square lg:hidden"
+          aria-label="Open navigation"
+        >
+          <.icon name="hero-bars-3" class="size-5" />
+        </label>
+        <div class="lg:hidden">{render_slot(@brand)}</div>
+        <div class="ml-auto flex items-center gap-2">{render_slot(@topbar)}</div>
+      </header>
+      <main id="main" class="flex-1 px-4 py-8 sm:px-6 lg:px-10">
+        <div class={["mx-auto w-full", width_class(@width)]}>{render_slot(@inner_block)}</div>
+      </main>
+    </div>
+    <div class="drawer-side z-40">
+      <label for={"#{@id}-nav"} class="drawer-overlay" aria-label="Close navigation"></label>
+      <aside class="flex min-h-full w-64 flex-col border-r border-base-300 bg-base-100">
+        <div class="flex h-14 shrink-0 items-center px-5">{render_slot(@brand)}</div>
+        <nav aria-label="Main" class="flex-1 overflow-y-auto px-3 py-2">
+          <ul class="menu w-full gap-0.5 p-0">{render_slot(@nav)}</ul>
+        </nav>
+        <div :if={@nav_footer != []} class="border-t border-base-300 px-3 py-3">
+          <ul class="menu w-full gap-0.5 p-0">{render_slot(@nav_footer)}</ul>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div :if={@variant == :topnav} id={@id} class="flex min-h-screen flex-col bg-base-100">
+    <header class="sticky top-0 z-30 border-b border-base-300 bg-base-100/90 backdrop-blur">
+      <div class={["mx-auto flex h-16 items-center gap-3 px-4 sm:px-6 lg:px-8", width_class(@width)]}>
+        <div :if={@nav != []} class="dropdown lg:hidden">
+          <div
+            tabindex="0"
+            role="button"
+            class="btn btn-ghost btn-sm btn-square"
+            aria-label="Open navigation"
+          >
+            <.icon name="hero-bars-3" class="size-5" />
+          </div>
+          <ul
+            tabindex="0"
+            class="dropdown-content menu z-40 mt-3 w-64 gap-0.5 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+          >
+            {render_slot(@nav)}
+            {render_slot(@nav_footer)}
+          </ul>
+        </div>
+        <div class="shrink-0">{render_slot(@brand)}</div>
+        <nav :if={@nav != []} aria-label="Main" class="hidden min-w-0 overflow-x-auto lg:block">
+          <ul class="menu menu-horizontal flex-nowrap gap-1 p-0 whitespace-nowrap">
+            {render_slot(@nav)}
+          </ul>
+        </nav>
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          <ul
+            :if={@nav_footer != []}
+            class="menu menu-horizontal hidden flex-nowrap gap-1 p-0 whitespace-nowrap lg:flex"
+          >
+            {render_slot(@nav_footer)}
+          </ul>
+          {render_slot(@topbar)}
+        </div>
+      </div>
+    </header>
+    <main id="main" class="flex-1 px-4 py-8 sm:px-6 lg:px-8">
+      <div class={["mx-auto w-full", width_class(@width)]}>{render_slot(@inner_block)}</div>
+    </main>
+  </div>
+  """
+end
+
+defp width_class(:narrow), do: "max-w-3xl"
+defp width_class(:wide), do: "max-w-7xl"
+defp width_class(:full), do: "max-w-none"
+defp width_class(_default), do: "max-w-5xl"
+
+@doc """
+A navigation entry. `active` highlights it and marks it as the current page;
+a positive `badge` shows a count (unread messages, say).
+
+## Examples
+
+    <.nav_item navigate={~p"/inbox"} icon="hero-inbox" active={@current_page == :inbox} badge={@unread_count}>
+      Inbox
+    </.nav_item>
+"""
+attr :navigate, :string, default: nil
+attr :href, :string, default: nil
+attr :icon, :string, default: nil
+attr :active, :boolean, default: false
+attr :badge, :integer, default: nil
+
+slot :inner_block, required: true
+
+def nav_item(assigns) do
+  ~H"""
+  <li class="shrink-0">
+    <.link
+      navigate={@navigate}
+      href={@href}
+      class={[@active && "menu-active"]}
+      aria-current={@active && "page"}
+    >
+      <.icon :if={@icon} name={@icon} class="size-5" />
+      <span class="truncate">{render_slot(@inner_block)}</span>
+      <span :if={is_integer(@badge) and @badge > 0} class="badge badge-primary badge-sm ml-auto">
+        {@badge}
+      </span>
+    </.link>
+  </li>
+  """
+end
+
+@doc """
+A labelled group of `nav_item/1`s. The label shows in vertical menus only.
+
+## Examples
+
+    <.nav_section label="Platform">
+      <.nav_item href={~p"/admin"} icon="hero-shield-check">Admin</.nav_item>
+    </.nav_section>
+"""
+attr :label, :string, required: true
+
+slot :inner_block, required: true
+
+def nav_section(assigns) do
+  ~H"""
+  <li class="menu-title mt-3 [.menu-horizontal_&]:hidden">{@label}</li>
+  {render_slot(@inner_block)}
+  """
+end
+
+@doc """
+The signed-in user's menu: an avatar and name that open a list of links.
+
+## Examples
+
+    <.user_menu name={to_string(@current_user.email)}>
+      <:item navigate={~p"/settings"}>Settings</:item>
+      <:item href={~p"/sign-out"}>Sign out</:item>
+    </.user_menu>
+"""
+attr :id, :string, default: "user-menu"
+attr :name, :string, required: true, doc: "who is signed in, e.g. their email"
+
+slot :item do
+  attr :navigate, :string
+  attr :href, :string
+  attr :method, :string
+end
+
+def user_menu(assigns) do
+  ~H"""
+  <div id={@id} class="dropdown dropdown-end">
+    <div
+      tabindex="0"
+      role="button"
+      class="btn btn-ghost btn-sm gap-2 px-1.5"
+      aria-haspopup="menu"
+      aria-label={"Account: #{@name}"}
+    >
+      <.avatar name={@name} size="xs" />
+      <span class="hidden max-w-48 truncate font-normal sm:inline">{@name}</span>
+      <.icon name="hero-chevron-down-micro" class="size-4 opacity-60" />
+    </div>
+    <ul
+      tabindex="0"
+      class="dropdown-content menu z-40 mt-2 w-60 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+    >
+      <li class="menu-title truncate">{@name}</li>
+      <li :for={item <- @item}>
+        <.link navigate={item[:navigate]} href={item[:href]} method={item[:method] || "get"}>
+          {render_slot(item)}
+        </.link>
+      </li>
+    </ul>
+  </div>
+  """
+end

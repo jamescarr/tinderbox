@@ -48,50 +48,63 @@ def render(assigns) do
     current_organization={@current_organization}
     organizations={@organizations}
     unread_count={@unread_count}
+    current_page={:dashboard}
   >
-    <.header>
+    <.page_header>
       {@current_organization.name}
-      <:subtitle>Your role: {@current_membership.role}</:subtitle>
-    </.header>
+      <:subtitle>
+        Your role <.badge class="ml-1">{@current_membership.role}</.badge>
+      </:subtitle>
+    </.page_header>
 
-    <div class="stats stats-vertical sm:stats-horizontal bg-base-100 shadow w-full">
-      <div class="stat">
-        <div class="stat-title">Members</div>
-        <div class="stat-value">{@member_count}</div>
-        <div class="stat-actions">
-          <.link navigate={~p"/organizations/members"} class="link">Manage members</.link>
-        </div>
-      </div>
+    <div class="space-y-6">
+      <.stat_grid>
+        <:stat
+          label="Members"
+          value={@member_count}
+          icon="hero-users"
+          hint="Manage members"
+          navigate={~p"/organizations/members"}
+        />
+        <:stat
+          :if={@current_organization.subscription}
+          label="Plan"
+          value={@current_organization.subscription.plan_key || "Custom"}
+          icon="hero-credit-card"
+          navigate={~p"/billing"}
+        >
+          <.status_badge status={@current_organization.subscription.status} />
+        </:stat>
+        <:stat
+          :if={!@current_organization.subscription}
+          label="Plan"
+          value="None"
+          icon="hero-credit-card"
+          hint="Choose a plan"
+          navigate={~p"/billing"}
+        />
+        <:stat label="Unread" value={@unread_count} icon="hero-inbox" navigate={~p"/inbox"} />
+      </.stat_grid>
 
-      <div class="stat">
-        <div class="stat-title">Plan</div>
-        <div :if={@current_organization.subscription} class="stat-value text-2xl">
-          {@current_organization.subscription.plan_key || "Custom"}
-        </div>
-        <div :if={@current_organization.subscription} class="stat-desc">
-          {@current_organization.subscription.status}
-        </div>
-        <div :if={!@current_organization.subscription} class="stat-value text-2xl">None</div>
-        <div :if={!@current_organization.subscription} class="stat-actions">
-          <.link navigate={~p"/billing"} class="link">Choose a plan</.link>
-        </div>
-      </div>
-    </div>
-
-    <div class="card bg-base-100 shadow">
-      <div class="card-body">
-        <h2 class="card-title">Recent notifications</h2>
-        <p :if={@notifications == []} class="text-base-content/70">Nothing yet.</p>
-        <ul class="divide-y divide-base-300">
-          <li :for={notification <- @notifications} class="py-2">
-            <p class="font-medium">{notification.title}</p>
-            <p :if={notification.body} class="text-sm text-base-content/70">{notification.body}</p>
-          </li>
-        </ul>
-        <div class="card-actions justify-end">
-          <.link navigate={~p"/inbox"} class="link">Open inbox</.link>
-        </div>
-      </div>
+      <.card>
+        <:title>Recent notifications</:title>
+        <.feed :if={@notifications != []} id="recent-notifications">
+          <:item
+            :for={notification <- @notifications}
+            title={notification.title}
+            time={notification.inserted_at}
+            unread={is_nil(notification.read_at)}
+          >
+            {notification.body}
+          </:item>
+        </.feed>
+        <.empty_state :if={@notifications == []} icon="hero-bell" title="Nothing yet">
+          Invitations, billing changes and mentions show up here.
+        </.empty_state>
+        <:footer>
+          <.link navigate={~p"/inbox"} class="link link-primary link-hover">Open inbox</.link>
+        </:footer>
+      </.card>
     </div>
   </Layouts.app>
   """

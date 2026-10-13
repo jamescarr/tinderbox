@@ -74,6 +74,21 @@ defmodule Tinderbox.InstallSaasTest do
     refute Enum.any?(igniter.notices, &(&1 =~ "mise run stripe"))
   end
 
+  test "--themepack reaches the SaaS stack's UI kit" do
+    igniter = install(["--stack", "saas", "--themepack", "slate"])
+
+    assert source(igniter, "assets/css/app.css") =~ "/* tinderbox:themepack slate"
+  end
+
+  test "--stack ui installs only the UI kit, without compose or mise" do
+    igniter = install(["--stack", "ui", "--themepack", "harbor"])
+
+    assert_creates(igniter, "lib/test_web/ui/components.ex")
+    refute_creates(igniter, "docker-compose.yml")
+    refute_creates(igniter, ".mise.toml")
+    assert source(igniter, "assets/css/app.css") =~ "/* tinderbox:themepack harbor"
+  end
+
   defp install(argv) do
     Igniter.compose_task(saas_project(), "tinderbox.install", argv)
   end

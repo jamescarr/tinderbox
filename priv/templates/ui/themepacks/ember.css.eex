@@ -1,0 +1,77 @@
+/* tinderbox:themepack ember — rewritten by `mix tinderbox.gen.ui --themepack <name>`; customize outside these markers */
+/* Ember: warm orange on charcoal, medium density. Themes are named "light" and "dark" so Phoenix's theme toggle and `dark:` variant keep working. */
+@plugin "<%= @theme_plugin %>" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(99% 0.003 75);
+  --color-base-200: oklch(97% 0.006 75);
+  --color-base-300: oklch(92% 0.01 70);
+  --color-base-content: oklch(22% 0.02 50);
+  --color-primary: oklch(64% 0.2 40);
+  --color-primary-content: oklch(98% 0.01 60);
+  --color-secondary: oklch(45% 0.03 50);
+  --color-secondary-content: oklch(98% 0.005 60);
+  --color-accent: oklch(75% 0.16 75);
+  --color-accent-content: oklch(25% 0.05 60);
+  --color-neutral: oklch(27% 0.015 50);
+  --color-neutral-content: oklch(97% 0.005 60);
+  --color-info: oklch(62% 0.15 240);
+  --color-info-content: oklch(98% 0.01 240);
+  --color-success: oklch(63% 0.15 150);
+  --color-success-content: oklch(98% 0.02 150);
+  --color-warning: oklch(77% 0.16 80);
+  --color-warning-content: oklch(25% 0.05 70);
+  --color-error: oklch(58% 0.22 25);
+  --color-error-content: oklch(98% 0.01 25);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@plugin "<%= @theme_plugin %>" {
+  name: "dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: oklch(21% 0.012 50);
+  --color-base-200: oklch(18% 0.01 50);
+  --color-base-300: oklch(15% 0.008 50);
+  --color-base-content: oklch(94% 0.01 70);
+  --color-primary: oklch(70% 0.19 45);
+  --color-primary-content: oklch(18% 0.03 40);
+  --color-secondary: oklch(70% 0.03 60);
+  --color-secondary-content: oklch(18% 0.01 50);
+  --color-accent: oklch(80% 0.15 80);
+  --color-accent-content: oklch(20% 0.04 70);
+  --color-neutral: oklch(30% 0.015 50);
+  --color-neutral-content: oklch(94% 0.01 70);
+  --color-info: oklch(70% 0.13 240);
+  --color-info-content: oklch(18% 0.03 240);
+  --color-success: oklch(72% 0.15 150);
+  --color-success-content: oklch(18% 0.03 150);
+  --color-warning: oklch(80% 0.15 80);
+  --color-warning-content: oklch(20% 0.04 70);
+  --color-error: oklch(66% 0.2 25);
+  --color-error-content: oklch(98% 0.01 25);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+}
+/* tinderbox:themepack:end */

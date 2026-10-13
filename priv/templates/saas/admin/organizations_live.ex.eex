@@ -2,16 +2,14 @@
 Admin: every organization with its member count and plan.
 """
 
-use <%= inspect(@web) %>, :admin_live_view
+use <%= inspect(@web) %>, :live_view
 
 alias <%= inspect(@accounts) %>.Organization
-alias PetalComponents.DataTable.Engine
-alias PetalComponents.DataTable.State
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
 on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
 
-@fields [:name, :slug, :member_count, :plan_key, :status, :inserted_at]
 @limit 1000
 
 @impl true
@@ -34,7 +32,14 @@ def mount(_params, _session, socket) do
       }
     end)
 
-  state = %State{order_by: [{:inserted_at, :desc}], page_size: 25}
+  state =
+    ListState.new(
+      search_fields: [:name, :slug],
+      sortable: [:name, :slug, :member_count, :plan_key, :status, :inserted_at],
+      sort_by: :inserted_at,
+      sort_dir: :desc,
+      page_size: 25
+    )
 
   {:ok,
    socket
@@ -45,11 +50,11 @@ end
 
 @impl true
 def handle_event("table", params, socket) do
-  {:noreply, run(socket, State.handle_op(socket.assigns.table, params, fields: @fields))}
+  {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
 end
 
 defp run(socket, state) do
-  {rows, state} = Engine.List.run(socket.assigns.all_rows, state)
+  {rows, state} = ListState.run(socket.assigns.all_rows, state)
   assign(socket, rows: rows, table: state)
 end
 
@@ -61,20 +66,34 @@ def render(assigns) do
       id="organizations"
       rows={@rows}
       state={@table}
-      on_change="table"
       searchable
-      page_size_options={[25, 50, 100]}
+      search_placeholder="Search by name or slug…"
+      row_id={&"organization-#{&1.id}"}
     >
-      <:col :let={row} field={:name} label="Name" sortable filterable="text">{row.name}</:col>
-      <:col :let={row} field={:slug} label="Slug" sortable>{row.slug}</:col>
-      <:col :let={row} field={:member_count} label="Members" sortable>{row.member_count}</:col>
-      <:col :let={row} field={:plan_key} label="Plan" sortable>{row.plan_key || "—"}</:col>
-      <:col :let={row} field={:status} label="Status" sortable>{row.status || "—"}</:col>
-      <:col :let={row} field={:inserted_at} label="Created" sortable>
-        {Calendar.strftime(row.inserted_at, "%Y-%m-%d %H:%M")}
+      <:col :let={row} label="Name" field={:name} sortable>
+        <div class="flex items-center gap-3">
+          <.avatar name={row.name} />
+          <span class="font-medium">{row.name}</span>
+        </div>
+      </:col>
+      <:col :let={row} label="Slug" field={:slug} sortable>
+        <span class="font-mono text-xs">{row.slug}</span>
+      </:col>
+      <:col :let={row} label="Members" field={:member_count} sortable align={:right}>
+        {row.member_count}
+      </:col>
+      <:col :let={row} label="Plan" field={:plan_key} sortable>{row.plan_key || "—"}</:col>
+      <:col :let={row} label="Status" field={:status} sortable>
+        <.status_badge :if={row.status} status={row.status} />
+        <span :if={!row.status} class="text-base-content/50">—</span>
+      </:col>
+      <:col :let={row} label="Created" field={:inserted_at} sortable>
+        {format_datetime(row.inserted_at)}
       </:col>
       <:action :let={row}>
-        <.link navigate={~p"/admin/organizations/#{row.id}"} class="text-sm underline">View</.link>
+        <.link navigate={~p"/admin/organizations/#{row.id}"} class="btn btn-ghost btn-xs">
+          View
+        </.link>
       </:action>
     </.data_table>
   </AdminLayouts.admin>

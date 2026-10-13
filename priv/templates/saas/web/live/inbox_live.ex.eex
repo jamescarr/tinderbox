@@ -62,55 +62,88 @@ def render(assigns) do
     current_organization={@current_organization}
     organizations={@organizations}
     unread_count={@unread_count}
+    current_page={:inbox}
   >
-    <.header>
+    <.page_header>
       Inbox
+      <:subtitle>
+        {if @unread_count > 0, do: "#{@unread_count} unread", else: "Everything is read"}
+      </:subtitle>
       <:actions>
-        <.button :if={@unread_count > 0} phx-click="mark_all_read">Mark all read</.button>
+        <button
+          :if={@unread_count > 0}
+          type="button"
+          class="btn btn-ghost btn-sm"
+          phx-click="mark_all_read"
+        >
+          <.icon name="hero-check-micro" class="size-4" /> Mark all read
+        </button>
       </:actions>
-    </.header>
+    </.page_header>
 
-    <p :if={@notifications == []} class="text-base-content/70">You're all caught up.</p>
-
-    <ul id="notifications" class="divide-y divide-base-300">
-      <li
-        :for={notification <- @notifications}
-        id={"notification-#{notification.id}"}
-        class="flex items-start justify-between gap-4 py-3"
-      >
-        <div class="space-y-1">
-          <p class={["font-medium", is_nil(notification.read_at) && "text-primary"]}>
-            {notification.title}
-          </p>
-          <p :if={notification.body} class="text-sm text-base-content/70">{notification.body}</p>
-          <p class="text-xs text-base-content/50">{relative_time(notification.inserted_at)}</p>
-          <.link :if={notification.url} navigate={notification.url} class="link text-sm">
-            Open
-          </.link>
-        </div>
-        <div class="flex gap-2">
-          <.button
-            :if={is_nil(notification.read_at)}
-            phx-click="mark_read"
-            phx-value-id={notification.id}
-          >
-            Mark read
-          </.button>
-          <.button phx-click="archive" phx-value-id={notification.id}>Archive</.button>
-        </div>
-      </li>
-    </ul>
+    <.card padded={false}>
+      <ul :if={@notifications != []} id="notifications" class="divide-y divide-base-300">
+        <li
+          :for={notification <- @notifications}
+          id={"notification-#{notification.id}"}
+          class={[
+            "flex items-start gap-4 px-5 py-4",
+            is_nil(notification.read_at) && "bg-primary/5"
+          ]}
+        >
+          <span
+            class={[
+              "mt-2 size-2 shrink-0 rounded-full",
+              if(is_nil(notification.read_at), do: "bg-primary", else: "bg-transparent")
+            ]}
+            aria-hidden="true"
+          />
+          <div class="min-w-0 flex-1 space-y-1">
+            <div class="flex items-baseline justify-between gap-3">
+              <p class="font-medium">
+                <span :if={is_nil(notification.read_at)} class="sr-only">Unread:</span>
+                {notification.title}
+              </p>
+              <time class="shrink-0 text-xs text-base-content/60">
+                {relative_time(notification.inserted_at)}
+              </time>
+            </div>
+            <p :if={notification.body} class="text-sm text-base-content/70">{notification.body}</p>
+            <div class="flex flex-wrap items-center gap-1 pt-1">
+              <.link
+                :if={notification.url}
+                navigate={notification.url}
+                class="btn btn-ghost btn-xs text-primary"
+              >
+                Open
+              </.link>
+              <button
+                :if={is_nil(notification.read_at)}
+                type="button"
+                class="btn btn-ghost btn-xs"
+                phx-click="mark_read"
+                phx-value-id={notification.id}
+              >
+                Mark read
+              </button>
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs"
+                phx-click="archive"
+                phx-value-id={notification.id}
+              >
+                Archive
+              </button>
+            </div>
+          </div>
+        </li>
+      </ul>
+      <div :if={@notifications == []} class="p-5">
+        <.empty_state icon="hero-inbox" title="You're all caught up">
+          New notifications appear here as they arrive.
+        </.empty_state>
+      </div>
+    </.card>
   </Layouts.app>
   """
-end
-
-defp relative_time(datetime) do
-  seconds = DateTime.diff(DateTime.utc_now(), datetime)
-
-  cond do
-    seconds < 60 -> "just now"
-    seconds < 3_600 -> "#{div(seconds, 60)} min ago"
-    seconds < 86_400 -> "#{div(seconds, 3_600)} h ago"
-    true -> "#{div(seconds, 86_400)} d ago"
-  end
 end

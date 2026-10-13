@@ -1,13 +1,12 @@
 defmodule Tinderbox.Gen.Saas.Web do
   @moduledoc """
-  The web shell of the SaaS stack: the Petal Components assets, the layout, the
-  landing page, the signed-in LiveViews and their routes.
+  The web shell of the SaaS stack: the layout, the landing page, the signed-in
+  LiveViews and their routes, all built on the themepack UI kit (`<App>Web.UI`,
+  installed first by `Tinderbox.Gen.Ui.install_kit/2`).
 
-  * Petal Components: the Tailwind `@source`/`@import` in `assets/css/app.css` and
-    the component hooks in `assets/js/app.js` (both edited only when absent),
-  * `<App>Web.Layouts.app/1` — navigation bar, organization switcher, user menu and
-    the inbox badge, replacing Phoenix's demo layout (`flash_group/1` and
-    `theme_toggle/1` are kept as generated),
+  * `<App>Web.Layouts.app/1` — the app shell with the navigation, the inbox
+    badge, the organization switcher and the user menu, replacing Phoenix's
+    demo layout (`flash_group/1` and `theme_toggle/1` are kept as generated),
   * the landing page and its test, which now invite a visitor to sign in,
   * LiveViews inside the installer's `ash_authentication_live_session`:
     `/dashboard`, `/organizations/new`, `/organizations/members`,
@@ -17,10 +16,6 @@ defmodule Tinderbox.Gen.Saas.Web do
   * test support: `<App>.Fixtures` (users, organizations, memberships),
     `<App>Web.LiveTestHelpers.sign_in/2`, and a test of the members page that
     uses both.
-
-  The signed-in pages use Phoenix's own CoreComponents (daisyUI); the admin
-  section is the only part that uses Petal Components
-  (`Tinderbox.Gen.Saas.Admin`).
   """
 
   alias Tinderbox.Gen
@@ -29,19 +24,9 @@ defmodule Tinderbox.Gen.Saas.Web do
   @live_views ~w(DashboardLive OrganizationNewLive MembersLive InvitationLive InboxLive
                  NotificationSettingsLive BillingLive)
 
-  @css_imports """
-  @source "../../deps/petal_components/**/*.*ex";
-  @source not "../../deps/petal_components/lib/petal_components/showcase";
-  @import "../../deps/petal_components/assets/default.css";
-  """
-
-  @js_import ~s(import PetalComponents from "../../deps/petal_components/assets/js/petal_components")
-
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
     igniter
-    |> install_petal_css()
-    |> install_petal_js()
     |> replace_layouts(assigns)
     |> replace_landing_page(assigns)
     |> create_live_helpers(assigns)
@@ -50,113 +35,18 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> add_test_support(assigns)
   end
 
-  # -- Petal Components ------------------------------------------------------
-
-  # Paths are relative to `assets/css/app.css`, like Phoenix's own
-  # `@source "../../lib/<app>_web"`. Petal's README shows `../deps/…` because it
-  # assumes the stylesheet is `assets/app.css`.
-  defp install_petal_css(igniter) do
-    update_file(igniter, "assets/css/app.css", fn content ->
-      if String.contains?(content, "petal_components") do
-        {:ok, content}
-      else
-        insert_after_tailwind_import(content)
-      end
-    end)
-  end
-
-  defp insert_after_tailwind_import(content) do
-    case Regex.run(~r/^@import "tailwindcss".*\n/m, content, return: :index) do
-      [{start, length}] ->
-        {head, tail} = String.split_at(content, start + length)
-        {:ok, head <> @css_imports <> tail}
-
-      nil ->
-        {:warning,
-         "Could not find `@import \"tailwindcss\"` in assets/css/app.css. Add the Petal " <>
-           "Components lines by hand:\n\n" <> @css_imports}
-    end
-  end
-
-  defp install_petal_js(igniter) do
-    update_file(igniter, "assets/js/app.js", fn content ->
-      cond do
-        String.contains?(content, "PetalComponents") ->
-          {:ok, content}
-
-        String.contains?(content, "hooks: {...colocatedHooks}") ->
-          {:ok,
-           content
-           |> String.replace(
-             ~s(import topbar from "../vendor/topbar"\n),
-             ~s(import topbar from "../vendor/topbar"\n) <> @js_import <> "\n",
-             global: false
-           )
-           |> String.replace(
-             "hooks: {...colocatedHooks}",
-             "hooks: {...colocatedHooks, ...PetalComponents}"
-           )}
-
-        true ->
-          {:warning,
-           "Could not find `hooks: {...colocatedHooks}` in assets/js/app.js. Import the Petal " <>
-             "Components hooks and merge them in by hand:\n\n" <>
-             @js_import <> "\n\nhooks: {...colocatedHooks, ...PetalComponents}"}
-      end
-    end)
-  end
-
-  # Applies `fun` to the file's content: `{:ok, new_content}` rewrites it,
-  # `{:warning, message}` leaves it and warns. A missing file is warned about.
-  defp update_file(igniter, path, fun) do
-    if Igniter.exists?(igniter, path) do
-      igniter = Igniter.include_existing_file(igniter, path)
-      source = Rewrite.source!(igniter.rewrite, path)
-
-      case fun.(Rewrite.Source.get(source, :content)) do
-        {:ok, content} -> Igniter.update_file(igniter, path, &set_content(&1, igniter, content))
-        {:warning, message} -> Igniter.add_warning(igniter, message)
-      end
-    else
-      Igniter.add_warning(igniter, "#{path} does not exist, so it was not edited.")
-    end
-  end
-
-  defp set_content(source, igniter, content) do
-    if Rewrite.Source.get(source, :content) == content do
-      source
-    else
-      Igniter.update_source(source, igniter, :content, content)
-    end
-  end
-
   # -- layout and landing page ----------------------------------------------
 
   # The layout, landing page and page test are overwritten once: a file that
   # already knows about `current_user` was generated by an earlier run (or
   # customized) and is left alone.
   defp replace_layouts(igniter, assigns) do
-    layouts = Module.concat(assigns[:web], "Layouts")
-    body = Gen.render_template("saas/web/layouts.ex.eex", assigns)
-
-    case Igniter.Project.Module.find_module(igniter, layouts) do
-      {:ok, {igniter, source, _zipper}} ->
-        # Through the Elixir updater, not a plain file write: only then does the
-        # project's formatter (with the HEEx plugin) run on the result.
-        Igniter.update_elixir_file(igniter, source.path, fn zipper ->
-          current = zipper |> Sourceror.Zipper.root() |> Sourceror.to_string()
-
-          if String.contains?(current, "current_user") do
-            {:ok, zipper}
-          else
-            {:ok,
-             layouts |> module_source(body) |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
-          end
-        end)
-
-      {:error, igniter} ->
-        Igniter.Project.Module.create_module(igniter, layouts, body)
-    end
+    Gen.replace_module(
+      igniter,
+      Module.concat(assigns[:web], "Layouts"),
+      Gen.render_template("saas/web/layouts.ex.eex", assigns),
+      &(not String.contains?(&1, "current_user"))
+    )
   end
 
   defp replace_landing_page(igniter, assigns) do
@@ -175,7 +65,7 @@ defmodule Tinderbox.Gen.Saas.Web do
 
   defp replace_unless_current(igniter, path, content) do
     if Igniter.exists?(igniter, path) do
-      update_file(igniter, path, fn current ->
+      Gen.update_file(igniter, path, fn current ->
         if String.contains?(current, "current_user") or current == content do
           {:ok, current}
         else
@@ -185,12 +75,6 @@ defmodule Tinderbox.Gen.Saas.Web do
     else
       Igniter.create_new_file(igniter, path, content)
     end
-  end
-
-  # The template is a module body, like every other; this wraps it for the one
-  # place a whole file is written over an existing one.
-  defp module_source(module, body) do
-    "defmodule #{inspect(module)} do\n#{body}\nend\n"
   end
 
   # -- LiveViews and routes --------------------------------------------------

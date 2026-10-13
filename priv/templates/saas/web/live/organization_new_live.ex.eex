@@ -48,18 +48,25 @@ def render(assigns) do
     current_organization={@current_organization}
     organizations={@organizations}
     unread_count={@unread_count}
+    current_page={:new_organization}
   >
-    <.header>
-      Create an organization
-      <:subtitle>
-        Organizations hold your team, your subscription and your data. You can create more later.
-      </:subtitle>
-    </.header>
+    <div class="mx-auto max-w-2xl">
+      <.page_header>
+        Create an organization
+        <:subtitle>
+          Organizations hold your team, your subscription and your data. You can create more later.
+        </:subtitle>
+      </.page_header>
 
-    <.form for={@form} id="organization-form" phx-change="validate" phx-submit="save">
-      <.input field={@form[:name]} type="text" label="Organization name" required />
-      <.button variant="primary" phx-disable-with="Creating...">Create organization</.button>
-    </.form>
+      <.card>
+        <.form for={@form} id="organization-form" phx-change="validate" phx-submit="save">
+          <.input field={@form[:name]} type="text" label="Organization name" required />
+          <div class="mt-4 flex justify-end">
+            <.button variant="primary" phx-disable-with="Creating...">Create organization</.button>
+          </div>
+        </.form>
+      </.card>
+    </div>
   </Layouts.app>
   """
 end

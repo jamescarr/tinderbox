@@ -1,0 +1,77 @@
+/* tinderbox:themepack harbor — rewritten by `mix tinderbox.gen.ui --themepack <name>`; customize outside these markers */
+/* Harbor: blue and white, roomy, top navigation. Themes are named "light" and "dark" so Phoenix's theme toggle and `dark:` variant keep working. */
+@plugin "<%= @theme_plugin %>" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(97.5% 0.006 240);
+  --color-base-300: oklch(92% 0.012 240);
+  --color-base-content: oklch(25% 0.03 250);
+  --color-primary: oklch(50% 0.16 255);
+  --color-primary-content: oklch(98% 0.01 255);
+  --color-secondary: oklch(60% 0.11 200);
+  --color-secondary-content: oklch(98% 0.01 200);
+  --color-accent: oklch(72% 0.14 160);
+  --color-accent-content: oklch(20% 0.04 160);
+  --color-neutral: oklch(32% 0.04 250);
+  --color-neutral-content: oklch(98% 0.005 250);
+  --color-info: oklch(64% 0.13 230);
+  --color-info-content: oklch(98% 0.01 230);
+  --color-success: oklch(63% 0.14 155);
+  --color-success-content: oklch(98% 0.02 155);
+  --color-warning: oklch(78% 0.15 80);
+  --color-warning-content: oklch(25% 0.05 70);
+  --color-error: oklch(57% 0.2 25);
+  --color-error-content: oklch(98% 0.01 25);
+  --radius-selector: 1rem;
+  --radius-field: 0.625rem;
+  --radius-box: 1rem;
+  --size-selector: 0.28125rem;
+  --size-field: 0.28125rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@plugin "<%= @theme_plugin %>" {
+  name: "dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: oklch(23% 0.03 255);
+  --color-base-200: oklch(20% 0.028 255);
+  --color-base-300: oklch(17% 0.025 255);
+  --color-base-content: oklch(94% 0.01 240);
+  --color-primary: oklch(68% 0.14 250);
+  --color-primary-content: oklch(17% 0.03 255);
+  --color-secondary: oklch(72% 0.1 200);
+  --color-secondary-content: oklch(18% 0.03 200);
+  --color-accent: oklch(78% 0.13 160);
+  --color-accent-content: oklch(18% 0.04 160);
+  --color-neutral: oklch(32% 0.035 255);
+  --color-neutral-content: oklch(94% 0.01 240);
+  --color-info: oklch(72% 0.12 230);
+  --color-info-content: oklch(18% 0.03 230);
+  --color-success: oklch(73% 0.14 155);
+  --color-success-content: oklch(18% 0.03 155);
+  --color-warning: oklch(82% 0.14 80);
+  --color-warning-content: oklch(20% 0.04 70);
+  --color-error: oklch(67% 0.19 25);
+  --color-error-content: oklch(98% 0.01 25);
+  --radius-selector: 1rem;
+  --radius-field: 0.625rem;
+  --radius-box: 1rem;
+  --size-selector: 0.28125rem;
+  --size-field: 0.28125rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@theme {
+  --font-sans: "Avenir Next", Avenir, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Avenir Next", Avenir, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+}
+/* tinderbox:themepack:end */

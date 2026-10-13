@@ -1,0 +1,874 @@
+@moduledoc """
+The kit's building blocks. Imported everywhere by `use <%= inspect(@web) %>.UI`.
+
+Everything is styled through daisyUI's semantic colors and radii, never a
+fixed palette, so the themepack in `assets/css/app.css` restyles it in light
+and dark. Forms, buttons, flashes, icons and plain tables stay Phoenix's
+CoreComponents; this module adds what CoreComponents leaves out.
+
+Browse every component at `/dev/ui` (dev only).
+"""
+use Phoenix.Component
+
+import <%= inspect(@web) %>.CoreComponents, only: [icon: 1]
+
+alias Phoenix.LiveView.JS
+
+# -- page structure ----------------------------------------------------------
+
+@doc """
+The title block of a page: optional breadcrumbs, the title, a subtitle and
+actions (right-aligned on wide screens, below the title on narrow ones).
+
+## Examples
+
+    <.page_header>
+      Members
+      <:subtitle>Everyone in Acme</:subtitle>
+      <:breadcrumb navigate={~p"/dashboard"}>Dashboard</:breadcrumb>
+      <:breadcrumb>Members</:breadcrumb>
+      <:actions><.button variant="primary">Invite</.button></:actions>
+    </.page_header>
+"""
+slot :inner_block, required: true, doc: "the title"
+slot :subtitle
+
+slot :breadcrumb, doc: "a trail entry; the last one, without a link, is the current page" do
+  attr :navigate, :string
+  attr :href, :string
+end
+
+slot :actions
+
+def page_header(assigns) do
+  ~H"""
+  <header class="mb-6 space-y-2">
+    <nav :if={@breadcrumb != []} aria-label="Breadcrumb" class="breadcrumbs py-0 text-sm">
+      <ul>
+        <li :for={crumb <- @breadcrumb} class="text-base-content/60">
+          <.link
+            :if={crumb[:navigate] || crumb[:href]}
+            navigate={crumb[:navigate]}
+            href={crumb[:href]}
+            class="hover:text-base-content"
+          >
+            {render_slot(crumb)}
+          </.link>
+          <span :if={!(crumb[:navigate] || crumb[:href])} aria-current="page">
+            {render_slot(crumb)}
+          </span>
+        </li>
+      </ul>
+    </nav>
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div class="min-w-0">
+        <h1 class="font-display text-2xl font-semibold tracking-tight">
+          {render_slot(@inner_block)}
+        </h1>
+        <div :if={@subtitle != []} class="mt-1 text-sm text-base-content/70">
+          {render_slot(@subtitle)}
+        </div>
+      </div>
+      <div :if={@actions != []} class="flex shrink-0 flex-wrap items-center gap-2">
+        {render_slot(@actions)}
+      </div>
+    </div>
+  </header>
+  """
+end
+
+@doc """
+A surface for related content, with an optional header (title, description,
+actions) and footer. Pass `padded={false}` for edge-to-edge content such as a
+table.
+
+## Examples
+
+    <.card>
+      <:title>Recent activity</:title>
+      <:actions><.link navigate={~p"/inbox"} class="link text-sm">View all</.link></:actions>
+      …
+      <:footer>Updated just now</:footer>
+    </.card>
+"""
+attr :id, :string, default: nil
+attr :class, :any, default: nil
+attr :padded, :boolean, default: true
+
+slot :title
+slot :description
+slot :actions
+slot :inner_block
+slot :footer
+
+def card(assigns) do
+  ~H"""
+  <section id={@id} class={["rounded-box border border-base-300 bg-base-100 shadow-sm", @class]}>
+    <header
+      :if={@title != [] or @actions != []}
+      class="flex flex-wrap items-start justify-between gap-3 border-b border-base-300 px-5 py-4"
+    >
+      <div class="min-w-0">
+        <h2 :if={@title != []} class="text-base font-semibold">{render_slot(@title)}</h2>
+        <p :if={@description != []} class="mt-0.5 text-sm text-base-content/70">
+          {render_slot(@description)}
+        </p>
+      </div>
+      <div :if={@actions != []} class="flex items-center gap-2">{render_slot(@actions)}</div>
+    </header>
+    <div class={[@padded && "p-5"]}>{render_slot(@inner_block)}</div>
+    <footer
+      :if={@footer != []}
+      class="rounded-b-[inherit] border-t border-base-300 bg-base-200/50 px-5 py-3 text-sm"
+    >
+      {render_slot(@footer)}
+    </footer>
+  </section>
+  """
+end
+
+@doc """
+A responsive grid of headline numbers. A stat with `navigate` is a link.
+Content inside a stat replaces its `hint`.
+
+## Examples
+
+    <.stat_grid>
+      <:stat label="Members" value={@member_count} icon="hero-users" navigate={~p"/members"} />
+      <:stat label="Plan" value="Pro" hint="Renews May 1" />
+    </.stat_grid>
+"""
+slot :stat, required: true do
+  attr :label, :string, required: true
+  attr :value, :any
+  attr :hint, :string
+  attr :icon, :string
+  attr :navigate, :string
+end
+
+def stat_grid(assigns) do
+  ~H"""
+  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(13rem,1fr))]">
+    <div :for={stat <- @stat} class="contents">
+      <.link
+        :if={stat[:navigate]}
+        navigate={stat[:navigate]}
+        class="group rounded-box border border-base-300 bg-base-100 p-5 shadow-sm hover:border-primary/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary motion-safe:transition-colors"
+      >
+        <.stat_body stat={stat} />
+      </.link>
+      <div :if={!stat[:navigate]} class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm">
+        <.stat_body stat={stat} />
+      </div>
+    </div>
+  </div>
+  """
+end
+
+attr :stat, :map, required: true
+
+defp stat_body(assigns) do
+  ~H"""
+  <div class="flex items-center justify-between gap-2 text-sm text-base-content/70">
+    <span>{@stat.label}</span>
+    <.icon
+      :if={@stat[:icon]}
+      name={@stat[:icon]}
+      class="size-5 text-base-content/40 group-hover:text-primary"
+    />
+  </div>
+  <div class="mt-2 text-3xl font-semibold tracking-tight tabular-nums">{@stat[:value]}</div>
+  <div :if={@stat.inner_block || @stat[:hint]} class="mt-1 text-xs text-base-content/60">
+    {if @stat.inner_block, do: render_slot(@stat), else: @stat[:hint]}
+  </div>
+  """
+end
+
+# -- status --------------------------------------------------------------------
+
+@doc """
+A small label. `soft` (the default) suits tables and lists, `solid` draws the
+eye, `outline` stays quiet.
+
+## Examples
+
+    <.badge color="success">Active</.badge>
+    <.badge color="primary" variant="solid">New</.badge>
+"""
+attr :color, :string,
+  default: "neutral",
+  values: ~w(neutral primary secondary accent info success warning error)
+
+attr :variant, :string, default: "soft", values: ~w(soft outline solid)
+attr :size, :string, default: "sm", values: ~w(sm md)
+attr :class, :any, default: nil
+attr :rest, :global
+
+slot :inner_block, required: true
+
+def badge(assigns) do
+  ~H"""
+  <span
+    class={[
+      "badge whitespace-nowrap",
+      badge_color(@color, @variant),
+      badge_variant(@variant),
+      @size == "sm" && "badge-sm",
+      @class
+    ]}
+    {@rest}
+  >
+    {render_slot(@inner_block)}
+  </span>
+  """
+end
+
+# Literal class names, so Tailwind finds them in this file. A neutral soft or
+# outline badge takes the text color instead of `neutral`, which is too close
+# to the dark themes' surfaces to read.
+defp badge_color("primary", _variant), do: "badge-primary"
+defp badge_color("secondary", _variant), do: "badge-secondary"
+defp badge_color("accent", _variant), do: "badge-accent"
+defp badge_color("info", _variant), do: "badge-info"
+defp badge_color("success", _variant), do: "badge-success"
+defp badge_color("warning", _variant), do: "badge-warning"
+defp badge_color("error", _variant), do: "badge-error"
+defp badge_color(_neutral, "solid"), do: "badge-neutral"
+defp badge_color(_neutral, _variant), do: nil
+
+defp badge_variant("soft"), do: "badge-soft"
+defp badge_variant("outline"), do: "badge-outline"
+defp badge_variant(_solid), do: nil
+
+@doc """
+A badge for a lifecycle status (a subscription's, a payment's, an
+invitation's…): green when things are fine, amber when they need attention,
+red when they ended badly. `:past_due` reads "Past due".
+
+## Examples
+
+    <.status_badge status={@subscription.status} />
+"""
+attr :status, :any, required: true, doc: "an atom or a string"
+
+def status_badge(assigns) do
+  status = to_string(assigns.status)
+
+  assigns =
+    assign(assigns,
+      color: status_color(status),
+      label: status |> String.replace("_", " ") |> String.capitalize()
+    )
+
+  ~H"""
+  <.badge color={@color}>{@label}</.badge>
+  """
+end
+
+defp status_color(status)
+     when status in ~w(active trialing paid accepted succeeded completed),
+     do: "success"
+
+defp status_color(status)
+     when status in ~w(past_due incomplete pending unpaid processing),
+     do: "warning"
+
+defp status_color(status)
+     when status in ~w(canceled incomplete_expired failed revoked expired),
+     do: "error"
+
+defp status_color(_status), do: "neutral"
+
+@doc """
+What a list or page shows when it has nothing in it yet: an icon, a title, a
+sentence of explanation and, usually, the action that fills it.
+
+## Examples
+
+    <.empty_state icon="hero-envelope" title="No pending invitations">
+      Invite someone and they will show up here until they accept.
+      <:action><.button phx-click={show_modal("invite")}>Invite</.button></:action>
+    </.empty_state>
+"""
+attr :icon, :string, default: "hero-inbox"
+attr :title, :string, required: true
+
+slot :inner_block
+slot :action
+
+def empty_state(assigns) do
+  ~H"""
+  <div class="flex flex-col items-center justify-center rounded-box border border-dashed border-base-300 px-6 py-12 text-center">
+    <div class="flex size-12 items-center justify-center rounded-full bg-base-200">
+      <.icon name={@icon} class="size-6 text-base-content/50" />
+    </div>
+    <h3 class="mt-4 text-sm font-semibold">{@title}</h3>
+    <div :if={@inner_block != []} class="mt-1 max-w-sm text-sm text-base-content/70">
+      {render_slot(@inner_block)}
+    </div>
+    <div :if={@action != []} class="mt-5">{render_slot(@action)}</div>
+  </div>
+  """
+end
+
+@doc """
+An inline message about the page. Warnings and errors are announced
+immediately (`role="alert"`), the others politely (`role="status"`). For
+messages about an action that just happened, use the flash instead.
+
+## Examples
+
+    <.alert kind="warning" title="Stripe is not configured">
+      Set STRIPE_SECRET_KEY to take payments.
+    </.alert>
+"""
+attr :kind, :string, default: "info", values: ~w(info success warning error)
+attr :title, :string, default: nil
+attr :class, :any, default: nil
+
+slot :inner_block
+slot :actions
+
+def alert(assigns) do
+  ~H"""
+  <div
+    role={if @kind in ~w(warning error), do: "alert", else: "status"}
+    class={["alert alert-soft items-start", alert_class(@kind), @class]}
+  >
+    <.icon name={alert_icon(@kind)} class="size-5 shrink-0" />
+    <div class="min-w-0 text-base-content">
+      <p :if={@title} class="font-semibold">{@title}</p>
+      <div :if={@inner_block != []} class="text-sm text-base-content/80">
+        {render_slot(@inner_block)}
+      </div>
+    </div>
+    <div :if={@actions != []} class="flex shrink-0 gap-2">{render_slot(@actions)}</div>
+  </div>
+  """
+end
+
+defp alert_class("success"), do: "alert-success"
+defp alert_class("warning"), do: "alert-warning"
+defp alert_class("error"), do: "alert-error"
+defp alert_class(_info), do: "alert-info"
+
+defp alert_icon("success"), do: "hero-check-circle"
+defp alert_icon("warning"), do: "hero-exclamation-triangle"
+defp alert_icon("error"), do: "hero-x-circle"
+defp alert_icon(_info), do: "hero-information-circle"
+
+# -- data display --------------------------------------------------------------
+
+@doc """
+Label/value pairs, one per row: the details of a record.
+
+## Examples
+
+    <.description_list>
+      <:item label="Slug">{@organization.slug}</:item>
+      <:item label="Created">{format_datetime(@organization.inserted_at)}</:item>
+    </.description_list>
+"""
+slot :item, required: true do
+  attr :label, :string, required: true
+end
+
+def description_list(assigns) do
+  ~H"""
+  <dl class="divide-y divide-base-300">
+    <div :for={item <- @item} class="py-3 sm:grid sm:grid-cols-3 sm:gap-4">
+      <dt class="text-sm text-base-content/60">{item.label}</dt>
+      <dd class="mt-1 text-sm sm:col-span-2 sm:mt-0">{render_slot(item)}</dd>
+    </div>
+  </dl>
+  """
+end
+
+@doc """
+A row of tabs that are links: `patch` for views of the same LiveView,
+`navigate` for other pages. Mark the current one `active`.
+
+## Examples
+
+    <.tabs id="invoice-tabs">
+      <:tab patch={~p"/invoices?status=open"} active={@status == "open"} count={@open_count}>
+        Open
+      </:tab>
+      <:tab patch={~p"/invoices?status=paid"} active={@status == "paid"}>Paid</:tab>
+    </.tabs>
+"""
+attr :id, :string, required: true
+attr :label, :string, default: "Sections", doc: "what the tabs choose between, for screen readers"
+
+slot :tab, required: true do
+  attr :patch, :string
+  attr :navigate, :string
+  attr :active, :boolean
+  attr :count, :integer
+end
+
+def tabs(assigns) do
+  ~H"""
+  <div id={@id} role="tablist" aria-label={@label} class="tabs tabs-border">
+    <.link
+      :for={tab <- @tab}
+      patch={tab[:patch]}
+      navigate={tab[:navigate]}
+      role="tab"
+      aria-selected={to_string(tab[:active] == true)}
+      class={["tab gap-2", tab[:active] && "tab-active"]}
+    >
+      {render_slot(tab)}
+      <span :if={tab[:count]} class="badge badge-sm">{tab[:count]}</span>
+    </.link>
+  </div>
+  """
+end
+
+@doc """
+A round avatar: the image at `src`, or initials taken from `name` (two words of
+a name, or the parts of an email's local part) on a tone derived from it, so
+the same person always gets the same color. Decorative: put the name next to it.
+
+## Examples
+
+    <.avatar name="Ada Lovelace" />
+    <.avatar name={@user.email} size="lg" />
+"""
+attr :name, :string, required: true
+attr :src, :string, default: nil
+attr :size, :string, default: "sm", values: ~w(xs sm md lg)
+attr :class, :any, default: nil
+
+@avatar_tones [
+  "bg-primary/15 text-primary",
+  "bg-secondary/15 text-secondary",
+  "bg-accent/20 text-accent",
+  "bg-info/15 text-info",
+  "bg-success/15 text-success",
+  "bg-warning/20 text-warning"
+]
+
+def avatar(assigns) do
+  name = to_string(assigns.name)
+
+  assigns =
+    assign(assigns,
+      initials: initials(name),
+      tone: Enum.at(@avatar_tones, :erlang.phash2(name, length(@avatar_tones)))
+    )
+
+  ~H"""
+  <span
+    aria-hidden="true"
+    class={[
+      "inline-flex shrink-0 select-none items-center justify-center overflow-hidden rounded-full font-semibold",
+      avatar_size(@size),
+      !@src && @tone,
+      @class
+    ]}
+  >
+    <img :if={@src} src={@src} alt="" class="size-full object-cover" />
+    <span :if={!@src}>{@initials}</span>
+  </span>
+  """
+end
+
+defp avatar_size("xs"), do: "size-6 text-[0.625rem]"
+defp avatar_size("md"), do: "size-10 text-sm"
+defp avatar_size("lg"), do: "size-14 text-lg"
+defp avatar_size(_sm), do: "size-8 text-xs"
+
+defp initials(name) do
+  name = String.trim(name)
+
+  words =
+    case String.split(name, "@", parts: 2) do
+      [local, _domain] -> String.split(local, ~r/[._\-+]/, trim: true)
+      [name] -> String.split(name, ~r/\s+/, trim: true)
+    end
+
+  words
+  |> Enum.take(2)
+  |> Enum.map_join(&String.first/1)
+  |> String.upcase()
+end
+
+@doc ~S"""
+A list of events, newest first: notifications, an audit log, a timeline.
+Content inside an item is its body.
+
+## Examples
+
+    <.feed id="activity">
+      <:item :for={n <- @notifications} id={"n-#{n.id}"} title={n.title} time={n.inserted_at} unread={is_nil(n.read_at)}>
+        {n.body}
+      </:item>
+    </.feed>
+"""
+attr :id, :string, default: nil
+
+slot :item, required: true do
+  attr :title, :string, required: true
+  attr :time, :any, doc: "a DateTime or NaiveDateTime (UTC)"
+  attr :icon, :string
+  attr :unread, :boolean
+  attr :id, :string
+end
+
+def feed(assigns) do
+  ~H"""
+  <ul id={@id} class="divide-y divide-base-300">
+    <li :for={item <- @item} id={item[:id]} class="flex gap-3 py-3 first:pt-0 last:pb-0">
+      <div class="flex size-9 shrink-0 items-center justify-center rounded-full bg-base-200">
+        <.icon name={item[:icon] || "hero-bell"} class="size-4 text-base-content/60" />
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span :if={item[:unread]} class="size-2 shrink-0 rounded-full bg-primary">
+            <span class="sr-only">Unread:</span>
+          </span>
+          <p class="truncate text-sm font-medium">{item.title}</p>
+          <time
+            :if={item[:time]}
+            datetime={iso8601(item[:time])}
+            class="ml-auto shrink-0 text-xs text-base-content/60"
+          >
+            {relative_time(item[:time])}
+          </time>
+        </div>
+        <div :if={item.inner_block} class="mt-0.5 text-sm text-base-content/70">
+          {render_slot(item)}
+        </div>
+      </div>
+    </li>
+  </ul>
+  """
+end
+
+defp iso8601(%DateTime{} = time), do: DateTime.to_iso8601(time)
+defp iso8601(%NaiveDateTime{} = time), do: NaiveDateTime.to_iso8601(time) <> "Z"
+
+@doc """
+How long ago `time` was, for people: "just now", "5 min ago", "3 h ago",
+"2 d ago", then the date. A `NaiveDateTime` is taken to be UTC (Ecto's and
+Ash's timestamps are).
+"""
+@spec relative_time(DateTime.t() | NaiveDateTime.t() | nil) :: String.t()
+def relative_time(nil), do: "—"
+
+def relative_time(%NaiveDateTime{} = time),
+  do: time |> DateTime.from_naive!("Etc/UTC") |> relative_time()
+
+def relative_time(%DateTime{} = time) do
+  seconds = DateTime.diff(DateTime.utc_now(), time)
+
+  cond do
+    seconds < 60 -> "just now"
+    seconds < 3_600 -> "#{div(seconds, 60)} min ago"
+    seconds < 86_400 -> "#{div(seconds, 3_600)} h ago"
+    seconds < 604_800 -> "#{div(seconds, 86_400)} d ago"
+    true -> Calendar.strftime(time, "%b %-d, %Y")
+  end
+end
+
+@doc "`time` as `2026-05-01 14:30`, or a dash when there is none."
+@spec format_datetime(DateTime.t() | NaiveDateTime.t() | nil) :: String.t()
+def format_datetime(nil), do: "—"
+def format_datetime(time), do: Calendar.strftime(time, "%Y-%m-%d %H:%M")
+
+# -- overlays ------------------------------------------------------------------
+
+@doc """
+A dialog over the page. Open it with `show_modal/2` (it traps focus inside and
+returns it on close); Escape, the close button and a click on the backdrop
+close it and run `on_cancel` (Escape runs it whether or not the modal is open,
+so keep it idempotent). Render it with `show` to open it on mount, e.g. for a
+`live_action` route.
+
+## Examples
+
+    <.button phx-click={show_modal("confirm-delete")}>Delete</.button>
+
+    <.modal id="confirm-delete">
+      <:title>Delete this project?</:title>
+      It cannot be undone.
+      <:actions>
+        <.button phx-click={hide_modal("confirm-delete")}>Cancel</.button>
+        <.button class="btn btn-error" phx-click="delete">Delete</.button>
+      </:actions>
+    </.modal>
+"""
+attr :id, :string, required: true
+attr :show, :boolean, default: false
+attr :on_cancel, JS, default: %JS{}
+
+slot :title
+slot :inner_block, required: true
+slot :actions
+
+def modal(assigns) do
+  ~H"""
+  <div
+    id={@id}
+    class="modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby={@title != [] && "#{@id}-title"}
+    phx-mounted={@show && show_modal(@id)}
+    phx-remove={hide_modal(@id)}
+  >
+    <.focus_wrap
+      id={"#{@id}-box"}
+      class="modal-box border border-base-300"
+      phx-window-keydown={hide_modal(@on_cancel, @id)}
+      phx-key="escape"
+    >
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm btn-square absolute top-3 right-3"
+        aria-label="Close"
+        phx-click={hide_modal(@on_cancel, @id)}
+      >
+        <.icon name="hero-x-mark" class="size-5" />
+      </button>
+      <h2 :if={@title != []} id={"#{@id}-title"} class="pr-8 text-lg font-semibold">
+        {render_slot(@title)}
+      </h2>
+      <div class="mt-3 text-sm text-base-content/80">{render_slot(@inner_block)}</div>
+      <div :if={@actions != []} class="modal-action">{render_slot(@actions)}</div>
+    </.focus_wrap>
+    <div class="modal-backdrop" aria-hidden="true" phx-click={hide_modal(@on_cancel, @id)}></div>
+  </div>
+  """
+end
+
+@doc "Opens the `modal/1` with `id`, moving focus into it."
+@spec show_modal(JS.t(), String.t()) :: JS.t()
+def show_modal(js \\ %JS{}, id) when is_binary(id) do
+  js
+  |> JS.add_class("modal-open", to: "##{id}")
+  |> JS.push_focus()
+  |> JS.focus_first(to: "##{id}-box")
+end
+
+@doc "Closes the `modal/1` with `id`, returning focus where it was."
+@spec hide_modal(JS.t(), String.t()) :: JS.t()
+def hide_modal(js \\ %JS{}, id) when is_binary(id) do
+  js
+  |> JS.remove_class("modal-open", to: "##{id}")
+  |> JS.pop_focus()
+end
+
+@doc ~S"""
+A button that opens a menu of links and actions. An item is a link with
+`navigate`/`href`, otherwise a button running `on_click` (an event name or a
+`JS` command). `danger` items are red.
+
+## Examples
+
+    <.dropdown id="project-actions" label="Actions">
+      <:item navigate={~p"/projects/#{@project}/edit"}>Edit</:item>
+      <:item on_click={show_modal("confirm-delete")} danger>Delete</:item>
+    </.dropdown>
+"""
+attr :id, :string, required: true
+attr :label, :string, required: true
+attr :align, :atom, default: :end, values: [:start, :end]
+
+slot :item, required: true do
+  attr :navigate, :string
+  attr :href, :string
+  attr :method, :string
+  attr :on_click, :any
+  attr :danger, :boolean
+end
+
+def dropdown(assigns) do
+  ~H"""
+  <div id={@id} class={["dropdown", @align == :end && "dropdown-end"]}>
+    <div tabindex="0" role="button" class="btn btn-sm" aria-haspopup="menu">
+      {@label}
+      <.icon name="hero-chevron-down-micro" class="size-4 opacity-60" />
+    </div>
+    <ul
+      tabindex="0"
+      role="menu"
+      class="dropdown-content menu z-40 mt-2 w-52 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+    >
+      <li :for={item <- @item} role="none">
+        <.link
+          :if={item[:navigate] || item[:href]}
+          role="menuitem"
+          navigate={item[:navigate]}
+          href={item[:href]}
+          method={item[:method] || "get"}
+          class={[item[:danger] && "text-error"]}
+        >
+          {render_slot(item)}
+        </.link>
+        <button
+          :if={!(item[:navigate] || item[:href])}
+          type="button"
+          role="menuitem"
+          phx-click={item[:on_click]}
+          class={[item[:danger] && "text-error"]}
+        >
+          {render_slot(item)}
+        </button>
+      </li>
+    </ul>
+  </div>
+  """
+end
+
+# -- forms and lists -----------------------------------------------------------
+
+@doc """
+A titled group of form fields: the title and description on the left, the
+fields on the right (stacked on narrow screens). Stack several inside one
+`<.form>`, separated by `divide-y divide-base-300`.
+
+## Examples
+
+    <.form for={@form} phx-submit="save" class="divide-y divide-base-300">
+      <.form_section title="Profile" description="Shown to your teammates.">
+        <.input field={@form[:name]} label="Name" />
+      </.form_section>
+    </.form>
+"""
+attr :title, :string, required: true
+attr :description, :string, default: nil
+
+slot :inner_block, required: true
+
+def form_section(assigns) do
+  ~H"""
+  <div class="py-6 first:pt-0 last:pb-0 md:grid md:grid-cols-3 md:gap-6">
+    <div>
+      <h3 class="text-base font-semibold">{@title}</h3>
+      <p :if={@description} class="mt-1 text-sm text-base-content/70">{@description}</p>
+    </div>
+    <div class="mt-4 md:col-span-2 md:mt-0">{render_slot(@inner_block)}</div>
+  </div>
+  """
+end
+
+@doc """
+A search field with an icon, debounced. Put it in a form with `phx-change`;
+`data_table/1` does.
+"""
+attr :id, :string, default: nil
+attr :name, :string, default: "search"
+attr :value, :string, default: ""
+attr :placeholder, :string, default: "Search…"
+attr :debounce, :string, default: "300"
+
+def search_input(assigns) do
+  ~H"""
+  <label class="input w-full sm:w-72">
+    <.icon name="hero-magnifying-glass" class="size-4 opacity-50" />
+    <input
+      id={@id}
+      type="search"
+      name={@name}
+      value={@value}
+      placeholder={@placeholder}
+      aria-label={@placeholder}
+      phx-debounce={@debounce}
+      autocomplete="off"
+      class="grow"
+    />
+  </label>
+  """
+end
+
+@doc """
+"Showing 1–25 of 140" and page buttons. Each button sends `on_change` with a
+`"page"` value (to `target`, for a LiveComponent); `ListState.update/2` reads
+it. The buttons are hidden when everything fits on one page.
+"""
+attr :page, :integer, required: true
+attr :page_size, :integer, required: true
+attr :total, :integer, required: true
+attr :on_change, :string, default: "table"
+attr :target, :any, default: nil
+
+def pagination(assigns) do
+  %{page: page, page_size: page_size, total: total} = assigns
+  last = max(1, div(total + page_size - 1, page_size))
+
+  assigns =
+    assign(assigns,
+      last: last,
+      from: min((page - 1) * page_size + 1, total),
+      to: min(page * page_size, total),
+      pages: page_window(page, last)
+    )
+
+  ~H"""
+  <nav
+    aria-label="Pagination"
+    class="flex flex-col items-center justify-between gap-3 sm:flex-row"
+  >
+    <p class="text-sm text-base-content/70">
+      <span :if={@total > 0}>
+        Showing <span class="font-medium text-base-content">{@from}</span>–<span class="font-medium text-base-content">{@to}</span>
+        of <span class="font-medium text-base-content">{@total}</span>
+      </span>
+      <span :if={@total == 0}>No results</span>
+    </p>
+    <div :if={@total > @page_size} class="join">
+      <button
+        type="button"
+        class="join-item btn btn-sm"
+        aria-label="Previous page"
+        disabled={@page <= 1}
+        phx-click={@on_change}
+        phx-value-page={@page - 1}
+        phx-target={@target}
+      >
+        <.icon name="hero-chevron-left-micro" class="size-4" />
+      </button>
+      <button
+        :for={page <- @pages}
+        type="button"
+        class={["join-item btn btn-sm tabular-nums", page == @page && "btn-primary"]}
+        disabled={page == :gap}
+        aria-current={page == @page && "page"}
+        aria-label={page != :gap && "Page #{page}"}
+        phx-click={page != :gap && @on_change}
+        phx-value-page={page != :gap && page}
+        phx-target={@target}
+      >
+        {if page == :gap, do: "…", else: page}
+      </button>
+      <button
+        type="button"
+        class="join-item btn btn-sm"
+        aria-label="Next page"
+        disabled={@page >= @last}
+        phx-click={@on_change}
+        phx-value-page={@page + 1}
+        phx-target={@target}
+      >
+        <.icon name="hero-chevron-right-micro" class="size-4" />
+      </button>
+    </div>
+  </nav>
+  """
+end
+
+# The first and last page, the current one and its neighbours; `:gap` where
+# pages are skipped.
+defp page_window(page, last) do
+  [1, page - 1, page, page + 1, last]
+  |> Enum.filter(&(&1 in 1..last))
+  |> Enum.uniq()
+  |> Enum.sort()
+  |> Enum.chunk_every(2, 1)
+  |> Enum.flat_map(fn
+    [a, b] when b - a > 1 -> [a, :gap]
+    [a | _] -> [a]
+  end)
+end
