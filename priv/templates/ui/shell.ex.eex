@@ -5,7 +5,10 @@ themepack chose.
   * `:sidebar` - a fixed navigation column on large screens that becomes a
     drawer (opened by a menu button) on small ones, and a slim top bar,
   * `:topnav` - a single header with the navigation inline, collapsing into a
-    menu on small screens.
+    menu on small screens; the secondary `nav_footer` links sit in a "More"
+    menu so the main navigation keeps the room. It holds about six entries at
+    1280px wide (past that the row scrolls sideways); an app with more sections
+    belongs in the `:sidebar` shell.
 
 The default comes from `config :<%= @app %>, <%= inspect(@web) %>.UI, shell: …`, which
 `mix tinderbox.gen.ui --themepack` sets; `app_shell/1` takes a `variant` to
@@ -23,8 +26,8 @@ Renders the shell around `inner_block`.
 
 `nav` and `nav_footer` hold `nav_item/1`s and `nav_section/1`s (or other
 `<li>`s); `topbar` holds controls such as the theme toggle and `user_menu/1`.
-The `:topnav` shell repeats `nav` and `nav_footer` in its small-screen menu,
-so their content must not carry DOM ids.
+The `:topnav` shell repeats `nav` and `nav_footer` in its small-screen menu
+(and `nav_footer` in its "More" menu), so their content must not carry DOM ids.
 
 Always renders a "Skip to content" link and the `<main id="main">` it targets.
 
@@ -102,7 +105,7 @@ def app_shell(assigns) do
 
   <div :if={@variant == :topnav} id={@id} class="flex min-h-screen flex-col bg-base-100">
     <header class="sticky top-0 z-30 border-b border-base-300 bg-base-100/90 backdrop-blur">
-      <div class={["mx-auto flex h-16 items-center gap-3 px-4 sm:px-6 lg:px-8", width_class(@width)]}>
+      <div class="flex h-16 items-center gap-3 px-4 sm:px-6 lg:px-8">
         <div :if={@nav != []} class="dropdown lg:hidden">
           <div
             tabindex="0"
@@ -117,6 +120,7 @@ def app_shell(assigns) do
             class="dropdown-content menu z-40 mt-3 w-64 gap-0.5 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
           >
             {render_slot(@nav)}
+            <li :if={@nav_footer != []} class="my-1 border-t border-base-300" aria-hidden="true"></li>
             {render_slot(@nav_footer)}
           </ul>
         </div>
@@ -127,12 +131,17 @@ def app_shell(assigns) do
           </ul>
         </nav>
         <div class="ml-auto flex shrink-0 items-center gap-2">
-          <ul
-            :if={@nav_footer != []}
-            class="menu menu-horizontal hidden flex-nowrap gap-1 p-0 whitespace-nowrap lg:flex"
-          >
-            {render_slot(@nav_footer)}
-          </ul>
+          <div :if={@nav_footer != []} class="dropdown dropdown-end hidden lg:block">
+            <div tabindex="0" role="button" class="btn btn-ghost btn-sm btn-square" aria-label="More">
+              <.icon name="hero-ellipsis-horizontal" class="size-5" />
+            </div>
+            <ul
+              tabindex="0"
+              class="dropdown-content menu z-40 mt-3 w-64 gap-0.5 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+            >
+              {render_slot(@nav_footer)}
+            </ul>
+          </div>
           {render_slot(@topbar)}
         </div>
       </div>
@@ -236,7 +245,7 @@ def user_menu(assigns) do
       aria-label={"Account: #{@name}"}
     >
       <.avatar name={@name} size="xs" />
-      <span class="hidden max-w-48 truncate font-normal sm:inline">{@name}</span>
+      <span class="hidden max-w-48 truncate font-normal xl:inline">{@name}</span>
       <.icon name="hero-chevron-down-micro" class="size-4 opacity-60" />
     </div>
     <ul

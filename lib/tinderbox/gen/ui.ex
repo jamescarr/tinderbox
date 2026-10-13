@@ -91,7 +91,7 @@ defmodule Tinderbox.Gen.Ui do
     |> Igniter.add_notice(
       "Themepack #{pack.label} (#{pack.shell} shell) applied. Switch with " <>
         "`mix tinderbox.gen.ui --themepack <#{Enum.join(Themepack.names(), "|")}>`; " <>
-        "see every component at http://localhost:4000/dev/ui (dev only)."
+        "see every component at /dev/ui (dev only)."
     )
   end
 
