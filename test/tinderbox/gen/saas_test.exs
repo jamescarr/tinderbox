@@ -25,7 +25,10 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/accounts/membership.ex
           lib/test/accounts/invitation.ex
           lib/test/accounts/changes/set_slug.ex
+          lib/test/accounts/changes/inherit_organization.ex
+          lib/test/accounts/changes/notify_managers.ex
           lib/test/accounts/validations/not_last_owner.ex
+          lib/test/accounts/validations/same_organization.ex
           lib/test/accounts/checks/actor_manages_organization.ex
           lib/test/billing.ex
           lib/test/billing/plans.ex
@@ -182,6 +185,35 @@ defmodule Tinderbox.Gen.SaasTest do
 
     # SMTP must not replace the test mailer.
     assert order(runtime, "if config_env() != :test do") < order(runtime, "Swoosh.Adapters.SMTP")
+
+    # Authenticated, verified TLS only when a username is given.
+    assert_has(runtime, ~s|System.get_env("SMTP_USERNAME")|)
+    assert_has(runtime, "tls: :always")
+    assert_has(runtime, "verify: :verify_peer")
+
+    assert_has(runtime, "NATS_INET6")
+
+    # The PgBouncer switch only touches production.
+    assert_has(runtime, "DATABASE_POOLER")
+    assert_has(runtime, "prepare: :unnamed")
+    assert_has(runtime, "Oban.Notifiers.PG")
+  end
+
+  test "/health is exempt from force_ssl in production", %{igniter: igniter} do
+    prod = source(igniter, "config/prod.exs")
+
+    assert prod =~ ~s(paths: ["/health"],)
+    refute prod =~ ~s(# paths: ["/health"])
+  end
+
+  test "<.button> passes type through", %{igniter: igniter} do
+    components = source(igniter, "lib/test_web/components/core_components.ex")
+
+    assert components =~ "name value disabled type)"
+  end
+
+  test "tests run without transaction-hook warnings", %{igniter: igniter} do
+    assert source(igniter, "config/test.exs") =~ "warn_on_transaction_hooks?: false"
   end
 
   test "config.exs registers the domains, the flag store and the extra queues",
@@ -298,6 +330,10 @@ defmodule Tinderbox.Gen.SaasTest do
     assert readme =~ "# Test\n"
     assert readme =~ "mise run dev"
     assert readme =~ "Test.Accounts.managers/1"
+    assert readme =~ "Test.Accounts.Changes.InheritOrganization"
+    assert readme =~ "Test.Accounts.Changes.NotifyManagers"
+    assert readme =~ "DATABASE_POOLER=pgbouncer"
+    assert readme =~ "raises outside"
     refute readme =~ "mix setup"
   end
 
@@ -351,6 +387,9 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/secrets.ex
           assets/css/app.css
           assets/js/app.js
+          config/prod.exs
+          config/test.exs
+          lib/test_web/components/core_components.ex
           config/runtime.exs
           config/config.exs
           mix.exs

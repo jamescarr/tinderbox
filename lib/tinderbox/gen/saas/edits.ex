@@ -255,6 +255,28 @@ defmodule Tinderbox.Gen.Saas.Edits do
     %{igniter | notices: Enum.reject(igniter.notices, &String.contains?(&1, snippet))}
   end
 
+  @doc """
+  Applies `fun` to the content of the file at `path`: `{:ok, new_content}`
+  rewrites it, `{:warning, message}` leaves it and warns. A missing file is
+  warned about.
+  """
+  @spec update_file(Igniter.t(), Path.t(), (String.t() ->
+                                              {:ok, String.t()} | {:warning, String.t()})) ::
+          Igniter.t()
+  def update_file(igniter, path, fun) do
+    if Igniter.exists?(igniter, path) do
+      igniter = Igniter.include_existing_file(igniter, path)
+      source = Rewrite.source!(igniter.rewrite, path)
+
+      case fun.(Rewrite.Source.get(source, :content)) do
+        {:ok, content} -> Igniter.update_file(igniter, path, &set_content(&1, igniter, content))
+        {:warning, message} -> Igniter.add_warning(igniter, message)
+      end
+    else
+      Igniter.add_warning(igniter, "#{path} does not exist, so it was not edited.")
+    end
+  end
+
   defp flatten(code), do: code |> String.replace(["(", ")"], " ") |> String.replace(~r/\s+/, " ")
 
   # --- internals ----------------------------------------------------------
@@ -263,6 +285,14 @@ defmodule Tinderbox.Gen.Saas.Edits do
     case Igniter.Project.Module.module_exists(igniter, module) do
       {true, igniter} -> Igniter.Project.Module.find_and_update_module!(igniter, module, fun)
       {false, igniter} -> igniter
+    end
+  end
+
+  defp set_content(source, igniter, content) do
+    if Rewrite.Source.get(source, :content) == content do
+      source
+    else
+      Igniter.update_source(source, igniter, :content, content)
     end
   end
 

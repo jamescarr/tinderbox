@@ -5,6 +5,8 @@ defmodule Tinderbox.Gen.Saas.Web do
 
   * Petal Components: the Tailwind `@source`/`@import` in `assets/css/app.css` and
     the component hooks in `assets/js/app.js` (both edited only when absent),
+  * `type` in `<.button>`'s forwarded attributes in `core_components.ex`, so
+    `<.button type="button">` does not submit its form (edited only when absent),
   * `<App>Web.Layouts.app/1` — navigation bar, organization switcher, user menu and
     the inbox badge, replacing Phoenix's demo layout (`flash_group/1` and
     `theme_toggle/1` are kept as generated),
@@ -42,6 +44,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     igniter
     |> install_petal_css()
     |> install_petal_js()
+    |> allow_button_type(assigns)
     |> replace_layouts(assigns)
     |> replace_landing_page(assigns)
     |> create_live_helpers(assigns)
@@ -56,7 +59,7 @@ defmodule Tinderbox.Gen.Saas.Web do
   # `@source "../../lib/<app>_web"`. Petal's README shows `../deps/…` because it
   # assumes the stylesheet is `assets/app.css`.
   defp install_petal_css(igniter) do
-    update_file(igniter, "assets/css/app.css", fn content ->
+    Edits.update_file(igniter, "assets/css/app.css", fn content ->
       if String.contains?(content, "petal_components") do
         {:ok, content}
       else
@@ -79,7 +82,7 @@ defmodule Tinderbox.Gen.Saas.Web do
   end
 
   defp install_petal_js(igniter) do
-    update_file(igniter, "assets/js/app.js", fn content ->
+    Edits.update_file(igniter, "assets/js/app.js", fn content ->
       cond do
         String.contains?(content, "PetalComponents") ->
           {:ok, content}
@@ -106,28 +109,30 @@ defmodule Tinderbox.Gen.Saas.Web do
     end)
   end
 
-  # Applies `fun` to the file's content: `{:ok, new_content}` rewrites it,
-  # `{:warning, message}` leaves it and warns. A missing file is warned about.
-  defp update_file(igniter, path, fun) do
-    if Igniter.exists?(igniter, path) do
-      igniter = Igniter.include_existing_file(igniter, path)
-      source = Rewrite.source!(igniter.rewrite, path)
+  # Phoenix's `<.button>` forwards a fixed list of attributes. Without `type` in
+  # it, `<.button type="button">` is an undefined-attribute warning (an error
+  # under `--warnings-as-errors`) and the button still submits its form.
+  defp allow_button_type(igniter, assigns) do
+    Edits.update_file(
+      igniter,
+      "lib/#{assigns[:app]}_web/components/core_components.ex",
+      fn content ->
+        include = "include: ~w(href navigate patch method download name value disabled)"
 
-      case fun.(Rewrite.Source.get(source, :content)) do
-        {:ok, content} -> Igniter.update_file(igniter, path, &set_content(&1, igniter, content))
-        {:warning, message} -> Igniter.add_warning(igniter, message)
+        cond do
+          String.contains?(content, "name value disabled type)") ->
+            {:ok, content}
+
+          String.contains?(content, include) ->
+            {:ok, String.replace(content, include, String.replace_suffix(include, ")", " type)"))}
+
+          true ->
+            {:warning,
+             "Could not find <.button>'s :rest include list in core_components.ex; add `type` to " <>
+               "it so <.button type=\"button\"> renders a non-submitting button."}
+        end
       end
-    else
-      Igniter.add_warning(igniter, "#{path} does not exist, so it was not edited.")
-    end
-  end
-
-  defp set_content(source, igniter, content) do
-    if Rewrite.Source.get(source, :content) == content do
-      source
-    else
-      Igniter.update_source(source, igniter, :content, content)
-    end
+    )
   end
 
   # -- layout and landing page ----------------------------------------------
@@ -175,7 +180,7 @@ defmodule Tinderbox.Gen.Saas.Web do
 
   defp replace_unless_current(igniter, path, content) do
     if Igniter.exists?(igniter, path) do
-      update_file(igniter, path, fn current ->
+      Edits.update_file(igniter, path, fn current ->
         if String.contains?(current, "current_user") or current == content do
           {:ok, current}
         else

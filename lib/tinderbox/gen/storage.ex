@@ -4,7 +4,8 @@ defmodule Tinderbox.Gen.Storage do
 
   Adds `ex_aws`/`ex_aws_s3`/`req`/`sweet_xml`, appends the runtime config that
   points S3 and SQS at Floci and GCS at floci-gcp, and creates `<App>.Storage` —
-  the module that consumes that config.
+  the module that consumes that config (`put/2`, `get/1`, `delete/1`, and
+  `presign/2` for S3).
 
   `Req` is the ExAws HTTP client (ExAws ships `ExAws.Request.Req` and declares
   both it and `hackney` as optional deps), so the generated project does not pull

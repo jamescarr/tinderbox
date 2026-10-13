@@ -21,7 +21,8 @@ dev-loop tasks.
 
 All stacks also get object storage (`<App>.Storage`) with two interchangeable
 backends — `s3` through `ex_aws` and `gcs` through `Req` — both pointed at the local
-emulators.
+emulators. It has `put/2`, `get/1`, `delete/1` and `presign/2` (S3 only: GCS needs a
+service-account key to sign URLs and answers `{:error, :not_supported}`).
 
 ## Usage
 
@@ -251,6 +252,12 @@ Ash packages the other stacks use, then adds:
   `mise run check`.
 * **For the code you add** — `<App>.Accounts.managers/1` (an organization's owners and
   admins, the recipients the billing and invitation notifications use);
+  `<App>.Accounts.Changes.InheritOrganization` (copy `organization_id` from a parent
+  record, as a plain change so the policy sees it),
+  `<App>.Accounts.Validations.SameOrganization` (reject referenced ids that belong to
+  another organization) and `<App>.Accounts.Changes.NotifyManagers` (notify the
+  managers after the transaction commits; a failure is logged, never undoes the
+  change);
   `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
   shared by the organization pages); a `:require_manager` hook in
   `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
@@ -266,7 +273,12 @@ In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
 `runtime.exs` raises when it is missing). Also set `PHX_HOST`, `PHX_SERVER=true`, the
 `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*` and `ADMIN_EMAILS` values of `.mise.toml`.
-Run migrations with the release's `bin/migrate`.
+Run migrations with the release's `bin/migrate`. With `SMTP_USERNAME` (and
+`SMTP_PASSWORD`) set, mail is authenticated and upgraded with verified STARTTLS;
+behind PgBouncer set `DATABASE_POOLER=pgbouncer` (unnamed prepared statements and
+Oban's PG notifier); on an IPv6-only private network (Fly) set `NATS_INET6=true`.
+`/health` is exempt from `force_ssl`, so a platform's plain-HTTP health check is not
+redirected.
 
 The LiveViews use Petal Components next to Phoenix's daisyUI core components.
 `petal_components` pins `websock_adapter ~> 0.5.7` and never calls it, while Phoenix
@@ -452,6 +464,20 @@ Beyond that, generated projects were run end to end against the emulators:
   `Invalid --queues entry "bad name"` and changed nothing. `mise run check` then
   passed (7 tests). `MIX_ENV=prod mix compile --force --warnings-as-errors` compiled
   the task without igniter, and running it in prod exited 1 saying it needs igniter.
+* **saas production config and building blocks** — a project generated from this
+  branch (`tb_learn`, ports as above, against the compose services of another
+  project) compiled with `--warnings-as-errors`, passed its 7 tests without the
+  `after_transaction` hook warning, and had `paths: ["/health"]` uncommented in
+  `config/prod.exs` and `type` in `<.button>`'s attribute list. `runtime.exs` read with
+  `Config.Reader.read!(…, env: :prod)` gave `{:unnamed, Oban.Notifiers.PG, :always,
+  :verify_peer, [:inet6, :binary]}` with `DATABASE_POOLER=pgbouncer`, `SMTP_USERNAME`
+  and `NATS_INET6=true` set, and `{nil, nil, :never, nil, [:binary]}` without them.
+  `Storage.put`, `presign(key, expires_in: 60, disposition: …)` and `delete` ran
+  against Floci: the presigned URL answered `200`, body `hello` and the requested
+  `Content-Disposition`; `get` after `delete` was `{:error, :not_found}` and a second
+  `delete` `:ok`. `InheritOrganization`, `SameOrganization` and `NotifyManagers` are
+  exercised by trust_manage's suite, which runs the same module bodies. No connection
+  to a real SMTP relay, PgBouncer or Fly network was made.
 
 Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
 runs were made on never gated `.mise.toml` (a config with templates and hooks was

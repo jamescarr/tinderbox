@@ -1,0 +1,8 @@
+# Behind PgBouncer in transaction mode (Fly Managed Postgres, Supabase's pooler)
+# set DATABASE_POOLER=pgbouncer: it drops named prepared statements between
+# queries and breaks LISTEN/NOTIFY, which Oban's default notifier uses. Oban's
+# PG notifier talks over Erlang distribution instead.
+if config_env() == :prod and System.get_env("DATABASE_POOLER") == "pgbouncer" do
+  config <%= inspect(@app) %>, <%= inspect(@repo) %>, prepare: :unnamed
+  config <%= inspect(@app) %>, Oban, notifier: Oban.Notifiers.PG
+end
