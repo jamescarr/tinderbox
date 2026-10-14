@@ -181,6 +181,8 @@ services:
     image: oryd/hydra:v26.2.0
     command: ["serve", "all", "--dev"]
     depends_on:
+      hydra-db:
+        condition: service_completed_successfully
       hydra-migrate:
         condition: service_completed_successfully
     ports:
