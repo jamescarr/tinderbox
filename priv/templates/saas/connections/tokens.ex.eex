@@ -166,8 +166,9 @@ defp fetch(issuer) do
   end
 end
 
-# No retries and a short timeout: this runs inside an API request.
-defp get(url), do: Req.get(url, retry: false, receive_timeout: 5_000)
+# No retries and short timeouts: this runs inside an API request.
+defp get(url),
+  do: Req.get(url, retry: false, receive_timeout: 5_000, connect_options: [timeout: 5_000])
 
 # A failed fetch keeps the keys it has but counts as an attempt, so an issuer that
 # is down is asked once a minute, not once a request.
