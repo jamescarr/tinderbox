@@ -8,6 +8,7 @@ cannot do either. With `MFA_REQUIRED` there is no switch to turn it off.
 use <%= inspect(@web) %>, :live_view
 
 alias <%= inspect(@mfa) %>
+alias <%= inspect(@web) %>.MfaHTML
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
 on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
@@ -55,7 +56,7 @@ def handle_event("confirm", params, socket) do
       {:noreply, socket |> assign(:enrollment, nil) |> load_status()}
 
     {:error, reason} ->
-      {:noreply, put_flash(socket, :error, code_error(reason))}
+      {:noreply, refuse(socket, reason)}
   end
 end
 
@@ -69,7 +70,7 @@ def handle_event("regenerate", params, socket) do
        |> put_flash(:info, "New recovery codes. The old ones no longer work.")}
 
     {:error, reason} ->
-      {:noreply, put_flash(socket, :error, code_error(reason))}
+      {:noreply, refuse(socket, reason)}
   end
 end
 
@@ -83,7 +84,7 @@ def handle_event("disable", params, socket) do
        |> put_flash(:info, "Two-factor authentication is off.")}
 
     {:error, reason} ->
-      {:noreply, put_flash(socket, :error, code_error(reason))}
+      {:noreply, refuse(socket, reason)}
   end
 end
 
@@ -107,13 +108,7 @@ defp code(params, form) do
   end
 end
 
-defp code_error(:invalid_code), do: "That code is not valid."
-defp code_error(:locked), do: "Too many incorrect codes. Try again in 15 minutes."
-
-defp code_error(:required),
-  do: "Two-factor authentication is required, so it cannot be turned off."
-
-defp code_error(_other), do: "Something went wrong. Reload the page and try again."
+defp refuse(socket, reason), do: put_flash(socket, :error, MfaHTML.error_message(reason))
 
 @impl true
 def render(assigns) do
@@ -138,17 +133,9 @@ def render(assigns) do
         where the provider did not ask for one.
       </.alert>
 
-      <.card :if={@recovery_codes} id="mfa-recovery">
-        <:title>Save your recovery codes</:title>
-        <:description>
-          Each code works once, if you lose your authenticator. They are shown only now.
-        </:description>
-
-        <ul id="recovery-codes" class="mb-4 grid grid-cols-2 gap-2 font-mono text-sm">
-          <li :for={code <- @recovery_codes}>{code}</li>
-        </ul>
+      <MfaHTML.recovery_codes_card :if={@recovery_codes} id="mfa-recovery" codes={@recovery_codes}>
         <.button class="btn btn-primary" phx-click="done">I have saved them</.button>
-      </.card>
+      </MfaHTML.recovery_codes_card>
 
       <.card id="mfa-status">
         <:title>Two-factor authentication</:title>
@@ -170,18 +157,9 @@ def render(assigns) do
           <p class="text-sm">
             Scan the QR code with an authenticator app, then enter the code it shows.
           </p>
-          <div class="flex justify-center rounded-box bg-white p-3">
-            {raw(@enrollment.qr_svg)}
-          </div>
-          <p class="text-sm text-base-content/70">
-            Or enter this key by hand: <code id="mfa-manual-key" class="font-mono">{@enrollment.manual_key}</code>
-          </p>
+          <MfaHTML.enrollment_key enrollment={@enrollment} />
           <.form for={@confirm_form} id="mfa-confirm-form" phx-submit="confirm">
-            <.input
-              field={@confirm_form[:code]}
-              label="Authentication code"
-              autocomplete="one-time-code"
-            />
+            <MfaHTML.code_input field={@confirm_form[:code]} />
             <div class="flex gap-2">
               <.button class="btn btn-primary">Turn on</.button>
               <.button type="button" class="btn btn-ghost" phx-click="cancel">Cancel</.button>
@@ -197,19 +175,17 @@ def render(assigns) do
           </.description_list>
 
           <.form for={@regenerate_form} id="mfa-regenerate-form" phx-submit="regenerate">
-            <.input
+            <MfaHTML.code_input
               field={@regenerate_form[:code]}
               label="Authentication code, to replace the recovery codes"
-              autocomplete="one-time-code"
             />
             <.button class="btn">Replace recovery codes</.button>
           </.form>
 
           <.form :if={!@required?} for={@disable_form} id="mfa-disable-form" phx-submit="disable">
-            <.input
+            <MfaHTML.code_input
               field={@disable_form[:code]}
               label="Authentication code, to turn two-factor authentication off"
-              autocomplete="one-time-code"
             />
             <.button class="btn btn-error btn-soft">Turn off</.button>
           </.form>

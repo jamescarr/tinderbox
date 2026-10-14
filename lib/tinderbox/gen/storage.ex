@@ -28,9 +28,7 @@ defmodule Tinderbox.Gen.Storage do
     |> add_dep({:sweet_xml, "~> 0.7"})
     |> Gen.append_to_runtime_exs(
       Gen.render_template("runtime_config.exs.eex", app: app, app_dash: app_dash),
-      fn igniter ->
-        Igniter.Project.Config.configures_root_key?(igniter, "runtime.exs", :ex_aws)
-      end
+      Gen.runtime_configures?(:ex_aws)
     )
     |> Igniter.Project.Module.create_module(
       Module.concat(prefix, Storage),

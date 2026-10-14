@@ -25,6 +25,23 @@ defmodule Tinderbox.Gen do
   end
 
   @doc """
+  Creates each `{module, template}` (a path under `priv/templates`), rendering the
+  template with `assigns`; `opts` go to `Igniter.Project.Module.create_module/4`
+  (e.g. `location: :test_support`).
+  """
+  @spec create_modules(Igniter.t(), [{module(), Path.t()}], keyword(), keyword()) :: Igniter.t()
+  def create_modules(igniter, modules, assigns, opts \\ []) do
+    Enum.reduce(modules, igniter, fn {module, template}, igniter ->
+      Igniter.Project.Module.create_module(
+        igniter,
+        module,
+        render_template(template, assigns),
+        opts
+      )
+    end)
+  end
+
+  @doc """
   Appends `code` to `config/runtime.exs`, creating the file when it is missing.
 
   `configured?` gets the igniter and reports whether the config is already
@@ -48,6 +65,12 @@ defmodule Tinderbox.Gen do
         fn zipper -> Igniter.Code.Common.add_code(zipper, code) end
       )
     end
+  end
+
+  @doc "The `configured?` check for `append_to_runtime_exs/3`: `config root_key, …` sets `path` in runtime.exs (`path: []` checks the root key alone)."
+  @spec runtime_configures?(atom(), [term()]) :: (Igniter.t() -> boolean())
+  def runtime_configures?(root_key, path \\ []) do
+    &Igniter.Project.Config.configures_key?(&1, "runtime.exs", root_key, path)
   end
 
   @doc """
@@ -93,23 +116,48 @@ defmodule Tinderbox.Gen do
   @spec replace_module(Igniter.t(), module(), String.t(), (String.t() -> boolean())) ::
           Igniter.t()
   def replace_module(igniter, module, body, replace?) when is_function(replace?, 1) do
+    case Igniter.Project.Module.module_exists(igniter, module) do
+      {true, igniter} ->
+        rewrite_module(igniter, module, fn current ->
+          {:ok, if(replace?.(current), do: module_source(module, body), else: current)}
+        end)
+
+      {false, igniter} ->
+        Igniter.Project.Module.create_module(igniter, module, body)
+    end
+  end
+
+  @doc """
+  Rewrites `module`'s source through `fun`, which gets the source text and
+  returns `{:ok, new_source}` or `{:warning, message}`. Returning the text it
+  was given leaves the file alone. A module that does not exist is left alone.
+
+  The rewrite goes through the Elixir updater, so the project's formatter (with
+  the HEEx plugin) runs on the result; a plain file write would not be formatted.
+  """
+  @spec rewrite_module(Igniter.t(), module(), (String.t() ->
+                                                 {:ok, String.t()} | {:warning, String.t()})) ::
+          Igniter.t()
+  def rewrite_module(igniter, module, fun) when is_function(fun, 1) do
     case Igniter.Project.Module.find_module(igniter, module) do
       {:ok, {igniter, source, _zipper}} ->
-        # Through the Elixir updater, not a plain file write: only then does the
-        # project's formatter (with the HEEx plugin) run on the result.
         Igniter.update_elixir_file(igniter, source.path, fn zipper ->
           current = zipper |> Sourceror.Zipper.root() |> Sourceror.to_string()
 
-          if replace?.(current) do
-            {:ok,
-             module |> module_source(body) |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
-          else
-            {:ok, zipper}
+          case fun.(current) do
+            {:ok, ^current} ->
+              {:ok, zipper}
+
+            {:ok, new} ->
+              {:ok, new |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
+
+            {:warning, message} ->
+              {:warning, message}
           end
         end)
 
       {:error, igniter} ->
-        Igniter.Project.Module.create_module(igniter, module, body)
+        igniter
     end
   end
 

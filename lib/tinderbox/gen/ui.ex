@@ -242,11 +242,8 @@ defmodule Tinderbox.Gen.Ui do
   defp add_gallery_route(igniter, assigns) do
     router = assigns[:router]
     route = ~s|live "/ui", #{inspect(assigns[:web])}.UIGalleryLive|
-    {igniter, present?} = Edits.source_contains?(igniter, router, "UIGalleryLive")
 
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, router, "UIGalleryLive", fn igniter ->
       Igniter.Project.Module.find_and_update_module!(igniter, router, fn zipper ->
         with {:ok, zipper} <-
                Igniter.Code.Function.move_to_function_call(
@@ -264,7 +261,7 @@ defmodule Tinderbox.Gen.Ui do
                "add `#{route}` inside it by hand."}
         end
       end)
-    end
+    end)
   end
 
   defp create_list_state_test(igniter, assigns) do

@@ -71,18 +71,13 @@ defmodule Tinderbox.Gen.Saas.Flags do
 
   defp create_modules(igniter, assigns) do
     modules = [
-      {Module.concat([assigns[:web], "Plugs", "RequireAdmin"]), "require_admin.ex.eex"},
-      {Module.concat(assigns[:web], "LiveAdmin"), "live_admin.ex.eex"},
-      {Module.concat(assigns[:prefix], "FeatureFlags"), "feature_flags.ex.eex"}
+      {Module.concat([assigns[:web], "Plugs", "RequireAdmin"]),
+       "saas/flags/require_admin.ex.eex"},
+      {Module.concat(assigns[:web], "LiveAdmin"), "saas/flags/live_admin.ex.eex"},
+      {Module.concat(assigns[:prefix], "FeatureFlags"), "saas/flags/feature_flags.ex.eex"}
     ]
 
-    Enum.reduce(modules, igniter, fn {module, template}, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        module,
-        Gen.render_template("saas/flags/" <> template, assigns)
-      )
-    end)
+    Gen.create_modules(igniter, modules, assigns)
   end
 
   defp configure(igniter, assigns) do
@@ -129,11 +124,8 @@ defmodule Tinderbox.Gen.Saas.Flags do
 
   defp mount_dashboard(igniter, assigns) do
     router = assigns[:router]
-    {igniter, present?} = Edits.source_contains?(igniter, router, "FunWithFlags.UI.Router")
 
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, router, "FunWithFlags.UI.Router", fn igniter ->
       igniter
       |> Igniter.Libs.Phoenix.add_pipeline(
         :admin_tools,
@@ -155,6 +147,6 @@ defmodule Tinderbox.Gen.Saas.Flags do
         """,
         router: router
       )
-    end
+    end)
   end
 end

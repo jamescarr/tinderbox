@@ -36,29 +36,22 @@ defmodule Tinderbox.Gen.Saas.Admin do
   defp create_modules(igniter, assigns) do
     web = assigns[:web]
 
-    igniter =
-      Igniter.Project.Module.create_module(
-        igniter,
-        Module.concat([web, "Admin", "Layouts"]),
-        Gen.render_template("saas/admin/layouts.ex.eex", assigns)
-      )
-
-    Enum.reduce(@live_views, igniter, fn name, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        Module.concat([web, "Admin", name]),
-        Gen.render_template("saas/admin/#{Macro.underscore(name)}.ex.eex", assigns)
-      )
-    end)
+    Gen.create_modules(
+      igniter,
+      [
+        {Module.concat([web, "Admin", "Layouts"]), "saas/admin/layouts.ex.eex"}
+        | Enum.map(@live_views, fn name ->
+            {Module.concat([web, "Admin", name]), "saas/admin/#{Macro.underscore(name)}.ex.eex"}
+          end)
+      ],
+      assigns
+    )
   end
 
   defp add_routes(igniter, assigns) do
     router = assigns[:router]
-    {igniter, present?} = Edits.source_contains?(igniter, router, ":admin_routes")
 
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, router, ":admin_routes", fn igniter ->
       Igniter.Libs.Phoenix.add_scope(
         igniter,
         "/admin",
@@ -76,6 +69,6 @@ defmodule Tinderbox.Gen.Saas.Admin do
         arg2: assigns[:web],
         router: router
       )
-    end
+    end)
   end
 end

@@ -2,6 +2,7 @@ defmodule Tinderbox.InstallTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   # `mix tinderbox.install` is the entry point igniter runs. Composing it here runs
   # the real task against a test project: flag parsing, the flags it forwards to
@@ -117,11 +118,5 @@ defmodule Tinderbox.InstallTest do
       end
     end
     """
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 end

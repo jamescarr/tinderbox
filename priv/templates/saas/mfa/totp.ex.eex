@@ -5,7 +5,8 @@ what authenticator apps generate) with recovery codes, stored in
 
   * A code is 6 digits for a 30 second step. The previous step is accepted too,
     for clock skew; a step is never accepted twice (`last_used_at`), so a
-    code that was shoulder-surfed cannot be replayed.
+    code that was shoulder-surfed cannot be replayed. A step or recovery code is
+    accepted once even when concurrent requests present it: the database decides.
   * Ten wrong codes in a row lock the factor for 15 minutes. The counter is
     incremented in the database, so parallel guesses cannot undercount.
   * Recovery codes are 80 random bits, shown once and stored as SHA-256 hashes
@@ -15,6 +16,7 @@ what authenticator apps generate) with recovery codes, stored in
 @behaviour <%= inspect(@mfa) %>.Provider
 
 require Ash.Query
+import Ash.Expr, only: [expr: 1]
 
 alias <%= inspect(@mfa_factor) %>
 
@@ -25,8 +27,8 @@ alias <%= inspect(@mfa_factor) %>
 
 @impl true
 def status(user) do
-  case factor(user) do
-    %{confirmed_at: %DateTime{}} = factor -> to_status(factor)
+  case lookup(user) do
+    {:confirmed, factor} -> to_status(factor)
     _pending_or_none -> nil
   end
 end
@@ -45,15 +47,15 @@ end
 
 @impl true
 def begin_enrollment(user) do
-  case factor(user) do
-    %{confirmed_at: %DateTime{}} ->
+  case lookup(user) do
+    {:confirmed, _factor} ->
       {:error, :already_enrolled}
 
     # A refresh shows the same QR code.
-    %MfaFactor{} = factor ->
+    {:pending, factor} ->
       {:ok, enrollment(user, secret(factor))}
 
-    nil ->
+    :none ->
       secret = NimbleTOTP.secret()
 
       MfaFactor
@@ -68,14 +70,14 @@ end
 
 @impl true
 def confirm_enrollment(user, code) do
-  case factor(user) do
-    nil ->
+  case lookup(user) do
+    :none ->
       {:error, :not_started}
 
-    %{confirmed_at: %DateTime{}} ->
+    {:confirmed, _factor} ->
       {:error, :already_enrolled}
 
-    factor ->
+    {:pending, factor} ->
       case matching_time(secret(factor), code, nil) do
         nil ->
           {:error, :invalid_code}
@@ -95,41 +97,33 @@ end
 
 @impl true
 def cancel_enrollment(user) do
-  with %{confirmed_at: nil} = factor <- factor(user) do
-    Ash.destroy!(factor, authorize?: false)
-  end
+  with {:pending, factor} <- lookup(user), do: Ash.destroy!(factor, authorize?: false)
 
   :ok
 end
 
 @impl true
-def verify(user, code) do
-  case factor(user) do
-    %{confirmed_at: %DateTime{}} = factor -> check(factor, code)
-    _pending_or_none -> {:error, :not_enrolled}
-  end
-end
+def verify(user, code), do: with_confirmed(user, &check(&1, code))
 
 @impl true
 def regenerate_recovery_codes(user) do
-  case factor(user) do
-    %{confirmed_at: %DateTime{}} = factor ->
-      codes = new_recovery_codes()
-      update!(factor, :replace_recovery_codes, %{recovery_code_hashes: Enum.map(codes, &hash/1)})
-      {:ok, codes}
-
-    _pending_or_none ->
-      {:error, :not_enrolled}
-  end
+  with_confirmed(user, fn factor ->
+    codes = new_recovery_codes()
+    update!(factor, :replace_recovery_codes, %{recovery_code_hashes: Enum.map(codes, &hash/1)})
+    {:ok, codes}
+  end)
 end
 
 @impl true
 def remove(user) do
-  with %MfaFactor{} = factor <- factor(user) do
-    Ash.destroy!(factor, authorize?: false)
-  end
+  case lookup(user) do
+    :none ->
+      :ok
 
-  :ok
+    {_state, factor} ->
+      Ash.destroy!(factor, authorize?: false)
+      :ok
+  end
 end
 
 # -- verifying ---------------------------------------------------------------
@@ -143,18 +137,44 @@ defp check(factor, code) do
       {:error, :locked}
 
     matched = matching_time(secret(factor), code, factor.last_used_at) ->
-      update!(factor, :record_success, %{last_used_at: matched})
-      :ok
+      record_success(
+        factor,
+        %{last_used_at: matched},
+        expr(is_nil(last_used_at) or last_used_at < ^step_start(matched))
+      )
 
     spent = Enum.find(factor.recovery_code_hashes, &Plug.Crypto.secure_compare(&1, recovery_hash)) ->
-      update!(factor, :record_success, %{
-        recovery_code_hashes: List.delete(factor.recovery_code_hashes, spent)
-      })
-
-      :ok
+      record_success(
+        factor,
+        %{recovery_code_hashes: List.delete(factor.recovery_code_hashes, spent)},
+        expr(fragment("? = ANY(?)", ^spent, recovery_code_hashes))
+      )
 
     true ->
       fail(factor, now)
+  end
+end
+
+# Another request may have spent the same code (or locked the factor) since the
+# read; the condition is checked by the UPDATE itself, so only one request wins.
+# A lost race is not a guess, so it does not count as a failure.
+defp record_success(factor, params, unspent) do
+  factor
+  |> Ash.Changeset.for_update(:record_success, params, authorize?: false)
+  |> Ash.Changeset.filter(expr(is_nil(locked_until) or locked_until <= now()))
+  |> Ash.Changeset.filter(unspent)
+  |> Ash.update(authorize?: false)
+  |> case do
+    {:ok, _factor} ->
+      :ok
+
+    {:error, %Ash.Error.Invalid{errors: errors} = error} ->
+      if Enum.any?(errors, &match?(%Ash.Error.Changes.StaleRecord{}, &1)),
+        do: {:error, :invalid_code},
+        else: raise(error)
+
+    {:error, error} ->
+      raise error
   end
 end
 
@@ -185,6 +205,13 @@ defp matching_time(secret, code, since) do
   end)
 end
 
+# The start of the step `time` falls in. Two requests can match the same code at
+# different seconds, so the success guard compares steps, as NimbleTOTP's `since:` does.
+defp step_start(time) do
+  unix = DateTime.to_unix(time)
+  DateTime.from_unix!(unix - rem(unix, @period))
+end
+
 # -- recovery codes ----------------------------------------------------------
 
 defp new_recovery_codes do
@@ -205,6 +232,22 @@ defp hash(code) do
 end
 
 # -- factors ------------------------------------------------------------------
+
+# :none, a factor being set up, or one in use.
+defp lookup(user) do
+  case factor(user) do
+    nil -> :none
+    %MfaFactor{confirmed_at: nil} = factor -> {:pending, factor}
+    %MfaFactor{} = factor -> {:confirmed, factor}
+  end
+end
+
+defp with_confirmed(user, fun) do
+  case lookup(user) do
+    {:confirmed, factor} -> fun.(factor)
+    _pending_or_none -> {:error, :not_enrolled}
+  end
+end
 
 defp factor(user) do
   MfaFactor

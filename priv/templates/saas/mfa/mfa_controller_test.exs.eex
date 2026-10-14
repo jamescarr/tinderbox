@@ -2,28 +2,12 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
   use <%= inspect(@web) %>.ConnCase, async: false
 
   import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@prefix) %>.MFATestHelpers
 
   alias <%= inspect(@mfa) %>
 
   setup do
-    # A code computed in one 30 second period must not be checked in the next.
-    if rem(System.os_time(:second), 30) > 27, do: Process.sleep(3_000)
-
-    # The tests do not depend on the environment they run in.
-    original = Application.get_env(<%= inspect(@app) %>, MFA)
-
-    on_exit(fn ->
-      if original,
-        do: Application.put_env(<%= inspect(@app) %>, MFA, original),
-        else: Application.delete_env(<%= inspect(@app) %>, MFA)
-    end)
-
-    Application.put_env(
-      <%= inspect(@app) %>,
-      MFA,
-      Keyword.merge(original || [], required: false, sso: :local)
-    )
-
+    mfa_test_env()
     %{user: user_fixture()}
   end
 
@@ -60,7 +44,7 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
 
   describe "the code prompt" do
     test "the right code signs in and goes where the user was headed", %{conn: conn, user: user} do
-      secret = enroll!(user)
+      {secret, _codes} = enroll!(user)
 
       conn =
         conn
@@ -73,12 +57,12 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
     end
 
     test "a wrong code is refused and nothing is signed in", %{conn: conn, user: user} do
-      enroll!(user)
+      {secret, _codes} = enroll!(user)
 
       conn =
         conn
         |> init_test_session(%{mfa_pending: pending(user)})
-        |> post(~p"/mfa", %{"mfa" => %{"code" => "000000"}})
+        |> post(~p"/mfa", %{"mfa" => %{"code" => wrong_code(secret)}})
 
       assert html_response(conn, 422) =~ "not valid"
       assert get_session(conn, "user_token") == nil
@@ -86,7 +70,7 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
     end
 
     test "a sign-in left for more than ten minutes expires", %{conn: conn, user: user} do
-      secret = enroll!(user)
+      {secret, _codes} = enroll!(user)
       started_at = System.os_time(:second) - 601
 
       conn =
@@ -112,8 +96,7 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
 
       assert conn |> get(~p"/mfa/setup") |> html_response(200) =~ "mfa-manual-key"
 
-      {:ok, enrollment} = MFA.begin_enrollment(user)
-      secret = secret_from(enrollment)
+      secret = start_enrollment!(user)
 
       conn = post(conn, ~p"/mfa/setup", %{"mfa" => %{"code" => code(secret, 0)}})
 
@@ -126,7 +109,8 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
       conn = init_test_session(conn, %{mfa_pending: pending(user, step: "enroll")})
 
       assert conn |> get(~p"/mfa/setup") |> html_response(200)
-      conn = post(conn, ~p"/mfa/setup", %{"mfa" => %{"code" => "000000"}})
+      secret = start_enrollment!(user)
+      conn = post(conn, ~p"/mfa/setup", %{"mfa" => %{"code" => wrong_code(secret)}})
 
       assert html_response(conn, 422) =~ "mfa-manual-key"
       assert get_session(conn, "user_token") == nil
@@ -141,27 +125,5 @@ defmodule <%= inspect(@web) %>.MfaControllerTest do
       "return_to" => "/dashboard",
       "started_at" => Keyword.get(opts, :started_at, System.os_time(:second))
     }
-  end
-
-  # Gives `user` a confirmed factor; returns its secret.
-  defp enroll!(user) do
-    {:ok, enrollment} = MFA.begin_enrollment(user)
-    secret = secret_from(enrollment)
-    # The previous period's code, so the current one is still unused.
-    {:ok, _codes} = MFA.confirm_enrollment(user, code(secret, -30))
-    secret
-  end
-
-  defp secret_from(enrollment) do
-    enrollment.uri
-    |> URI.parse()
-    |> Map.fetch!(:query)
-    |> URI.decode_query()
-    |> Map.fetch!("secret")
-    |> Base.decode32!(padding: false)
-  end
-
-  defp code(secret, offset) do
-    NimbleTOTP.verification_code(secret, time: System.os_time(:second) + offset)
   end
 end

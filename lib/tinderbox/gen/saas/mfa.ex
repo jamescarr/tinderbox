@@ -29,7 +29,7 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     * `<App>Web.SecurityLive` and `<App>Web.Admin.SecurityLive`, and their entries
       in the user menu and the admin navigation,
     * `config/runtime.exs` settings, and tests for the facade, the controller and the
-      page.
+      page, with `<App>.MFATestHelpers` (enrolling, right and wrong codes) in `test/support`.
 
   `apply/2` runs after `Tinderbox.Gen.Saas.Admin`, which creates the admin layout
   and the `:admin_routes` session it extends. `install/2` is the same for a SaaS
@@ -101,7 +101,7 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     end
 
     igniter
-    |> add_deps(opts)
+    |> add_deps()
     |> __MODULE__.apply(assigns)
     |> Ash.Igniter.codegen("add_mfa")
     # Same reason as in `Tinderbox.Gen.Saas.generate/2`: Ash formats the migration
@@ -115,25 +115,11 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     )
   end
 
-  # A task that is run directly (`mix tinderbox.gen.mfa`) does not get its
-  # `adds_deps` installed: only `mix igniter.install` does that. The generated
-  # modules `use Cloak.Vault`, so the packages have to be compiled and loaded
-  # before `ash.codegen` compiles the project; Igniter fetches them now, and
-  # refuses to in test mode.
-  defp add_deps(igniter, opts) do
-    igniter =
-      Enum.reduce(deps(), igniter, fn dep, igniter ->
-        Igniter.Project.Deps.add_dep(igniter, dep, yes?: !!opts[:yes])
-      end)
-
-    if igniter.assigns[:test_mode?] do
-      igniter
-    else
-      Igniter.apply_and_fetch_dependencies(igniter,
-        yes: !!opts[:yes],
-        operation: "installing the multi-factor authentication packages"
-      )
-    end
+  # Only `mix igniter.install` installs a task's `adds_deps`; run directly, the task
+  # adds them to mix.exs itself. `Igniter.do_or_dry_run/2` runs `mix deps.get` before
+  # the queued tasks, so the `mix ash.codegen` subprocess compiles them.
+  defp add_deps(igniter) do
+    Enum.reduce(deps(), igniter, &Igniter.Project.Deps.add_dep(&2, &1, on_exists: :skip))
   end
 
   # -- vault ----------------------------------------------------------------
@@ -161,21 +147,19 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     mfa = assigns[:mfa]
 
     modules = [
-      {assigns[:mfa_factor], "mfa_factor.ex.eex"},
-      {Module.concat(mfa, "Provider"), "provider.ex.eex"},
-      {mfa, "mfa.ex.eex"},
-      {Module.concat(mfa, "Totp"), "totp.ex.eex"},
-      {assigns[:record_sso_assurance], "record_sso_assurance.ex.eex"},
-      {Module.concat(web, "MfaController"), "mfa_controller.ex.eex"},
-      {Module.concat(web, "MfaHTML"), "mfa_html.ex.eex"},
-      {Module.concat(web, "SecurityLive"), "security_live.ex.eex"},
-      {Module.concat([web, "Admin", "SecurityLive"]), "admin_security_live.ex.eex"}
+      {assigns[:mfa_factor], "saas/mfa/mfa_factor.ex.eex"},
+      {Module.concat(mfa, "Provider"), "saas/mfa/provider.ex.eex"},
+      {mfa, "saas/mfa/mfa.ex.eex"},
+      {Module.concat(mfa, "Totp"), "saas/mfa/totp.ex.eex"},
+      {assigns[:record_sso_assurance], "saas/mfa/record_sso_assurance.ex.eex"},
+      {Module.concat(web, "MfaController"), "saas/mfa/mfa_controller.ex.eex"},
+      {Module.concat(web, "MfaHTML"), "saas/mfa/mfa_html.ex.eex"},
+      {Module.concat(web, "SecurityLive"), "saas/mfa/security_live.ex.eex"},
+      {Module.concat([web, "Admin", "SecurityLive"]), "saas/mfa/admin_security_live.ex.eex"}
     ]
 
-    modules
-    |> Enum.reduce(igniter, fn {module, template}, igniter ->
-      Igniter.Project.Module.create_module(igniter, module, render(template, assigns))
-    end)
+    igniter
+    |> Gen.create_modules(modules, assigns)
     |> Ash.Domain.Igniter.add_resource_reference(assigns[:accounts], assigns[:mfa_factor])
   end
 
@@ -189,27 +173,21 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     secrets = assigns[:secrets]
     record_sso_assurance = assigns[:record_sso_assurance]
 
-    igniter =
-      igniter
-      |> Edits.ensure_secret_from_env(
-        secrets,
-        user,
-        [:authentication, :strategies, :sso, :authorization_params],
-        :sso_authorization_params
-      )
-      |> Edits.put_strategy_option(
-        user,
-        :oidc,
-        :sso,
-        :authorization_params,
-        inspect(secrets)
-      )
-
-    {igniter, registered?} = Edits.source_contains?(igniter, user, inspect(record_sso_assurance))
-
-    if registered? do
-      igniter
-    else
+    igniter
+    |> Edits.ensure_secret_from_env(
+      secrets,
+      user,
+      [:authentication, :strategies, :sso, :authorization_params],
+      :sso_authorization_params
+    )
+    |> Edits.put_strategy_option(
+      user,
+      :oidc,
+      :sso,
+      :authorization_params,
+      inspect(secrets)
+    )
+    |> Edits.unless_contains(user, inspect(record_sso_assurance), fn igniter ->
       Ash.Resource.Igniter.add_block(
         igniter,
         user,
@@ -217,7 +195,7 @@ defmodule Tinderbox.Gen.Saas.Mfa do
         "change #{inspect(record_sso_assurance)}, on: [:create], " <>
           "where: [action_is(:register_with_sso)]"
       )
-    end
+    end)
   end
 
   # -- sign-in -----------------------------------------------------------------
@@ -274,11 +252,7 @@ defmodule Tinderbox.Gen.Saas.Mfa do
 
   # Plain controller routes: the user is not signed in yet.
   defp add_mfa_routes(igniter, router, web) do
-    {igniter, present?} = Edits.source_contains?(igniter, router, "MfaController")
-
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, router, "MfaController", fn igniter ->
       Igniter.Libs.Phoenix.append_to_scope(
         igniter,
         "/",
@@ -293,17 +267,16 @@ defmodule Tinderbox.Gen.Saas.Mfa do
         arg2: web,
         router: router
       )
-    end
+    end)
   end
 
   defp add_live_route(igniter, router, session, code) do
-    {igniter, present?} = Edits.source_contains?(igniter, router, code)
-
-    if present? do
-      igniter
-    else
-      Edits.add_to_live_session(igniter, router, session, code)
-    end
+    Edits.unless_contains(
+      igniter,
+      router,
+      code,
+      &Edits.add_to_live_session(&1, router, session, code)
+    )
   end
 
   # -- navigation ----------------------------------------------------------------
@@ -315,8 +288,8 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     web = assigns[:web]
 
     igniter
-    |> Edits.edit_source(Module.concat(web, "Layouts"), &add_user_menu_entry(&1, web))
-    |> Edits.edit_source(Module.concat([web, "Admin", "Layouts"]), &add_admin_nav(&1, web))
+    |> Gen.rewrite_module(Module.concat(web, "Layouts"), &add_user_menu_entry(&1, web))
+    |> Gen.rewrite_module(Module.concat([web, "Admin", "Layouts"]), &add_admin_nav(&1, web))
   end
 
   @user_menu_anchor ~s(<:item navigate={~p"/settings/notifications"}>Notification settings</:item>)
@@ -407,18 +380,30 @@ defmodule Tinderbox.Gen.Saas.Mfa do
     # Also skips a project whose own vault is configured already.
     |> Gen.append_to_runtime_exs(
       render("vault_runtime.exs.eex", assigns),
-      &Igniter.Project.Config.configures_key?(&1, "runtime.exs", app, [assigns[:vault]])
+      Gen.runtime_configures?(app, [assigns[:vault]])
     )
     |> Gen.append_to_runtime_exs(
       render("runtime_config.exs.eex", assigns),
-      &Igniter.Project.Config.configures_key?(&1, "runtime.exs", app, [:sso_authorization_params])
+      Gen.runtime_configures?(app, [:sso_authorization_params])
     )
   end
 
   # -- tests ---------------------------------------------------------------------------
 
+  # `:test_support` drops the app prefix, so `<App>.MFATestHelpers` lands in
+  # `test/support/mfa_test_helpers.ex`, next to `<App>.Fixtures`.
   defp add_tests(igniter, assigns) do
     app = assigns[:app]
+
+    igniter =
+      Gen.create_modules(
+        igniter,
+        [
+          {Module.concat(assigns[:prefix], "MFATestHelpers"), "saas/mfa/mfa_test_helpers.ex.eex"}
+        ],
+        assigns,
+        location: :test_support
+      )
 
     [
       {"test/#{app}/accounts/mfa_test.exs", "mfa_test.exs.eex"},

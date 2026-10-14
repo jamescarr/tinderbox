@@ -2,6 +2,7 @@ defmodule Tinderbox.Gen.WorkerTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   alias Tinderbox.Broker
   alias Tinderbox.Gen.Worker
@@ -219,12 +220,6 @@ defmodule Tinderbox.Gen.WorkerTest do
       end
       """
     }
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 
   defp order(string, substring), do: :binary.match(string, substring) |> elem(0)

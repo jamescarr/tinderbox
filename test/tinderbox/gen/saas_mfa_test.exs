@@ -4,16 +4,12 @@ defmodule Tinderbox.Gen.SaasMfaTest do
 
   import Igniter.Test
   import Tinderbox.Test.SaasFixtures
+  import Tinderbox.Test.SourceHelpers
 
   alias Tinderbox.Gen.Saas
 
   @auth_controller "lib/test_web/controllers/auth_controller.ex"
   @installer_comment "# If your resource has a different name, update the assign name here (i.e :current_admin)"
-
-  # A project's formatter (`import_deps`) strips the parentheses Igniter's own
-  # formatting puts around DSL calls; these tests run without it, so sources and
-  # expectations are compared with parentheses removed.
-  defguardp is_snippet(value) when is_binary(value)
 
   setup_all do
     Application.put_env(:test, :ash_domains, [Test.Accounts])
@@ -38,6 +34,7 @@ defmodule Tinderbox.Gen.SaasMfaTest do
           test/test/accounts/mfa_test.exs
           test/test_web/controllers/mfa_controller_test.exs
           test/test_web/live/security_live_test.exs
+          test/support/mfa_test_helpers.ex
         ) do
       assert_creates(igniter, path)
     end
@@ -174,31 +171,6 @@ defmodule Tinderbox.Gen.SaasMfaTest do
       assert_raise Mix.Error,
                    ~r/already exists: this project has multi-factor authentication/,
                    fn -> Igniter.compose_task(igniter, Mix.Tasks.Tinderbox.Gen.Mfa, []) end
-    end
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
-  end
-
-  defp plain(string) when is_snippet(string) do
-    string |> String.replace(["(", ")"], " ") |> String.replace(~r/\s+/, " ")
-  end
-
-  defp assert_has(source, snippet) do
-    assert plain(source) =~ plain(snippet), "expected #{inspect(snippet)} in:\n#{source}"
-  end
-
-  defp refute_has(source, snippet) do
-    refute plain(source) =~ plain(snippet), "did not expect #{inspect(snippet)} in:\n#{source}"
-  end
-
-  defp order(string, substring) do
-    case :binary.match(plain(string), plain(substring)) do
-      {index, _length} -> index
-      :nomatch -> flunk("expected #{inspect(substring)} in:\n#{string}")
     end
   end
 end

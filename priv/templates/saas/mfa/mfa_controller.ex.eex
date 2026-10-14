@@ -20,6 +20,7 @@ use <%= inspect(@web) %>, :controller
 
 alias <%= inspect(@mfa) %>
 alias <%= inspect(@user) %>
+alias <%= inspect(@web) %>.MfaHTML
 
 @pending_ttl_seconds 600
 
@@ -49,7 +50,7 @@ end
 def complete_sign_in(conn, user, return_to, message) do
   case sign_in(conn, user) do
     {:ok, conn} -> conn |> put_flash(:info, message) |> redirect(to: return_to)
-    :error -> sign_in_failed(conn)
+    :error -> abort(conn, :sign_in_failed)
   end
 end
 
@@ -70,18 +71,15 @@ def verify(conn, params) do
       {:error, :invalid_code} ->
         render_challenge(
           conn,
-          "That code is not valid. Try again, or enter a recovery code.",
+          MfaHTML.error_message(:invalid_code) <> " Try again, or enter a recovery code.",
           422
         )
 
       {:error, :locked} ->
-        conn
-        |> delete_session(:mfa_pending)
-        |> put_flash(:error, "Too many incorrect codes. Try again in 15 minutes.")
-        |> redirect(to: ~p"/sign-in")
+        abort(conn, :locked)
 
       {:error, :not_enrolled} ->
-        expired(conn)
+        abort(conn, :expired)
     end
   end)
 end
@@ -103,13 +101,15 @@ def confirm(conn, params) do
       {:ok, codes} ->
         case sign_in(conn, user) do
           {:ok, conn} -> render(conn, :recovery_codes, codes: codes, return_to: return_to)
-          :error -> sign_in_failed(conn)
+          :error -> abort(conn, :sign_in_failed)
         end
 
       {:error, :invalid_code} ->
         # The same secret: the QR code the user already scanned stays valid.
         case MFA.begin_enrollment(user) do
-          {:ok, enrollment} -> render_setup(conn, enrollment, "That code is not valid.", 422)
+          {:ok, enrollment} ->
+            render_setup(conn, enrollment, MfaHTML.error_message(:invalid_code), 422)
+
           {:error, :already_enrolled} -> challenge_instead(conn)
         end
 
@@ -123,12 +123,7 @@ def confirm(conn, params) do
 end
 
 # POST /mfa/cancel
-def cancel(conn, _params) do
-  conn
-  |> delete_session(:mfa_pending)
-  |> put_flash(:info, "Sign-in cancelled.")
-  |> redirect(to: ~p"/sign-in")
-end
+def cancel(conn, _params), do: abort(conn, :cancelled)
 
 # -- helpers ------------------------------------------------------------------
 
@@ -139,7 +134,7 @@ defp with_pending(conn, step, fun) do
     {:ok, user, ^step, return_to} -> fun.(user, return_to)
     {:ok, _user, :challenge, _return_to} -> redirect(conn, to: ~p"/mfa")
     {:ok, _user, :enroll, _return_to} -> redirect(conn, to: ~p"/mfa/setup")
-    :error -> expired(conn)
+    :error -> abort(conn, :expired)
   end
 end
 
@@ -199,19 +194,20 @@ defp revoke_token(user) do
   end
 end
 
-defp sign_in_failed(conn) do
+# Every way out of a pending sign-in other than completing it: back to the sign-in page.
+defp abort(conn, reason) do
+  {level, message} = abort_flash(reason)
+
   conn
   |> delete_session(:mfa_pending)
-  |> put_flash(:error, "Could not sign you in. Try again.")
+  |> put_flash(level, message)
   |> redirect(to: ~p"/sign-in")
 end
 
-defp expired(conn) do
-  conn
-  |> delete_session(:mfa_pending)
-  |> put_flash(:error, "Your sign-in expired. Sign in again.")
-  |> redirect(to: ~p"/sign-in")
-end
+defp abort_flash(:expired), do: {:error, "Your sign-in expired. Sign in again."}
+defp abort_flash(:sign_in_failed), do: {:error, "Could not sign you in. Try again."}
+defp abort_flash(:locked), do: {:error, MfaHTML.error_message(:locked)}
+defp abort_flash(:cancelled), do: {:info, "Sign-in cancelled."}
 
 defp code(%{"mfa" => %{"code" => code}}) when is_binary(code), do: code
 defp code(_params), do: ""

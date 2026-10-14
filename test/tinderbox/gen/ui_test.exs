@@ -3,6 +3,7 @@ defmodule Tinderbox.Gen.UiTest do
 
   import Igniter.Test
   import Tinderbox.Test.SaasFixtures
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   alias Tinderbox.Gen.Ui
 
@@ -73,12 +74,6 @@ defmodule Tinderbox.Gen.UiTest do
     assert_raise Mix.Error, ~r/needs Phoenix's Tailwind \+ daisyUI assets/, fn ->
       Ui.apply(project, [])
     end
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 
   defp occurrences(string, substring), do: length(String.split(string, substring)) - 1

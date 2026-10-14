@@ -39,8 +39,7 @@ defmodule Mix.Tasks.Tinderbox.Gen.Mfa do
       group: :tinderbox,
       example: "mix tinderbox.gen.mfa",
       schema: [yes: :boolean],
-      # Run directly, a task's `adds_deps` is not installed; `Mfa.install/2` adds
-      # and fetches them itself.
+      # Run directly, a task's adds_deps is not installed; Mfa.install/2 adds them to mix.exs.
       adds_deps: Tinderbox.Gen.Saas.Mfa.deps()
     }
   end

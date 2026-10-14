@@ -221,8 +221,9 @@ Ash packages the other stacks use, then adds:
   `/settings/security` (QR code, a confirming code, ten recovery codes shown once);
   sign-in then asks for a code at `/mfa` (`<App>Web.MfaController`) before anyone is
   signed in. Ten wrong codes in a row lock the factor for 15 minutes, a code is never
-  accepted twice, recovery codes are stored as SHA-256 hashes, and the TOTP secret is
-  encrypted at rest (AshCloak, AES-GCM, `<App>.Vault`, keyed by `CLOAK_KEY`).
+  accepted twice (the database settles concurrent requests), recovery codes are stored
+  as SHA-256 hashes, and the TOTP secret is encrypted at rest (AshCloak, AES-GCM,
+  `<App>.Vault`, keyed by `CLOAK_KEY`).
   Platform admins see everyone's status at `/admin/security` and can reset a user
   who lost the device and the codes. `MFA_REQUIRED=true` sends everyone without a
   factor to set one up at their next sign-in (and takes away the switch to turn it
@@ -542,6 +543,10 @@ Beyond that, generated projects were run end to end against the emulators:
   * sign out and in landed on `/mfa` with `/dashboard` sent back to `/sign-in`
     meanwhile; a wrong code gave the error and stayed, the right code signed in, a
     recovery code signed in once and was refused the second time;
+  * a throwaway test sent one TOTP code, then one recovery code, through 20
+    concurrent `MFA.verify/2` calls: each time one returned `:ok` and 19
+    `{:error, :invalid_code}`; with the spent-code filter taken out of
+    `Totp.record_success/3`, all 20 calls accepted the same TOTP code;
   * `/admin/security` as an `ADMIN_EMAILS` user listed the user as On with nine
     recovery codes; Reset (with its confirm dialog) turned it Off;
   * with `MFA_REQUIRED=true` a user without a factor was sent to `/mfa/setup` after the
@@ -554,7 +559,8 @@ Beyond that, generated projects were run end to end against the emulators:
     user, and with `MFA_SSO=idp` `sign_in_step/2` was `:complete` for the SSO sign-in
     and `:enroll` for a password one under `MFA_REQUIRED`;
   * with `SSO_ACR_VALUES=urn:okta:loa:2fa:any` the redirect to the provider carried
-    `acr_values=urn%3Aokta%3Aloa%3A2fa%3Aany` next to `scope=openid profile email`;
+    `acr_values=urn%3Aokta%3Aloa%3A2fa%3Aany` next to `scope=openid+openid+profile+email`
+    (Assent prepends `openid` to the strategy's scope);
   * `MIX_ENV=prod mix run -e ''` without `CLOAK_KEY` (everything else set) exited with
     `environment variable CLOAK_KEY is missing`.
 
@@ -565,7 +571,10 @@ Beyond that, generated projects were run end to end against the emulators:
   replaced `AuthController`. With the `tinderbox` dependency removed again,
   `mise run check` passed (38 tests); `/settings/security` rendered under
   `mise run dev`; running the task again exited 1 with
-  `already exists: this project has multi-factor authentication`.
+  `already exists: this project has multi-factor authentication`. Since the task only
+  writes the packages to `mix.exs` (Igniter runs `mix deps.get` before the queued
+  `ash.codegen`), a fresh `pre_mfa` run created `*_add_mfa.exs` without a
+  `Cloak.Vault is not loaded` failure, and `mise run check` passed (38 tests).
   **Not exercised:** a real identity provider that sends `amr`/`acr` (Okta, Entra,
   Auth0, Keycloak), an authenticator app, concurrent guesses against the lockout, and
   the customized-`AuthController` warning outside the generator test.

@@ -62,23 +62,23 @@ end
 
 @doc "Whether everyone has to have a second factor (`MFA_REQUIRED`)."
 @spec required?() :: boolean()
-def required?, do: Keyword.get(config(), :required, false)
+def required?, do: setting(:required, false)
 
 @doc "`:local` or `:idp` (`MFA_SSO`)."
 @spec sso_mode() :: :local | :idp
-def sso_mode, do: Keyword.get(config(), :sso, :local)
+def sso_mode, do: setting(:sso, :local)
 
 @doc "The name an authenticator app shows next to the account."
 @spec issuer() :: String.t()
-def issuer, do: Keyword.get(config(), :issuer, <%= inspect(inspect(@prefix)) %>)
+def issuer, do: setting(:issuer, <%= inspect(inspect(@prefix)) %>)
 
 @doc "The `amr` values that count as MFA."
 @spec sso_mfa_amr() :: [String.t()]
-def sso_mfa_amr, do: Keyword.get(config(), :sso_mfa_amr, ["mfa"])
+def sso_mfa_amr, do: setting(:sso_mfa_amr, ["mfa"])
 
 @doc "The `acr` values that count as MFA."
 @spec sso_mfa_acr() :: [String.t()]
-def sso_mfa_acr, do: Keyword.get(config(), :sso_mfa_acr, [])
+def sso_mfa_acr, do: setting(:sso_mfa_acr, [])
 
 @doc "Whether the user has a confirmed second factor."
 @spec enrolled?(struct()) :: boolean()
@@ -135,6 +135,7 @@ Who may do it is the caller's business (`<%= inspect(@web) %>.LiveAdmin`).
 @spec reset(struct()) :: :ok
 def reset(user), do: provider().remove(user)
 
-defp provider, do: Keyword.get(config(), :provider, <%= inspect(@mfa) %>.Totp)
+defp provider, do: setting(:provider, <%= inspect(@mfa) %>.Totp)
 
-defp config, do: Application.get_env(<%= inspect(@app) %>, __MODULE__, [])
+defp setting(key, default),
+  do: <%= inspect(@app) %> |> Application.get_env(__MODULE__, []) |> Keyword.get(key, default)

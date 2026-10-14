@@ -36,22 +36,20 @@ defmodule Tinderbox.Gen.Saas.Events do
   end
 
   defp create_modules(igniter, assigns) do
-    Enum.reduce(@modules, igniter, fn {name, template}, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        Module.concat([assigns[:prefix], name]),
-        Gen.render_template("saas/events/" <> template, assigns)
-      )
-    end)
+    Gen.create_modules(
+      igniter,
+      Enum.map(@modules, fn {name, template} ->
+        {Module.concat([assigns[:prefix], name]), "saas/events/" <> template}
+      end),
+      assigns
+    )
   end
 
   defp add_runtime_config(igniter, assigns) do
     Gen.append_to_runtime_exs(
       igniter,
       Gen.render_template("saas/events/runtime_config.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_key?(igniter, "runtime.exs", assigns[:app], [:nats])
-      end
+      Gen.runtime_configures?(assigns[:app], [:nats])
     )
   end
 

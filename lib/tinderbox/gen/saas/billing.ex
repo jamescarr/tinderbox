@@ -33,22 +33,17 @@ defmodule Tinderbox.Gen.Saas.Billing do
 
   defp create_modules(igniter, billing, assigns) do
     modules = [
-      {billing, "billing.ex.eex"},
-      {Module.concat(billing, "Plans"), "plans.ex.eex"},
-      {Module.concat(billing, "Subscription"), "subscription.ex.eex"},
-      {Module.concat(billing, "StripeEvent"), "stripe_event.ex.eex"},
+      {billing, "saas/billing/billing.ex.eex"},
+      {Module.concat(billing, "Plans"), "saas/billing/plans.ex.eex"},
+      {Module.concat(billing, "Subscription"), "saas/billing/subscription.ex.eex"},
+      {Module.concat(billing, "StripeEvent"), "saas/billing/stripe_event.ex.eex"},
       {Module.concat([billing, "Changes", "SyncSubscription"]),
-       "changes/sync_subscription.ex.eex"},
-      {Module.concat(assigns[:web], "StripeWebhookHandler"), "stripe_webhook_handler.ex.eex"}
+       "saas/billing/changes/sync_subscription.ex.eex"},
+      {Module.concat(assigns[:web], "StripeWebhookHandler"),
+       "saas/billing/stripe_webhook_handler.ex.eex"}
     ]
 
-    Enum.reduce(modules, igniter, fn {module, template}, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        module,
-        Gen.render_template("saas/billing/" <> template, assigns)
-      )
-    end)
+    Gen.create_modules(igniter, modules, assigns)
   end
 
   defp register_domain(igniter, billing, assigns) do
@@ -80,9 +75,7 @@ defmodule Tinderbox.Gen.Saas.Billing do
     Gen.append_to_runtime_exs(
       igniter,
       Gen.render_template("saas/billing/runtime_config.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_key?(igniter, "runtime.exs", assigns[:app], [:plans])
-      end
+      Gen.runtime_configures?(assigns[:app], [:plans])
     )
   end
 

@@ -134,14 +134,7 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     )
     |> Gen.append_to_runtime_exs(
       Gen.render_template("saas/accounts/runtime_config.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_key?(
-          igniter,
-          "runtime.exs",
-          assigns[:app],
-          [:sso_client_id]
-        )
-      end
+      Gen.runtime_configures?(assigns[:app], [:sso_client_id])
     )
   end
 
@@ -167,43 +160,33 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     user = assigns[:user]
     assign_role = assigns[:assign_role]
 
-    {igniter, registered?} = Edits.source_contains?(igniter, user, inspect(assign_role))
-
-    igniter =
-      Igniter.Project.Module.create_module(
-        igniter,
-        assign_role,
-        Gen.render_template("saas/accounts/changes/assign_role.ex.eex", assigns)
-      )
-
     igniter
+    |> Igniter.Project.Module.create_module(
+      assign_role,
+      Gen.render_template("saas/accounts/changes/assign_role.ex.eex", assigns)
+    )
     |> Ash.Resource.Igniter.add_new_action(user, :set_role, """
     update :set_role do
       description "Changes a user's platform role. Admins only."
       accept [:role]
     end
     """)
-    |> then(fn igniter ->
-      if registered? do
-        igniter
-      else
-        Ash.Resource.Igniter.add_block(
-          igniter,
-          user,
-          :changes,
-          "change #{inspect(assign_role)}, on: [:create]"
-        )
-      end
-    end)
+    |> Edits.unless_contains(
+      user,
+      inspect(assign_role),
+      &Ash.Resource.Igniter.add_block(
+        &1,
+        user,
+        :changes,
+        "change #{inspect(assign_role)}, on: [:create]"
+      )
+    )
   end
 
   defp add_user_policies(igniter, assigns) do
     user = assigns[:user]
-    {igniter, present?} = Edits.source_contains?(igniter, user, "policy action(:set_role)")
 
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, user, "policy action(:set_role)", fn igniter ->
       igniter
       # The installer's catch-all is not there in every version; the
       # AshAuthentication bypass stays first either way.
@@ -213,22 +196,21 @@ defmodule Tinderbox.Gen.Saas.Accounts do
         :policies,
         Gen.render_template("saas/accounts/user/policies.eex", assigns)
       )
-    end
+    end)
   end
 
   defp add_resources(igniter, assigns) do
     accounts = assigns[:accounts]
 
     igniter =
-      Enum.reduce(@resources, igniter, fn name, igniter ->
-        template = "saas/accounts/#{name |> to_string() |> Macro.underscore()}.ex.eex"
-
-        Igniter.Project.Module.create_module(
-          igniter,
-          Module.concat(accounts, name),
-          Gen.render_template(template, assigns)
-        )
-      end)
+      Gen.create_modules(
+        igniter,
+        Enum.map(@resources, fn name ->
+          {Module.concat(accounts, name),
+           "saas/accounts/#{name |> to_string() |> Macro.underscore()}.ex.eex"}
+        end),
+        assigns
+      )
 
     igniter = create_support_modules(igniter, assigns)
 
@@ -254,13 +236,7 @@ defmodule Tinderbox.Gen.Saas.Accounts do
            "saas/accounts/checks/actor_manages_organization.ex.eex"}
         ]
 
-    Enum.reduce(modules, igniter, fn {module, template}, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        module,
-        Gen.render_template(template, assigns)
-      )
-    end)
+    Gen.create_modules(igniter, modules, assigns)
   end
 
   # Versions of every Accounts resource live in the domain, and the organization
@@ -276,17 +252,14 @@ defmodule Tinderbox.Gen.Saas.Accounts do
 
   defp add_managers(igniter, assigns) do
     accounts = assigns[:accounts]
-    {igniter, present?} = Edits.source_contains?(igniter, accounts, "def managers(")
 
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, accounts, "def managers(", fn igniter ->
       Edits.append_to_module(
         igniter,
         accounts,
         Gen.render_template("saas/accounts/managers.eex", assigns)
       )
-    end
+    end)
   end
 
   defp remove_magic_link_route(igniter, assigns) do
@@ -296,14 +269,14 @@ defmodule Tinderbox.Gen.Saas.Accounts do
   defp add_organization_web(igniter, assigns) do
     web = assigns[:web]
 
-    igniter
-    |> Igniter.Project.Module.create_module(
-      Module.concat(web, OrganizationController),
-      Gen.render_template("saas/accounts/organization_controller.ex.eex", assigns)
-    )
-    |> Igniter.Project.Module.create_module(
-      Module.concat(web, LiveOrganization),
-      Gen.render_template("saas/accounts/live_organization.ex.eex", assigns)
+    Gen.create_modules(
+      igniter,
+      [
+        {Module.concat(web, OrganizationController),
+         "saas/accounts/organization_controller.ex.eex"},
+        {Module.concat(web, LiveOrganization), "saas/accounts/live_organization.ex.eex"}
+      ],
+      assigns
     )
   end
 end

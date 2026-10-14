@@ -3,25 +3,13 @@ defmodule <%= inspect(@web) %>.SecurityLiveTest do
 
   import Phoenix.LiveViewTest
   import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@prefix) %>.MFATestHelpers
   import <%= inspect(@web) %>.LiveTestHelpers
 
   alias <%= inspect(@mfa) %>
 
   setup do
-    # A code computed in one 30 second period must not be checked in the next.
-    if rem(System.os_time(:second), 30) > 27, do: Process.sleep(3_000)
-
-    # The tests do not depend on the environment they run in.
-    original = Application.get_env(<%= inspect(@app) %>, MFA)
-
-    on_exit(fn ->
-      if original,
-        do: Application.put_env(<%= inspect(@app) %>, MFA, original),
-        else: Application.delete_env(<%= inspect(@app) %>, MFA)
-    end)
-
-    put_config(original || [], required: false, sso: :local)
-
+    mfa_test_env()
     %{user: user_fixture()}
   end
 
@@ -34,11 +22,10 @@ defmodule <%= inspect(@web) %>.SecurityLiveTest do
     view |> element("#mfa-start") |> render_click()
     assert has_element?(view, "#mfa-setup")
 
-    [_match, key] = Regex.run(~r/>([A-Z2-7 ]+)</, view |> element("#mfa-manual-key") |> render())
-    secret = key |> String.replace(" ", "") |> Base.decode32!(padding: false)
+    secret = manual_key_secret(view)
 
     view
-    |> form("#mfa-confirm-form", confirm: %{code: NimbleTOTP.verification_code(secret)})
+    |> form("#mfa-confirm-form", confirm: %{code: code(secret)})
     |> render_submit()
 
     assert has_element?(view, "#recovery-codes")
@@ -50,7 +37,10 @@ defmodule <%= inspect(@web) %>.SecurityLiveTest do
     {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
     view |> element("#mfa-start") |> render_click()
 
-    html = view |> form("#mfa-confirm-form", confirm: %{code: "000000"}) |> render_submit()
+    html =
+      view
+      |> form("#mfa-confirm-form", confirm: %{code: wrong_code(manual_key_secret(view))})
+      |> render_submit()
 
     assert html =~ "That code is not valid."
     refute has_element?(view, "#recovery-codes")
@@ -58,14 +48,14 @@ defmodule <%= inspect(@web) %>.SecurityLiveTest do
   end
 
   test "turning it off needs a current code", %{conn: conn, user: user} do
-    secret = enroll!(user)
+    {secret, _codes} = enroll!(user)
     {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
 
-    view |> form("#mfa-disable-form", disable: %{code: "000000"}) |> render_submit()
+    view |> form("#mfa-disable-form", disable: %{code: wrong_code(secret)}) |> render_submit()
     assert MFA.enrolled?(user)
 
     view
-    |> form("#mfa-disable-form", disable: %{code: NimbleTOTP.verification_code(secret)})
+    |> form("#mfa-disable-form", disable: %{code: code(secret)})
     |> render_submit()
 
     refute MFA.enrolled?(user)
@@ -74,7 +64,7 @@ defmodule <%= inspect(@web) %>.SecurityLiveTest do
 
   test "there is no way to turn it off when it is required", %{conn: conn, user: user} do
     enroll!(user)
-    put_config(Application.get_env(<%= inspect(@app) %>, MFA), required: true)
+    put_mfa_config(required: true)
 
     {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
 
@@ -82,25 +72,9 @@ defmodule <%= inspect(@web) %>.SecurityLiveTest do
     refute has_element?(view, "#mfa-disable-form")
   end
 
-  # Gives `user` a confirmed factor; returns its secret.
-  defp enroll!(user) do
-    {:ok, enrollment} = MFA.begin_enrollment(user)
-
-    secret =
-      enrollment.uri
-      |> URI.parse()
-      |> Map.fetch!(:query)
-      |> URI.decode_query()
-      |> Map.fetch!("secret")
-      |> Base.decode32!(padding: false)
-
-    # The previous period's code, so the current one is still unused.
-    time = System.os_time(:second) - 30
-    {:ok, _codes} = MFA.confirm_enrollment(user, NimbleTOTP.verification_code(secret, time: time))
-    secret
-  end
-
-  defp put_config(config, overrides) do
-    Application.put_env(<%= inspect(@app) %>, MFA, Keyword.merge(config, overrides))
+  # The secret behind the key the page shows for typing in by hand.
+  defp manual_key_secret(view) do
+    [_match, key] = Regex.run(~r/>([A-Z2-7 ]+)</, view |> element("#mfa-manual-key") |> render())
+    key |> String.replace(" ", "") |> Base.decode32!(padding: false)
   end
 end

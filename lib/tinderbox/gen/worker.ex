@@ -56,13 +56,12 @@ defmodule Tinderbox.Gen.Worker do
 
   defp add_inbox(igniter, assigns) do
     igniter
-    |> Igniter.Project.Module.create_module(
-      assigns[:inbox],
-      Gen.render_template("worker/inbox.ex.eex", assigns)
-    )
-    |> Igniter.Project.Module.create_module(
-      assigns[:message],
-      Gen.render_template("worker/inbox_message.ex.eex", assigns)
+    |> Gen.create_modules(
+      [
+        {assigns[:inbox], "worker/inbox.ex.eex"},
+        {assigns[:message], "worker/inbox_message.ex.eex"}
+      ],
+      assigns
     )
     |> Igniter.Project.Config.configure(
       "config.exs",
@@ -75,21 +74,14 @@ defmodule Tinderbox.Gen.Worker do
 
   defp add_modules(igniter, assigns) do
     igniter
-    |> Igniter.Project.Module.create_module(
-      assigns[:pipeline],
-      Gen.render_template("worker/pipeline.ex.eex", assigns)
-    )
-    |> Igniter.Project.Module.create_module(
-      assigns[:processing],
-      Gen.render_template("worker/processing.ex.eex", assigns)
-    )
-    |> Igniter.Project.Module.create_module(
-      assigns[:publisher],
-      Gen.render_template("worker/publisher.ex.eex", assigns)
-    )
-    |> Igniter.Project.Module.create_module(
-      assigns[:health],
-      Gen.render_template("worker/health.ex.eex", assigns)
+    |> Gen.create_modules(
+      [
+        {assigns[:pipeline], "worker/pipeline.ex.eex"},
+        {assigns[:processing], "worker/processing.ex.eex"},
+        {assigns[:publisher], "worker/publisher.ex.eex"},
+        {assigns[:health], "worker/health.ex.eex"}
+      ],
+      assigns
     )
     |> add_broker_modules(assigns)
   end
@@ -183,9 +175,7 @@ defmodule Tinderbox.Gen.Worker do
     Gen.append_to_runtime_exs(
       igniter,
       Gen.render_template("worker/runtime_config.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_key?(igniter, "runtime.exs", app, [:pipeline])
-      end
+      Gen.runtime_configures?(app, [:pipeline])
     )
   end
 

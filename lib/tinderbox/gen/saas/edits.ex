@@ -110,11 +110,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
   """
   @spec add_child_after(Igniter.t(), module(), module(), String.t(), module()) :: Igniter.t()
   def add_child_after(igniter, application, module, child, anchor) do
-    {igniter, present?} = source_contains?(igniter, application, inspect(module))
-
-    if present? do
-      igniter
-    else
+    unless_contains(igniter, application, inspect(module), fn igniter ->
       update_existing(igniter, application, fn zipper ->
         with {:ok, body} <- Function.move_to_def(zipper, :start, 2),
              {:ok, assignment} <-
@@ -129,7 +125,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
                "#{inspect(application)}. Add it by hand."}
         end
       end)
-    end
+    end)
   end
 
   defp children?(call) do
@@ -156,7 +152,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
 
   @doc """
   Appends `code` after the last top-level statement of `module`. The caller
-  guards against appending twice (see `source_contains?/3`).
+  guards against appending twice (see `unless_contains/4`).
   """
   @spec append_to_module(Igniter.t(), module(), String.t()) :: Igniter.t()
   def append_to_module(igniter, module, code) do
@@ -224,7 +220,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
   @doc """
   Adds `code` (routes, say) inside the router's
   `ash_authentication_live_session <session>` block. The caller guards against
-  adding it twice (see `source_contains?/3`). A warning, with the code to paste,
+  adding it twice (see `unless_contains/4`). A warning, with the code to paste,
   when the router has no such session.
   """
   @spec add_to_live_session(Igniter.t(), module(), atom(), String.t()) :: Igniter.t()
@@ -296,47 +292,9 @@ defmodule Tinderbox.Gen.Saas.Edits do
   def ensure_secret_from_env(igniter, secrets, resource, path, env_key) do
     # `add_new_secret_from_env/5` only looks at the first `secret_for` clause, so a
     # re-run would stack a second copy of every later clause; check ourselves.
-    {igniter, present?} = source_contains?(igniter, secrets, inspect(path))
-
-    if present? do
-      igniter
-    else
+    unless_contains(igniter, secrets, inspect(path), fn igniter ->
       AshAuthentication.Igniter.add_new_secret_from_env(igniter, secrets, resource, path, env_key)
-    end
-  end
-
-  @doc """
-  Rewrites `module`'s source through `fun`, which gets the source text and
-  returns `{:ok, new_source}` or `{:warning, message}`. Returning the text it
-  was given leaves the file alone. A module that does not exist is left alone.
-
-  The rewrite goes through the Elixir updater, so the project's formatter (with
-  the HEEx plugin) runs on the result; a plain file write would not be formatted.
-  """
-  @spec edit_source(Igniter.t(), module(), (String.t() ->
-                                              {:ok, String.t()} | {:warning, String.t()})) ::
-          Igniter.t()
-  def edit_source(igniter, module, fun) when is_function(fun, 1) do
-    case Igniter.Project.Module.find_module(igniter, module) do
-      {:ok, {igniter, source, _zipper}} ->
-        Igniter.update_elixir_file(igniter, source.path, fn zipper ->
-          current = zipper |> Zipper.root() |> Sourceror.to_string()
-
-          case fun.(current) do
-            {:ok, ^current} ->
-              {:ok, zipper}
-
-            {:ok, new} ->
-              {:ok, new |> Sourceror.parse_string!() |> Zipper.zip()}
-
-            {:warning, message} ->
-              {:warning, message}
-          end
-        end)
-
-      {:error, igniter} ->
-        igniter
-    end
+    end)
   end
 
   defp enter_sections(zipper, []), do: {:ok, zipper}
@@ -366,6 +324,19 @@ defmodule Tinderbox.Gen.Saas.Edits do
 
       {:error, igniter} ->
         {igniter, false}
+    end
+  end
+
+  @doc """
+  Runs `fun` on the igniter unless `module`'s source already contains `snippet`
+  (compared as `source_contains?/3` does). The guard for edits that must not be applied twice.
+  """
+  @spec unless_contains(Igniter.t(), module(), String.t(), (Igniter.t() -> Igniter.t())) ::
+          Igniter.t()
+  def unless_contains(igniter, module, snippet, fun) when is_function(fun, 1) do
+    case source_contains?(igniter, module, snippet) do
+      {igniter, true} -> igniter
+      {igniter, false} -> fun.(igniter)
     end
   end
 

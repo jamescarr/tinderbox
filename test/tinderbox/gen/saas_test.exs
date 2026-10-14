@@ -4,13 +4,9 @@ defmodule Tinderbox.Gen.SaasTest do
 
   import Igniter.Test
   import Tinderbox.Test.SaasFixtures
+  import Tinderbox.Test.SourceHelpers
 
   alias Tinderbox.Gen.Saas
-
-  # A project's formatter (`import_deps`) strips the parentheses Igniter's own
-  # formatting puts around DSL calls; these tests run without it, so sources and
-  # expectations are compared with parentheses removed.
-  defguardp is_snippet(value) when is_binary(value)
 
   setup_all do
     Application.put_env(:test, :ash_domains, [Test.Accounts])
@@ -399,31 +395,6 @@ defmodule Tinderbox.Gen.SaasTest do
   test "refuses a project without Phoenix" do
     assert_raise Mix.Error, ~r/requires a Phoenix project/, fn ->
       Saas.apply(test_project(), [])
-    end
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
-  end
-
-  defp plain(string) when is_snippet(string) do
-    string |> String.replace(["(", ")"], " ") |> String.replace(~r/\s+/, " ")
-  end
-
-  defp assert_has(source, snippet) do
-    assert plain(source) =~ plain(snippet), "expected #{inspect(snippet)} in:\n#{source}"
-  end
-
-  defp refute_has(source, snippet) do
-    refute plain(source) =~ plain(snippet), "did not expect #{inspect(snippet)} in:\n#{source}"
-  end
-
-  defp order(string, substring) do
-    case :binary.match(plain(string), plain(substring)) do
-      {index, _length} -> index
-      :nomatch -> flunk("expected #{inspect(substring)} in:\n#{string}")
     end
   end
 end
