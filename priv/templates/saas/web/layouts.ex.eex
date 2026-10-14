@@ -11,15 +11,18 @@ use <%= inspect(@web) %>, :html
 embed_templates "layouts/*"
 
 @doc """
-Renders the application layout: the navigation bar, the organization switcher
-and the user menu.
+Renders the application layout: the themepack's app shell
+(`<%= inspect(@web) %>.UI.Shell`) with the navigation, the inbox badge, the organization
+switcher and the user menu. Signed-in pages get the pack's shell (a sidebar or a
+top bar); signed-out pages always get the top bar.
 
 LiveViews pass what `<%= inspect(@web) %>.LiveUserAuth`, `<%= inspect(@web) %>.LiveOrganization` and
-`<%= inspect(@web) %>.LiveNotifications` assigned; pages without a signed-in user pass only `flash`.
+`<%= inspect(@web) %>.LiveNotifications` assigned, plus `current_page` to highlight its
+navigation entry; pages without a signed-in user pass only `flash`.
 
 ## Examples
 
-    <Layouts.app flash={@flash} current_user={@current_user} unread_count={@unread_count}>
+    <Layouts.app flash={@flash} current_user={@current_user} unread_count={@unread_count} current_page={:inbox}>
       <h1>Content</h1>
     </Layouts.app>
 
@@ -30,90 +33,108 @@ attr :current_organization, :any, default: nil, doc: "the organization the user 
 attr :organizations, :list, default: [], doc: "every organization the user belongs to"
 attr :unread_count, :integer, default: 0, doc: "unread in-app notifications"
 attr :wide, :boolean, default: false, doc: "a wider column, for pages made of tables"
+attr :current_page, :atom, default: nil, doc: "the navigation entry to highlight"
 
 slot :inner_block, required: true
 
 def app(assigns) do
   ~H"""
-  <header class="navbar bg-base-100 border-b border-base-300 px-4 sm:px-6 lg:px-8">
-    <div class="flex-1 gap-2">
-      <.link navigate={~p"/"} class="flex items-center gap-2 text-lg font-semibold">
-        <.icon name="hero-fire" class="size-6 text-primary" />
-        <%= inspect(@prefix) %>
+  <.app_shell
+    variant={if @current_user, do: nil, else: :topnav}
+    width={if @wide, do: :wide, else: :default}
+  >
+    <:brand>
+      <.link navigate={~p"/"} class="flex items-center gap-2 font-display text-lg font-semibold">
+        <.icon name="hero-fire" class="size-6 text-primary" /> <%= inspect(@prefix) %>
       </.link>
+    </:brand>
 
-      <ul :if={@current_user} class="menu menu-horizontal px-1">
-        <li><.link navigate={~p"/dashboard"}>Dashboard</.link></li>
-        <li>
-          <.link navigate={~p"/inbox"}>
-            Inbox
-            <span :if={@unread_count > 0} class="badge badge-primary badge-sm">{@unread_count}</span>
-          </.link>
-        </li>
-        <li><.link navigate={~p"/organizations/members"}>Members</.link></li>
-        <li><.link navigate={~p"/billing"}>Billing</.link></li>
-        <li :if={@current_user.role == :admin}><.link href={~p"/admin"}>Admin</.link></li>
-      </ul>
-    </div>
+    <:nav :if={@current_user}>
+      <.nav_item
+        navigate={~p"/dashboard"}
+        icon="hero-squares-2x2"
+        active={@current_page == :dashboard}
+      >
+        Dashboard
+      </.nav_item>
+      <.nav_item
+        navigate={~p"/inbox"}
+        icon="hero-inbox"
+        active={@current_page == :inbox}
+        badge={@unread_count}
+      >
+        Inbox
+      </.nav_item>
+      <.nav_item
+        navigate={~p"/organizations/members"}
+        icon="hero-users"
+        active={@current_page == :members}
+      >
+        Members
+      </.nav_item>
+      <.nav_item navigate={~p"/billing"} icon="hero-credit-card" active={@current_page == :billing}>
+        Billing
+      </.nav_item>
+      <.nav_section :if={@current_user.role == :admin} label="Platform">
+        <.nav_item href={~p"/admin"} icon="hero-shield-check">Admin</.nav_item>
+      </.nav_section>
+    </:nav>
 
-    <div class="flex-none">
-      <ul class="flex flex-column px-1 space-x-4 items-center">
-        <li :if={@current_user && length(@organizations) > 1}>
-          <form method="post" action={~p"/organizations/switch"}>
-            <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-            <select
-              name="id"
-              class="select select-sm"
-              aria-label="Switch organization"
-              onchange="this.form.submit()"
+    <:nav_footer :if={@current_user}>
+      <li :if={length(@organizations) > 1} class="pb-1">
+        <form
+          method="post"
+          action={~p"/organizations/switch"}
+          class="block cursor-default p-0 hover:bg-transparent active:bg-transparent"
+        >
+          <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+          <select
+            name="id"
+            class="select select-sm w-full"
+            aria-label="Switch organization"
+            onchange="this.form.submit()"
+          >
+            <option
+              :for={organization <- @organizations}
+              value={organization.id}
+              selected={@current_organization && organization.id == @current_organization.id}
             >
-              <option
-                :for={organization <- @organizations}
-                value={organization.id}
-                selected={@current_organization && organization.id == @current_organization.id}
-              >
-                {organization.name}
-              </option>
-            </select>
-          </form>
-        </li>
-        <li>
-          <.theme_toggle />
-        </li>
-        <li :if={@current_user}>
-          <div class="dropdown dropdown-end">
-            <div tabindex="0" role="button" class="btn btn-ghost btn-sm">
-              {to_string(@current_user.email)}
-              <.icon name="hero-chevron-down-micro" class="size-4" />
-            </div>
-            <ul
-              tabindex="0"
-              class="dropdown-content menu bg-base-100 rounded-box z-10 mt-2 w-56 p-2 shadow"
-            >
-              <li><.link navigate={~p"/settings/notifications"}>Notification settings</.link></li>
-              <li><.link href={~p"/sign-out"}>Sign out</.link></li>
-            </ul>
-          </div>
-        </li>
-        <li :if={!@current_user}>
-          <.link href={~p"/sign-in"} class="btn btn-ghost btn-sm">Sign in</.link>
-        </li>
-        <li :if={!@current_user}>
-          <.link href={~p"/register"} class="btn btn-primary btn-sm">Register</.link>
-        </li>
-      </ul>
-    </div>
-  </header>
+              {organization.name}
+            </option>
+          </select>
+        </form>
+      </li>
+      <.nav_item
+        navigate={~p"/organizations/new"}
+        icon="hero-plus"
+        active={@current_page == :new_organization}
+      >
+        New organization
+      </.nav_item>
+      <.nav_item :if={dev_routes?()} navigate="/dev/ui" icon="hero-swatch">UI kit</.nav_item>
+    </:nav_footer>
 
-  <main class="px-4 py-10 sm:px-6 lg:px-8">
-    <div class={["mx-auto space-y-4", if(@wide, do: "max-w-6xl", else: "max-w-4xl")]}>
-      {render_slot(@inner_block)}
-    </div>
-  </main>
+    <:topbar>
+      <.theme_toggle />
+      <.user_menu :if={@current_user} name={to_string(@current_user.email)}>
+        <:item navigate={~p"/settings/notifications"}>Notification settings</:item>
+        <:item href={~p"/sign-out"}>Sign out</:item>
+      </.user_menu>
+      <.link :if={!@current_user} href={~p"/sign-in"} class="btn btn-ghost btn-sm">Sign in</.link>
+      <.link :if={!@current_user} href={~p"/register"} class="btn btn-primary btn-sm">
+        Register
+      </.link>
+    </:topbar>
+
+    {render_slot(@inner_block)}
+  </.app_shell>
 
   <.flash_group flash={@flash} />
   """
 end
+
+# The UI kit gallery is mounted with the dev routes only, so it is linked only then.
+defp dev_routes?, do: Application.get_env(:<%= @app %>, :dev_routes, false)
 
 @doc """
 Shows the flash group with standard titles and content.
@@ -178,6 +199,7 @@ def theme_toggle(assigns) do
       class="flex p-2 cursor-pointer w-1/3"
       phx-click={JS.dispatch("phx:set-theme")}
       data-phx-theme="system"
+      aria-label="Use the system theme"
     >
       <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
     </button>
@@ -186,6 +208,7 @@ def theme_toggle(assigns) do
       class="flex p-2 cursor-pointer w-1/3"
       phx-click={JS.dispatch("phx:set-theme")}
       data-phx-theme="light"
+      aria-label="Use the light theme"
     >
       <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
     </button>
@@ -194,6 +217,7 @@ def theme_toggle(assigns) do
       class="flex p-2 cursor-pointer w-1/3"
       phx-click={JS.dispatch("phx:set-theme")}
       data-phx-theme="dark"
+      aria-label="Use the dark theme"
     >
       <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
     </button>

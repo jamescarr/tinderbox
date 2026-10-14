@@ -126,7 +126,7 @@ defmodule Tinderbox.Gen.Saas.Ops do
     exempted = ~r/^\s*paths: \["\/health"\],?$/m
     commented = ~r/^(\s*)# paths: \["\/health"\],$/m
 
-    Edits.update_file(igniter, "config/prod.exs", fn content ->
+    Gen.update_file(igniter, "config/prod.exs", fn content ->
       cond do
         Regex.match?(exempted, content) ->
           {:ok, content}

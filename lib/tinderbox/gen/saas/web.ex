@@ -1,15 +1,14 @@
 defmodule Tinderbox.Gen.Saas.Web do
   @moduledoc """
-  The web shell of the SaaS stack: the Petal Components assets, the layout, the
-  landing page, the signed-in LiveViews and their routes.
+  The web shell of the SaaS stack: the layout, the landing page, the signed-in
+  LiveViews and their routes, all built on the themepack UI kit (`<App>Web.UI`,
+  installed first by `Tinderbox.Gen.Ui.install_kit/2`).
 
-  * Petal Components: the Tailwind `@source`/`@import` in `assets/css/app.css` and
-    the component hooks in `assets/js/app.js` (both edited only when absent),
   * `type` in `<.button>`'s forwarded attributes in `core_components.ex`, so
     `<.button type="button">` does not submit its form (edited only when absent),
-  * `<App>Web.Layouts.app/1` — navigation bar, organization switcher, user menu and
-    the inbox badge, replacing Phoenix's demo layout (`flash_group/1` and
-    `theme_toggle/1` are kept as generated),
+  * `<App>Web.Layouts.app/1` — the app shell with the navigation, the inbox
+    badge, the organization switcher and the user menu, replacing Phoenix's
+    demo layout (`flash_group/1` and `theme_toggle/1` are kept as generated),
   * the landing page and its test, which now invite a visitor to sign in,
   * LiveViews inside the installer's `ash_authentication_live_session`:
     `/dashboard`, `/organizations/new`, `/organizations/members`,
@@ -19,10 +18,6 @@ defmodule Tinderbox.Gen.Saas.Web do
   * test support: `<App>.Fixtures` (users, organizations, memberships),
     `<App>Web.LiveTestHelpers.sign_in/2`, and a test of the members page that
     uses both.
-
-  The signed-in pages use Phoenix's own CoreComponents (daisyUI); the admin
-  section is the only part that uses Petal Components
-  (`Tinderbox.Gen.Saas.Admin`).
   """
 
   alias Tinderbox.Gen
@@ -31,19 +26,9 @@ defmodule Tinderbox.Gen.Saas.Web do
   @live_views ~w(DashboardLive OrganizationNewLive MembersLive InvitationLive InboxLive
                  NotificationSettingsLive BillingLive)
 
-  @css_imports """
-  @source "../../deps/petal_components/**/*.*ex";
-  @source not "../../deps/petal_components/lib/petal_components/showcase";
-  @import "../../deps/petal_components/assets/default.css";
-  """
-
-  @js_import ~s(import PetalComponents from "../../deps/petal_components/assets/js/petal_components")
-
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
     igniter
-    |> install_petal_css()
-    |> install_petal_js()
     |> allow_button_type(assigns)
     |> replace_layouts(assigns)
     |> replace_landing_page(assigns)
@@ -53,67 +38,13 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> add_test_support(assigns)
   end
 
-  # -- Petal Components ------------------------------------------------------
-
-  # Paths are relative to `assets/css/app.css`, like Phoenix's own
-  # `@source "../../lib/<app>_web"`. Petal's README shows `../deps/…` because it
-  # assumes the stylesheet is `assets/app.css`.
-  defp install_petal_css(igniter) do
-    Edits.update_file(igniter, "assets/css/app.css", fn content ->
-      if String.contains?(content, "petal_components") do
-        {:ok, content}
-      else
-        insert_after_tailwind_import(content)
-      end
-    end)
-  end
-
-  defp insert_after_tailwind_import(content) do
-    case Regex.run(~r/^@import "tailwindcss".*\n/m, content, return: :index) do
-      [{start, length}] ->
-        {head, tail} = String.split_at(content, start + length)
-        {:ok, head <> @css_imports <> tail}
-
-      nil ->
-        {:warning,
-         "Could not find `@import \"tailwindcss\"` in assets/css/app.css. Add the Petal " <>
-           "Components lines by hand:\n\n" <> @css_imports}
-    end
-  end
-
-  defp install_petal_js(igniter) do
-    Edits.update_file(igniter, "assets/js/app.js", fn content ->
-      cond do
-        String.contains?(content, "PetalComponents") ->
-          {:ok, content}
-
-        String.contains?(content, "hooks: {...colocatedHooks}") ->
-          {:ok,
-           content
-           |> String.replace(
-             ~s(import topbar from "../vendor/topbar"\n),
-             ~s(import topbar from "../vendor/topbar"\n) <> @js_import <> "\n",
-             global: false
-           )
-           |> String.replace(
-             "hooks: {...colocatedHooks}",
-             "hooks: {...colocatedHooks, ...PetalComponents}"
-           )}
-
-        true ->
-          {:warning,
-           "Could not find `hooks: {...colocatedHooks}` in assets/js/app.js. Import the Petal " <>
-             "Components hooks and merge them in by hand:\n\n" <>
-             @js_import <> "\n\nhooks: {...colocatedHooks, ...PetalComponents}"}
-      end
-    end)
-  end
+  # -- CoreComponents -------------------------------------------------------
 
   # Phoenix's `<.button>` forwards a fixed list of attributes. Without `type` in
   # it, `<.button type="button">` is an undefined-attribute warning (an error
   # under `--warnings-as-errors`) and the button still submits its form.
   defp allow_button_type(igniter, assigns) do
-    Edits.update_file(
+    Gen.update_file(
       igniter,
       "lib/#{assigns[:app]}_web/components/core_components.ex",
       fn content ->
@@ -141,27 +72,12 @@ defmodule Tinderbox.Gen.Saas.Web do
   # already knows about `current_user` was generated by an earlier run (or
   # customized) and is left alone.
   defp replace_layouts(igniter, assigns) do
-    layouts = Module.concat(assigns[:web], "Layouts")
-    body = Gen.render_template("saas/web/layouts.ex.eex", assigns)
-
-    case Igniter.Project.Module.find_module(igniter, layouts) do
-      {:ok, {igniter, source, _zipper}} ->
-        # Through the Elixir updater, not a plain file write: only then does the
-        # project's formatter (with the HEEx plugin) run on the result.
-        Igniter.update_elixir_file(igniter, source.path, fn zipper ->
-          current = zipper |> Sourceror.Zipper.root() |> Sourceror.to_string()
-
-          if String.contains?(current, "current_user") do
-            {:ok, zipper}
-          else
-            {:ok,
-             layouts |> module_source(body) |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
-          end
-        end)
-
-      {:error, igniter} ->
-        Igniter.Project.Module.create_module(igniter, layouts, body)
-    end
+    Gen.replace_module(
+      igniter,
+      Module.concat(assigns[:web], "Layouts"),
+      Gen.render_template("saas/web/layouts.ex.eex", assigns),
+      &(not String.contains?(&1, "current_user"))
+    )
   end
 
   defp replace_landing_page(igniter, assigns) do
@@ -180,7 +96,7 @@ defmodule Tinderbox.Gen.Saas.Web do
 
   defp replace_unless_current(igniter, path, content) do
     if Igniter.exists?(igniter, path) do
-      Edits.update_file(igniter, path, fn current ->
+      Gen.update_file(igniter, path, fn current ->
         if String.contains?(current, "current_user") or current == content do
           {:ok, current}
         else
@@ -190,12 +106,6 @@ defmodule Tinderbox.Gen.Saas.Web do
     else
       Igniter.create_new_file(igniter, path, content)
     end
-  end
-
-  # The template is a module body, like every other; this wraps it for the one
-  # place a whole file is written over an existing one.
-  defp module_source(module, body) do
-    "defmodule #{inspect(module)} do\n#{body}\nend\n"
   end
 
   # -- LiveViews and routes --------------------------------------------------

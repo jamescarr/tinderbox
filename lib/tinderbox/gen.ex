@@ -51,6 +51,74 @@ defmodule Tinderbox.Gen do
   end
 
   @doc """
+  Applies `fun` to the content of the file at `path`: `{:ok, new_content}`
+  rewrites it, `{:warning, message}` leaves it alone and warns. A missing file is
+  warned about rather than created.
+  """
+  @spec update_file(
+          Igniter.t(),
+          Path.t(),
+          (String.t() -> {:ok, String.t()} | {:warning, String.t()})
+        ) :: Igniter.t()
+  def update_file(igniter, path, fun) do
+    if Igniter.exists?(igniter, path) do
+      igniter = Igniter.include_existing_file(igniter, path)
+      source = Rewrite.source!(igniter.rewrite, path)
+
+      case fun.(Rewrite.Source.get(source, :content)) do
+        {:ok, content} -> Igniter.update_file(igniter, path, &set_content(&1, igniter, content))
+        {:warning, message} -> Igniter.add_warning(igniter, message)
+      end
+    else
+      Igniter.add_warning(igniter, "#{path} does not exist, so it was not edited.")
+    end
+  end
+
+  defp set_content(source, igniter, content) do
+    if Rewrite.Source.get(source, :content) == content do
+      source
+    else
+      Igniter.update_source(source, igniter, :content, content)
+    end
+  end
+
+  @doc """
+  Replaces the whole of `module` with `body` (a module body, like every
+  template) when `replace?` returns true for its current source, and creates
+  the module when it does not exist.
+
+  `replace?` is how a generator recognizes a file it may overwrite: Phoenix's
+  untouched demo layout, say, rather than one the developer has customized.
+  """
+  @spec replace_module(Igniter.t(), module(), String.t(), (String.t() -> boolean())) ::
+          Igniter.t()
+  def replace_module(igniter, module, body, replace?) when is_function(replace?, 1) do
+    case Igniter.Project.Module.find_module(igniter, module) do
+      {:ok, {igniter, source, _zipper}} ->
+        # Through the Elixir updater, not a plain file write: only then does the
+        # project's formatter (with the HEEx plugin) run on the result.
+        Igniter.update_elixir_file(igniter, source.path, fn zipper ->
+          current = zipper |> Sourceror.Zipper.root() |> Sourceror.to_string()
+
+          if replace?.(current) do
+            {:ok,
+             module |> module_source(body) |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
+          else
+            {:ok, zipper}
+          end
+        end)
+
+      {:error, igniter} ->
+        Igniter.Project.Module.create_module(igniter, module, body)
+    end
+  end
+
+  # Templates are module bodies; this wraps one for a whole-file write.
+  defp module_source(module, body) do
+    "defmodule #{inspect(module)} do\n#{body}\nend\n"
+  end
+
+  @doc """
   Ensures every line in `lines` is in `.gitignore`, creating the file when it is
   missing. Lines already present are left alone, so this is safe to re-run.
 

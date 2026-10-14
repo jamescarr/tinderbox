@@ -58,8 +58,6 @@ defmodule Test.MixProject do
       {:slugify, "~> 1.3"},
       {:stripity_stripe, "~> 3.3"},
       {:gnat, "~> 1.18"},
-      {:petal_components, "~> 4.17"},
-      {:websock_adapter, "~> 0.6", override: true},
       {:open_api_spex, "~> 3.0"},
       {:ash_paper_trail, "~> 0.8"},
       {:ash_oban, "~> 0.9"},

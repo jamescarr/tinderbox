@@ -100,11 +100,6 @@ defp current_plan?(%{plan_key: key} = subscription, plan),
 
 defp current_plan?(_none, _plan), do: false
 
-defp status_class(:active), do: "badge-success"
-defp status_class(:trialing), do: "badge-info"
-defp status_class(:past_due), do: "badge-warning"
-defp status_class(_status), do: "badge-error"
-
 @impl true
 def render(assigns) do
   ~H"""
@@ -114,76 +109,86 @@ def render(assigns) do
     current_organization={@current_organization}
     organizations={@organizations}
     unread_count={@unread_count}
+    current_page={:billing}
   >
-    <.header>
+    <.page_header>
       Billing
       <:subtitle>Subscription for {@current_organization.name}</:subtitle>
-    </.header>
+    </.page_header>
 
-    <div :if={!@configured?} role="alert" class="alert alert-warning">
-      <.icon name="hero-exclamation-triangle" class="size-5" />
-      <span>
-        Stripe is not configured. Put your test-mode <code>STRIPE_SECRET_KEY</code>,
-        <code>STRIPE_PRICE_STARTER</code> and <code>STRIPE_PRICE_PRO</code> in
-        <code>.mise.local.toml</code> (or <code>.env</code>) and restart.
-      </span>
-    </div>
+    <div class="space-y-6">
+      <.alert :if={!@configured?} kind="warning" title="Stripe is not configured">
+        Put your test-mode <code>STRIPE_SECRET_KEY</code>, <code>STRIPE_PRICE_STARTER</code>
+        and <code>STRIPE_PRICE_PRO</code> in <code>.mise.local.toml</code>
+        (or <code>.env</code>) and restart.
+      </.alert>
 
-    <div :if={@subscription} class="card bg-base-100 shadow" id="subscription">
-      <div class="card-body">
-        <h2 class="card-title">
-          {@subscription.plan_key || "Subscription"}
-          <span class={["badge", status_class(@subscription.status)]}>{@subscription.status}</span>
-        </h2>
-        <p :if={@subscription.current_period_end} class="text-sm text-base-content/70">
-          {if @subscription.cancel_at_period_end, do: "Ends", else: "Renews"}
-          on {Calendar.strftime(@subscription.current_period_end, "%Y-%m-%d")}
-        </p>
-        <p :if={@subscription.cancel_at_period_end} class="text-sm text-warning">
-          This subscription will not renew.
-        </p>
-        <div :if={@manager?} class="card-actions justify-end">
-          <.button phx-click="portal">Manage billing</.button>
-        </div>
-      </div>
-    </div>
-
-    <p :if={!@subscription} class="text-base-content/70">
-      This organization has no subscription yet.
-    </p>
-
-    <div class="grid gap-4 sm:grid-cols-2">
-      <div :for={plan <- @plans} class="card bg-base-100 shadow" id={"plan-#{plan.key}"}>
-        <div class="card-body">
-          <h3 class="card-title">{plan.name}</h3>
-          <p class="text-base-content/70">{plan[:description]}</p>
-          <div :if={@manager?} class="card-actions justify-end">
-            <span :if={current_plan?(@subscription, plan)} class="badge badge-outline">
-              Current plan
+      <.card id="subscription">
+        <:title>Current subscription</:title>
+        <:actions :if={@manager? and @subscription}>
+          <button type="button" class="btn btn-sm" phx-click="portal">
+            <.icon name="hero-arrow-top-right-on-square-micro" class="size-4" /> Manage billing
+          </button>
+        </:actions>
+        <div :if={@subscription} class="space-y-2">
+          <div class="flex flex-wrap items-center gap-3">
+            <span class="font-display text-xl font-semibold">
+              {@subscription.plan_key || "Subscription"}
             </span>
-            <.button
-              :if={!subscribed?(@subscription)}
-              variant="primary"
-              phx-click="subscribe"
-              phx-value-plan={plan.key}
-              disabled={!@configured?}
-            >
-              Subscribe
-            </.button>
-            <.button
-              :if={subscribed?(@subscription) and !current_plan?(@subscription, plan)}
-              phx-click="portal"
-            >
-              Switch in billing portal
-            </.button>
+            <.status_badge status={@subscription.status} />
           </div>
+          <p :if={@subscription.current_period_end} class="text-sm text-base-content/70">
+            {if @subscription.cancel_at_period_end, do: "Ends", else: "Renews"}
+            on {Calendar.strftime(@subscription.current_period_end, "%Y-%m-%d")}
+          </p>
+          <p :if={@subscription.cancel_at_period_end} class="text-sm text-warning">
+            This subscription will not renew.
+          </p>
         </div>
-      </div>
-    </div>
+        <.empty_state :if={!@subscription} icon="hero-credit-card" title="No subscription yet">
+          Choose a plan below to start one.
+        </.empty_state>
+      </.card>
 
-    <p :if={!@manager?} class="text-sm text-base-content/70">
-      Only owners and admins can change the subscription.
-    </p>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <.card
+          :for={plan <- @plans}
+          id={"plan-#{plan.key}"}
+          class={current_plan?(@subscription, plan) && "border-primary"}
+        >
+          <:title>{plan.name}</:title>
+          <:actions :if={current_plan?(@subscription, plan)}>
+            <.badge color="primary">Current plan</.badge>
+          </:actions>
+          <p class="text-sm text-base-content/70">{plan[:description]}</p>
+          <:footer :if={@manager? and !current_plan?(@subscription, plan)}>
+            <div class="flex justify-end">
+              <.button
+                :if={!subscribed?(@subscription)}
+                variant="primary"
+                phx-click="subscribe"
+                phx-value-plan={plan.key}
+                disabled={!@configured?}
+              >
+                Subscribe
+              </.button>
+              <button
+                :if={subscribed?(@subscription)}
+                type="button"
+                class="btn btn-sm"
+                phx-click="portal"
+              >
+                Switch in billing portal
+              </button>
+            </div>
+          </:footer>
+        </.card>
+      </div>
+
+      <.alert :if={!@manager?} kind="info">
+        Only owners and admins can change the subscription.
+      </.alert>
+    </div>
   </Layouts.app>
   """
 end

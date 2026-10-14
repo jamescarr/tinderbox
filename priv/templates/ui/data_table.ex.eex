@@ -1,0 +1,185 @@
+@moduledoc """
+A table in a card: searchable, sortable and paginated over
+`<%= inspect(@web) %>.UI.ListState`, or a plain list of rows when given no state.
+"""
+use Phoenix.Component
+
+import <%= inspect(@web) %>.CoreComponents, only: [icon: 1]
+import <%= inspect(@web) %>.UI.Components, only: [empty_state: 1, pagination: 1, search_input: 1]
+
+alias <%= inspect(@web) %>.UI.ListState
+
+@doc ~S"""
+Renders one page of rows in a card, with a search field (`searchable`),
+sortable column headers and pagination. Every interaction sends `on_change`
+(to `target`, for a LiveComponent) with the params `ListState.update/2`
+expects; see `<%= inspect(@web) %>.UI.ListState` for the LiveView side.
+
+Without a `state` it renders `rows` as given, with no search, sorting or
+paging: the same look for a short list, such as the holdings on a detail page.
+
+The `:empty` slot shows when there are no rows at all; a search that matches
+nothing says so instead.
+
+## Examples
+
+    <.data_table id="users" rows={@rows} state={@table} searchable row_id={&"user-#{&1.id}"}>
+      <:col :let={user} label="Email" field={:email} sortable>{user.email}</:col>
+      <:col :let={user} label="Joined" field={:inserted_at} sortable>
+        {format_datetime(user.inserted_at)}
+      </:col>
+      <:action :let={user}>
+        <.link navigate={~p"/users/#{user}"} class="btn btn-ghost btn-xs">View</.link>
+      </:action>
+      <:toolbar><.button variant="primary">Invite</.button></:toolbar>
+    </.data_table>
+
+    <.data_table id="holdings" title="Holdings" rows={@entity.holdings}>
+      <:col :let={holding} label="Name">{holding.name}</:col>
+      <:toolbar><.button phx-click="new_holding">Add holding</.button></:toolbar>
+    </.data_table>
+"""
+attr :id, :string, required: true
+attr :rows, :list, required: true, doc: "the current page, from `ListState.run/2`, or every row"
+attr :state, ListState, default: nil, doc: "search, sort and paging; nil for a plain list"
+attr :title, :string, default: nil, doc: "a heading beside the toolbar"
+attr :on_change, :string, default: "table", doc: "the event every interaction sends"
+attr :target, :any, default: nil
+attr :row_id, :any, default: nil, doc: "a function from a row to its DOM id"
+attr :row_click, :any, default: nil, doc: "a function from a row to a `JS` command or event"
+attr :searchable, :boolean, default: false, doc: "show a search field (needs a `state`)"
+attr :search_placeholder, :string, default: "Search…"
+
+slot :col, required: true do
+  attr :label, :string, required: true
+  attr :field, :atom, doc: "the row field this column sorts by"
+  attr :sortable, :boolean
+  attr :class, :any
+  attr :align, :atom, values: [:left, :right]
+end
+
+slot :action, doc: "per-row actions, in the last column"
+slot :toolbar, doc: "controls beside the search field"
+slot :empty, doc: "what to show instead of an empty table"
+
+def data_table(assigns) do
+  ~H"""
+  <div class="rounded-box border border-base-300 bg-base-100 shadow-sm">
+    <div
+      :if={@title || (@searchable and @state) || @toolbar != []}
+      class="flex flex-col gap-3 border-b border-base-300 p-4 sm:flex-row sm:items-center"
+    >
+      <h2 :if={@title} class="text-base font-semibold">{@title}</h2>
+      <form
+        :if={@searchable and @state}
+        id={"#{@id}-search"}
+        role="search"
+        phx-change={@on_change}
+        phx-submit={@on_change}
+        phx-target={@target}
+      >
+        <.search_input
+          id={"#{@id}-search-input"}
+          value={@state.search}
+          placeholder={@search_placeholder}
+        />
+      </form>
+      <div :if={@toolbar != []} class="flex flex-wrap items-center gap-2 sm:ml-auto">
+        {render_slot(@toolbar)}
+      </div>
+    </div>
+
+    <div :if={@rows != []} class="overflow-x-auto">
+      <table id={@id} class="table">
+        <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+          <tr>
+            <th
+              :for={col <- @col}
+              scope="col"
+              aria-sort={aria_sort(@state, col)}
+              class={[col[:align] == :right && "text-right", col[:class]]}
+            >
+              <button
+                :if={sortable?(@state, col)}
+                type="button"
+                class="inline-flex cursor-pointer items-center gap-1 rounded-selector uppercase hover:text-base-content focus-visible:outline-2 focus-visible:outline-primary"
+                phx-click={@on_change}
+                phx-value-sort={col.field}
+                phx-target={@target}
+              >
+                {col.label}
+                <.icon name={sort_icon(@state, col)} class="size-3.5" />
+              </button>
+              <span :if={!sortable?(@state, col)}>{col.label}</span>
+            </th>
+            <th :if={@action != []} scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={row <- @rows}
+            id={@row_id && @row_id.(row)}
+            class={["hover:bg-base-200/40", @row_click && "cursor-pointer"]}
+          >
+            <td
+              :for={col <- @col}
+              phx-click={@row_click && @row_click.(row)}
+              class={[col[:align] == :right && "text-right tabular-nums", col[:class]]}
+            >
+              {render_slot(col, row)}
+            </td>
+            <td :if={@action != []} class="w-0 text-right whitespace-nowrap">
+              <div class="flex justify-end gap-1">{render_slot(@action, row)}</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div :if={@rows == []} class="p-4">
+      {if searching?(@state), do: nil, else: render_slot(@empty)}
+      <.empty_state
+        :if={@empty == [] or searching?(@state)}
+        icon={if searching?(@state), do: "hero-magnifying-glass", else: "hero-inbox"}
+        title={empty_title(@state)}
+      />
+    </div>
+
+    <div :if={@state && @state.total > 0} class="border-t border-base-300 px-4 py-3">
+      <.pagination
+        page={@state.page}
+        page_size={@state.page_size}
+        total={@state.total}
+        on_change={@on_change}
+        target={@target}
+      />
+    </div>
+  </div>
+  """
+end
+
+defp sortable?(nil, _col), do: false
+
+defp sortable?(_state, col),
+  do: col[:sortable] == true and is_atom(col[:field]) and col[:field] != nil
+
+defp searching?(%ListState{search: search}), do: search != ""
+defp searching?(nil), do: false
+
+defp aria_sort(%ListState{sort_by: field, sort_dir: dir}, %{field: field})
+     when not is_nil(field),
+     do: if(dir == :asc, do: "ascending", else: "descending")
+
+defp aria_sort(state, col) do
+  if sortable?(state, col), do: "none"
+end
+
+defp sort_icon(%ListState{sort_by: field, sort_dir: dir}, %{field: field})
+     when not is_nil(field),
+     do: if(dir == :asc, do: "hero-chevron-up-micro", else: "hero-chevron-down-micro")
+
+defp sort_icon(_state, _col), do: "hero-chevron-up-down-micro"
+
+defp empty_title(%ListState{search: ""}), do: "Nothing here yet"
+defp empty_title(%ListState{search: search}), do: ~s(No results for "#{search}")
+defp empty_title(nil), do: "Nothing here yet"

@@ -229,20 +229,19 @@ defmodule Tinderbox.Gen.SaasTest do
     assert_has(config, "default: 10")
   end
 
-  test "the stylesheet and script load Petal Components", %{igniter: igniter} do
+  test "the SaaS stack themes with the default themepack and drops Petal", %{igniter: igniter} do
     css = source(igniter, "assets/css/app.css")
-    js = source(igniter, "assets/js/app.js")
 
-    assert css =~ ~s|@import "../../deps/petal_components/assets/default.css";|
-    assert css =~ ~s|@source "../../deps/petal_components/**/*.*ex";|
-    assert js =~ "import PetalComponents from"
-    assert js =~ "hooks: {...colocatedHooks, ...PetalComponents}"
+    assert css =~ "/* tinderbox:themepack ember"
+    refute css =~ "petal_components"
+    refute source(igniter, "assets/js/app.js") =~ "PetalComponents"
   end
 
   test "the layout and landing page know the signed-in user", %{igniter: igniter} do
     layouts = source(igniter, "lib/test_web/components/layouts.ex")
 
     assert_has(layouts, "attr :current_user")
+    assert_has(layouts, "<.app_shell")
     assert_has(layouts, "attr :wide, :boolean")
     assert_has(layouts, ~s|action={~p"/organizations/switch"}|)
     assert_has(layouts, "def flash_group(assigns)")
@@ -255,16 +254,14 @@ defmodule Tinderbox.Gen.SaasTest do
              "Go to dashboard"
   end
 
-  test "the web module gains the Petal helpers next to the daisyUI ones", %{igniter: igniter} do
+  test "pages use the kit through html_helpers", %{igniter: igniter} do
     web = source(igniter, "lib/test_web.ex")
+    users = source(igniter, "lib/test_web/admin/users_live.ex")
 
-    assert_has(web, "def admin_live_view do")
-    assert_has(web, "def admin_html do")
-    assert_has(web, "use PetalComponents")
-    assert_has(web, "import TestWeb.CoreComponents")
-    # CoreComponents stay out of the admin helpers: both define `button/1` and `table/1`.
-    assert [_html, admin] = String.split(web, "defp admin_html_helpers", parts: 2)
-    refute admin =~ "import TestWeb.CoreComponents"
+    assert_has(web, "use TestWeb.UI")
+    refute_has(web, "admin_live_view")
+    assert_has(users, "ListState.update")
+    refute_has(users, "PetalComponents")
   end
 
   test "the organization pages share LiveHelpers, and a manager-only hook exists",

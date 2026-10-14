@@ -15,9 +15,13 @@ dev-loop tasks.
    Brokers: `sqs`, `pubsub`, `rabbitmq`, `kafka`, `nats`.
 3. **SaaS stack** — a Phoenix LiveView application with password and SSO sign-in,
    organizations with memberships and invitations, notifications (in-app inbox and
-   email), Stripe subscriptions, an admin area built with Petal Components, a JSON:API
-   with OpenAPI docs, JetStream domain events, feature flags, health, metrics and
-   tracing, a release `Dockerfile` and a CI workflow.
+   email), Stripe subscriptions, an admin area, a JSON:API with OpenAPI docs,
+   JetStream domain events, feature flags, health, metrics and tracing, a release
+   `Dockerfile` and a CI workflow — every page built on the themepack UI kit.
+
+Separately, **`mix tinderbox.gen.ui`** adds that UI kit to any Phoenix LiveView
+project (`--stack ui` on install): a themeable component library, an app shell
+and a live component gallery at `/dev/ui`. See [UI kit](#ui-kit-mix-tinderboxgenui).
 
 All stacks also get object storage (`<App>.Storage`) with two interchangeable
 backends — `s3` through `ex_aws` and `gcs` through `Req` — both pointed at the local
@@ -43,7 +47,13 @@ mix igniter.new my_worker --sup \
 mix igniter.new my_app \
   --with phx.new \
   --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \
-  --stack saas
+  --stack saas --themepack ember
+
+# Only the UI kit, on a plain Phoenix app (no compose, no mise)
+mix igniter.new my_app \
+  --with phx.new \
+  --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \
+  --stack ui --themepack harbor
 ```
 
 `@path:…` installs from the working copy. To install from this repository instead,
@@ -87,7 +97,8 @@ mix phx.server                     # or: mix run --no-halt
 
 | Flag | Applies to | Default | Meaning |
 |---|---|---|---|
-| `--stack api\|worker\|saas` | installer | — (required) | which stack to generate |
+| `--stack api\|worker\|saas\|ui` | installer | — (required) | which stack to generate; `ui` installs only the UI kit |
+| `--themepack ember\|slate\|harbor` | saas, ui | `ember` | the UI kit's look; see [UI kit](#ui-kit-mix-tinderboxgenui) |
 | `--broker sqs\|pubsub\|rabbitmq\|kafka\|nats` | worker | `sqs` | messaging technology for both the inbound consumer and the outbound publisher. The SaaS stack always runs on `nats` (JetStream) and ignores the flag |
 | `--no-compose` | both | compose generated | skip `docker-compose.yml` / `.env.example` |
 | `--no-mise` | both | mise generated | skip `.mise.toml` |
@@ -101,7 +112,9 @@ them, and then writes nothing at all. The edits it makes to files that already e
 are guarded and not applied twice: dependencies, `config/runtime.exs`, `ash_domains`,
 the supervisor children, `.gitignore`, and the `/api` mount in the router (the
 guarded edits of the SaaS stack are covered by a test that applies it twice; the
-real re-run was only seen to refuse, see below). `tinderbox.install` removes the
+real re-run was only seen to refuse, see below). `tinderbox.gen.ui` is the exception:
+it skips kit modules that exist and is meant to be re-run, to switch packs.
+`tinderbox.install` removes the
 `tinderbox` path dependency from `mix.exs` when it finishes, because the path only
 exists on the generating machine and `mix deps.get` fails anywhere else (CI first);
 add it back for the run, as its notice says, before re-running a task.
@@ -234,7 +247,7 @@ Ash packages the other stacks use, then adds:
   through the installer's `:api` pipeline. A request without a token gets `200` with
   an empty `data` list, not `403`: the installer configures Ash to filter instead of
   forbid.
-* **Admin** — `/admin` (Petal Components): dashboard, users, organizations (and one
+* **Admin** — `/admin` (the UI kit, in the app shell): dashboard, users, organizations (and one
   organization), subscriptions, and the FunWithFlags dashboard at `/admin/flags`.
   Only `:admin` users get in: anyone else is sent to the dashboard, the flag
   dashboard answers `404`, and an anonymous visitor goes to sign-in.
@@ -261,7 +274,8 @@ Ash packages the other stacks use, then adds:
   `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
   shared by the organization pages); a `:require_manager` hook in
   `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
-  for pages made of tables; `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
+  for pages made of tables and `current_page` to highlight its navigation entry;
+  `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
   the application's own metrics; `<App>.Fixtures` and
   `<App>Web.LiveTestHelpers.sign_in/2` in `test/support`, used by
   `test/<app>_web/live/members_live_test.exs`; `mix <app>.gen.domain`, which runs
@@ -280,9 +294,48 @@ Oban's PG notifier); on an IPv6-only private network (Fly) set `NATS_INET6=true`
 `/health` is exempt from `force_ssl`, so a platform's plain-HTTP health check is not
 redirected.
 
-The LiveViews use Petal Components next to Phoenix's daisyUI core components.
-`petal_components` pins `websock_adapter ~> 0.5.7` and never calls it, while Phoenix
-locks 0.6.x, so the generator adds `{:websock_adapter, "~> 0.6", override: true}`.
+Every page uses the UI kit (`<App>Web.UI`, see below) next to Phoenix's daisyUI core
+components; the stack applies the `--themepack` (default `ember`) before anything
+else.
+
+### UI kit (`mix tinderbox.gen.ui`)
+
+Needs a Phoenix LiveView project with its Tailwind + daisyUI assets (`phx.new`'s
+defaults); it refuses one without `assets/css/app.css`. It works on a plain
+`phx.new` project and is part of the SaaS stack.
+
+A **themepack** is a light and a dark daisyUI theme (colors, radii, density), font
+stacks, and the shape of the app shell. All packs share one component kit:
+
+| Pack | Shell | Look |
+|---|---|---|
+| `ember` (default) | sidebar | Warm orange on charcoal, medium density |
+| `slate` | sidebar | Neutral grays with indigo, compact: dense tool UIs |
+| `harbor` | top navigation | Blue and white, roomy |
+
+The generator:
+
+* replaces Phoenix's two stock themes in `assets/css/app.css` with the pack's,
+  between `/* tinderbox:themepack … */` markers (the themes stay named `light` and
+  `dark`, so Phoenix's theme toggle keeps working), and sets
+  `config :<app>, <App>Web.UI, themepack: …, shell: …`;
+* creates the kit, once — after that it is the project's code: `<App>Web.UI`
+  (`use`d by `html_helpers/0`, so every template sees it), `.Components`
+  (`page_header`, `card`, `stat_grid`, `badge`, `status_badge`, `alert`,
+  `empty_state`, `description_list`, `tabs`, `modal`, `dropdown`, `avatar`, `feed`,
+  `form_section`, `search_input`, `pagination`, `relative_time/1`,
+  `format_datetime/1`), `.Shell` (`app_shell`, `nav_item`, `nav_section`,
+  `user_menu`), `.DataTable` (searchable, sortable, paginated) and `.ListState`
+  (the table's in-memory search/sort/paging state, with its test);
+* mounts `<App>Web.UIGalleryLive` at `/dev/ui` inside Phoenix's dev-only scope:
+  every component, live, in the current pack;
+* on a plain project, replaces Phoenix's demo `Layouts.app` with one in the app
+  shell (a customized layout is left alone, with a notice).
+
+Switch packs by re-running it: `mix tinderbox.gen.ui --themepack slate` rewrites
+only the themepack region of `app.css` and the config. Without `--themepack` the
+installed pack is kept. Components style themselves only through daisyUI's semantic
+colors and radii, so a pack restyles all of them, in light and dark.
 
 ### All stacks
 
@@ -464,6 +517,26 @@ Beyond that, generated projects were run end to end against the emulators:
   `Invalid --queues entry "bad name"` and changed nothing. `mise run check` then
   passed (7 tests). `MIX_ENV=prod mix compile --force --warnings-as-errors` compiled
   the task without igniter, and running it in prod exited 1 saying it needs igniter.
+* **ui** — `mix igniter.new ui_plain --with phx.new --with-args="--no-ecto" --install
+  tinderbox@path:… --stack ui --themepack harbor --yes`: format, warnings-as-errors
+  compile (dev and prod, so no `~p"/dev/…"` slipped in) and 11 tests passed (Phoenix's
+  five and the generated `ListStateTest`'s six), and the built CSS carries harbor's
+  tokens. In a browser at `/dev/ui`: the topnav shell, searching, sorting (with
+  `aria-sort` flipping) and paging the table, the modal opening and closing on Escape
+  with focus moved in and back, tabs patching `?tab=`, and light/dark. Re-running
+  `mix tinderbox.gen.ui --themepack slate` changed only `assets/css/app.css` and
+  `config/config.exs`, and the gallery came up in the sidebar shell, whose drawer
+  opens from the menu button and closes on the overlay at phone width. Phoenix's own
+  landing page does not use `Layouts.app`, so it keeps its look.
+* **saas on the UI kit** — generated with `--themepack ember` (and again with
+  `slate`): no `petal` in `mix.exs` or `mix.lock`, 13 tests passed. Under
+  `mix phx.server` (Postgres, Mailpit and NATS only, on other ports): the topnav
+  landing page signed out; registration, creating an organization, inviting, the
+  dashboard, members, inbox, notification settings and billing in the sidebar shell
+  with the current page highlighted; `/admin` and its users (search, sort by
+  Registered, Make admin), organizations → View and subscriptions pages; the flag
+  dashboard; light and dark. SSO was not exercised in this run (another project held
+  Dex's port); `ADMIN_EMAILS` made the password user an admin.
 * **saas production config and building blocks** — a project generated from this
   branch (`tb_learn`, ports as above, against the compose services of another
   project) compiled with `--warnings-as-errors`, passed its 7 tests without the

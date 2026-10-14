@@ -1,0 +1,163 @@
+@moduledoc """
+Search, sort and paging over a list in memory: the state behind
+`<%= inspect(@web) %>.UI.DataTable.data_table/1`.
+
+Pure data, no Phoenix. A LiveView keeps the rows and the state in assigns,
+feeds every `"table"` event's params to `update/2`, and renders the page
+`run/2` returns:
+
+    def mount(_params, _session, socket) do
+      state = ListState.new(search_fields: [:email], sortable: [:email, :inserted_at], sort_by: :inserted_at, sort_dir: :desc)
+      {:ok, socket |> assign(all_rows: list_users()) |> run(state)}
+    end
+
+    def handle_event("table", params, socket),
+      do: {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
+
+    defp run(socket, state) do
+      {rows, state} = ListState.run(socket.assigns.all_rows, state)
+      assign(socket, rows: rows, table: state)
+    end
+
+For lists too large to hold in memory, keep the same state and translate it
+into a query instead of calling `run/2`.
+"""
+
+defstruct search: "",
+          search_fields: [],
+          sortable: [],
+          sort_by: nil,
+          sort_dir: :asc,
+          page: 1,
+          page_size: 25,
+          total: 0
+
+@type t :: %__MODULE__{
+        search: String.t(),
+        search_fields: [atom()],
+        sortable: [atom()],
+        sort_by: atom() | nil,
+        sort_dir: :asc | :desc,
+        page: pos_integer(),
+        page_size: pos_integer(),
+        total: non_neg_integer()
+      }
+
+@doc "A new state; unknown options raise."
+@spec new(keyword()) :: t()
+def new(opts \\ []), do: struct!(__MODULE__, opts)
+
+@doc """
+Applies an event's params:
+
+  * `"search"` - the (trimmed) search, back to page 1,
+  * `"sort"` - a field in `sortable`: the current one flips direction, another
+    starts ascending, back to page 1; anything else is ignored,
+  * `"page"` - the page number; `run/2` clamps it to the last page.
+
+Every other key (`"_target"`, say) is ignored.
+"""
+@spec update(t(), map()) :: t()
+def update(%__MODULE__{} = state, params) when is_map(params) do
+  state
+  |> put_page(params["page"])
+  |> put_sort(params["sort"])
+  |> put_search(params["search"])
+end
+
+defp put_search(state, search) when is_binary(search),
+  do: %{state | search: String.trim(search), page: 1}
+
+defp put_search(state, _search), do: state
+
+defp put_sort(state, field) when is_binary(field) do
+  case Enum.find(state.sortable, &(Atom.to_string(&1) == field)) do
+    nil -> state
+    current when current == state.sort_by -> %{state | sort_dir: flip(state.sort_dir), page: 1}
+    other -> %{state | sort_by: other, sort_dir: :asc, page: 1}
+  end
+end
+
+defp put_sort(state, _field), do: state
+
+defp put_page(state, page) when is_integer(page), do: %{state | page: max(1, page)}
+
+defp put_page(state, page) when is_binary(page) do
+  case Integer.parse(page) do
+    {page, ""} -> put_page(state, page)
+    _invalid -> state
+  end
+end
+
+defp put_page(state, _page), do: state
+
+defp flip(:asc), do: :desc
+defp flip(:desc), do: :asc
+
+@doc """
+Filters, sorts and pages `rows` (maps or structs) by `state`, returning the
+page and the state with `total` set and `page` clamped to the last page.
+
+The search is a case-insensitive substring match on any of `search_fields`.
+The sort is stable and puts missing (nil) values last in both directions;
+dates, times and decimals are compared by value, strings case-insensitively.
+"""
+@spec run([map()], t()) :: {[map()], t()}
+def run(rows, %__MODULE__{} = state) when is_list(rows) do
+  rows = rows |> filter(state) |> sort(state)
+  total = length(rows)
+  last = max(1, div(total + state.page_size - 1, state.page_size))
+  page = state.page |> max(1) |> min(last)
+
+  {Enum.slice(rows, (page - 1) * state.page_size, state.page_size),
+   %{state | total: total, page: page}}
+end
+
+defp filter(rows, %{search: ""}), do: rows
+
+defp filter(rows, %{search: search, search_fields: fields}) do
+  needle = String.downcase(search)
+
+  Enum.filter(rows, fn row ->
+    Enum.any?(fields, &(row |> Map.get(&1) |> text() |> String.contains?(needle)))
+  end)
+end
+
+defp text(nil), do: ""
+defp text(value) when is_binary(value), do: String.downcase(value)
+defp text(value), do: value |> to_string() |> String.downcase()
+
+defp sort(rows, %{sort_by: nil}), do: rows
+
+defp sort(rows, %{sort_by: field, sort_dir: dir}) do
+  {present, missing} = Enum.split_with(rows, &(not is_nil(Map.get(&1, field))))
+
+  sorted =
+    case comparable(Enum.map(present, &Map.get(&1, field))) do
+      nil -> Enum.sort_by(present, &sort_key(Map.get(&1, field)), dir)
+      module -> Enum.sort_by(present, &Map.get(&1, field), {dir, module})
+    end
+
+  sorted ++ missing
+end
+
+# Structs that define compare/2 (DateTime, Date, Decimal…) are not ordered
+# correctly by term order, so `Enum.sort_by/3` is told to use it.
+defp comparable([%module{} | _] = values) do
+  if Code.ensure_loaded?(module) and function_exported?(module, :compare, 2) and
+       Enum.all?(values, &is_struct(&1, module)) do
+    module
+  end
+end
+
+defp comparable(_values), do: nil
+
+# Strings, and structs that print as strings (case-insensitive strings, say),
+# sort case-insensitively.
+defp sort_key(value) when is_binary(value), do: String.downcase(value)
+
+defp sort_key(value) when is_struct(value) do
+  if String.Chars.impl_for(value), do: value |> to_string() |> String.downcase(), else: value
+end
+
+defp sort_key(value), do: value

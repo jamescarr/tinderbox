@@ -3,8 +3,8 @@ defmodule Tinderbox.Gen.Saas do
   Generates the SaaS stack on top of a Phoenix project: sign-in with password and
   generic OIDC (SSO), organizations with memberships and invitations, Stripe
   subscriptions, an in-house notification platform behind a Knock-shaped facade,
-  NATS JetStream events, a Petal Components admin section, and the operational
-  pieces (health, metrics, tracing, mail, release, CI).
+  NATS JetStream events, an admin section, all on the themepack UI kit, and the
+  operational pieces (health, metrics, tracing, mail, release, CI).
 
   Igniter installs the Ash/AshAuthentication/Oban packages and runs their
   installers *before* this module runs (they are declared in
@@ -16,14 +16,15 @@ defmodule Tinderbox.Gen.Saas do
 
   | Module | Concern |
   |---|---|
+  | `Tinderbox.Gen.Ui` | themepack + UI kit (`--themepack`) |
   | `Tinderbox.Gen.Storage` | object storage wiring both stacks share |
   | `#{inspect(__MODULE__)}.Accounts` | sign-in strategies, roles, organizations, memberships, invitations |
-  | `#{inspect(__MODULE__)}.Web` | Petal install, layout, landing page, LiveViews, routes |
+  | `#{inspect(__MODULE__)}.Web` | layout, landing page, LiveViews, routes |
   | `#{inspect(__MODULE__)}.Billing` | Stripe plans, subscriptions, webhooks, AshOban sync |
   | `#{inspect(__MODULE__)}.Notifications` | notification facade, Local adapter, inbox, preferences, email |
   | `#{inspect(__MODULE__)}.Events` | JetStream publisher, stream bootstrap, consumer, Ash notifier |
   | `#{inspect(__MODULE__)}.Api` | AshJsonApi mount for the accounts domain |
-  | `#{inspect(__MODULE__)}.Admin` | `/admin` (Petal) and `/admin/flags` (FunWithFlags) |
+  | `#{inspect(__MODULE__)}.Admin` | `/admin` (UI kit) and `/admin/flags` (FunWithFlags) |
   | `#{inspect(__MODULE__)}.Ops` | health, PromEx, OpenTelemetry, mail, release, CI |
 
   Edits to files the Phoenix and Ash installers created are guarded so that
@@ -76,6 +77,7 @@ defmodule Tinderbox.Gen.Saas do
   @spec generate(Igniter.t(), assigns()) :: Igniter.t()
   def generate(igniter, assigns) do
     igniter
+    |> Tinderbox.Gen.Ui.install_kit(assigns[:opts])
     |> Accounts.apply(assigns)
     |> Web.apply(assigns)
     |> Billing.apply(assigns)

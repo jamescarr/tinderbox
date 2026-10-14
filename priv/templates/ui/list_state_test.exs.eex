@@ -1,0 +1,76 @@
+defmodule <%= inspect(@web) %>.UI.ListStateTest do
+  use ExUnit.Case, async: true
+
+  alias <%= inspect(@web) %>.UI.ListState
+
+  @rows [
+    %{id: 1, name: "Ada", email: "ada@example.com", plan: "team"},
+    %{id: 2, name: "grace", email: "GRACE@example.com", plan: nil},
+    %{id: 3, name: "Alan", email: nil, plan: "starter"}
+  ]
+
+  defp state(opts \\ []) do
+    ListState.new(
+      Keyword.merge(
+        [search_fields: [:name, :email], sortable: [:name, :plan, :at], page_size: 2],
+        opts
+      )
+    )
+  end
+
+  defp ids({rows, _state}), do: Enum.map(rows, & &1.id)
+
+  test "search is case-insensitive across the search fields, skips nils and resets the page" do
+    state = state(page: 2) |> ListState.update(%{"search" => " GRACE ", "_target" => ["search"]})
+
+    assert %{search: "GRACE", page: 1} = state
+    assert ids(ListState.run(@rows, state)) == [2]
+
+    assert ids(ListState.run(@rows, ListState.update(state, %{"search" => "example.com"}))) ==
+             [1, 2]
+  end
+
+  test "sorting the same field twice flips the direction; unsortable fields are ignored" do
+    state = ListState.update(state(page_size: 10), %{"sort" => "name"})
+    assert %{sort_by: :name, sort_dir: :asc} = state
+    assert ids(ListState.run(@rows, state)) == [1, 3, 2]
+
+    state = ListState.update(state, %{"sort" => "name"})
+    assert %{sort_by: :name, sort_dir: :desc} = state
+    assert ids(ListState.run(@rows, state)) == [2, 3, 1]
+
+    assert ListState.update(state, %{"sort" => "email"}) == state
+    assert ListState.update(state, %{"sort" => "no_such_field"}) == state
+  end
+
+  test "missing values sort last in both directions" do
+    asc = ListState.update(state(page_size: 10), %{"sort" => "plan"})
+    assert ids(ListState.run(@rows, asc)) == [3, 1, 2]
+
+    desc = ListState.update(asc, %{"sort" => "plan"})
+    assert ids(ListState.run(@rows, desc)) == [1, 3, 2]
+  end
+
+  test "date times sort chronologically, not in term order" do
+    rows = [
+      %{id: :new_year, at: ~U[2026-01-02 00:00:00Z]},
+      %{id: :new_years_eve, at: ~U[2025-12-31 23:00:00Z]}
+    ]
+
+    state = ListState.update(state(page_size: 10), %{"sort" => "at"})
+    assert ids(ListState.run(rows, state)) == [:new_years_eve, :new_year]
+  end
+
+  test "a page past the end is clamped to the last page" do
+    state = ListState.update(state(), %{"page" => "99"})
+    {rows, state} = ListState.run(@rows, state)
+
+    assert Enum.map(rows, & &1.id) == [3]
+    assert %{page: 2, total: 3} = state
+    assert ListState.update(state, %{"page" => "two"}) == state
+  end
+
+  test "no rows is an empty first page" do
+    assert {[], %{page: 1, total: 0}} = ListState.run([], state(page: 3))
+  end
+end

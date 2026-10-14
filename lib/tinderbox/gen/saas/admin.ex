@@ -1,6 +1,6 @@
 defmodule Tinderbox.Gen.Saas.Admin do
   @moduledoc """
-  The admin section at `/admin`, built with Petal Components.
+  The admin section at `/admin`, built with the themepack UI kit (`<App>Web.UI`).
 
   Every page requires a signed-in user with `role: :admin` (`<App>Web.LiveAdmin`):
 
@@ -12,12 +12,13 @@ defmodule Tinderbox.Gen.Saas.Admin do
   | `/admin/organizations/:id` | one organization: members, subscription, invitations |
   | `/admin/subscriptions` | every subscription synced from Stripe |
 
-  The list pages are Petal's `<.data_table>` over an in-memory list. The feature
-  flag dashboard at `/admin/flags` is `Tinderbox.Gen.Saas.Flags`.
+  The list pages are the kit's `<.data_table>` over an in-memory list, searched,
+  sorted and paged by `<App>Web.UI.ListState`. The feature flag dashboard at
+  `/admin/flags` is `Tinderbox.Gen.Saas.Flags`.
 
-  Admin pages `use <App>Web, :admin_live_view`, which this adds to the web module:
-  Petal Components and CoreComponents both define `button/1`, `table/1`, `icon/1`
-  and more, so the two sets never share a module.
+  Admin pages are ordinary `use <App>Web, :live_view` LiveViews rendered in
+  `<App>Web.Admin.Layouts`, the same app shell as the rest of the app with the
+  admin navigation.
   """
 
   alias Tinderbox.Gen
@@ -28,27 +29,8 @@ defmodule Tinderbox.Gen.Saas.Admin do
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
     igniter
-    |> add_web_helpers(assigns)
     |> create_modules(assigns)
     |> add_routes(assigns)
-  end
-
-  defp add_web_helpers(igniter, assigns) do
-    web = assigns[:web]
-    {igniter, present?} = Edits.source_contains?(igniter, web, "def admin_live_view")
-
-    if present? do
-      igniter
-    else
-      {gettext?, igniter} =
-        Igniter.Project.Module.module_exists(igniter, Module.concat(web, "Gettext"))
-
-      Edits.append_to_module(
-        igniter,
-        web,
-        Gen.render_template("saas/admin/web_helpers.ex.eex", [{:gettext?, gettext?} | assigns])
-      )
-    end
   end
 
   defp create_modules(igniter, assigns) do

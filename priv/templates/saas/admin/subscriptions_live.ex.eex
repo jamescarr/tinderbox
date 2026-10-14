@@ -2,23 +2,14 @@
 Admin: every subscription synced from Stripe.
 """
 
-use <%= inspect(@web) %>, :admin_live_view
+use <%= inspect(@web) %>, :live_view
 
 alias <%= inspect(@prefix) %>.Billing.Subscription
-alias PetalComponents.DataTable.Engine
-alias PetalComponents.DataTable.State
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
 on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
 
-@fields [
-  :organization_name,
-  :plan_key,
-  :status,
-  :current_period_end,
-  :cancel_at_period_end,
-  :stripe_subscription_id
-]
 @limit 1000
 
 @impl true
@@ -42,7 +33,20 @@ def mount(_params, _session, socket) do
       }
     end)
 
-  state = %State{order_by: [{:current_period_end, :desc}], page_size: 25}
+  state =
+    ListState.new(
+      search_fields: [:organization_name, :plan_key, :stripe_subscription_id],
+      sortable: [
+        :organization_name,
+        :plan_key,
+        :status,
+        :current_period_end,
+        :cancel_at_period_end
+      ],
+      sort_by: :current_period_end,
+      sort_dir: :desc,
+      page_size: 25
+    )
 
   {:ok,
    socket
@@ -53,18 +57,13 @@ end
 
 @impl true
 def handle_event("table", params, socket) do
-  {:noreply, run(socket, State.handle_op(socket.assigns.table, params, fields: @fields))}
+  {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
 end
 
 defp run(socket, state) do
-  {rows, state} = Engine.List.run(socket.assigns.all_rows, state)
+  {rows, state} = ListState.run(socket.assigns.all_rows, state)
   assign(socket, rows: rows, table: state)
 end
-
-defp status_color(:active), do: "success"
-defp status_color(:trialing), do: "info"
-defp status_color(:past_due), do: "warning"
-defp status_color(_status), do: "danger"
 
 defp date(nil), do: "—"
 defp date(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d")
@@ -77,27 +76,31 @@ def render(assigns) do
       id="subscriptions"
       rows={@rows}
       state={@table}
-      on_change="table"
       searchable
-      page_size_options={[25, 50, 100]}
+      search_placeholder="Search subscriptions…"
+      row_id={&"subscription-#{&1.id}"}
     >
-      <:col :let={row} field={:organization_name} label="Organization" sortable filterable="text">
-        <.link navigate={~p"/admin/organizations/#{row.organization_id}"} class="underline">
+      <:col :let={row} label="Organization" field={:organization_name} sortable>
+        <.link
+          navigate={~p"/admin/organizations/#{row.organization_id}"}
+          class="font-medium hover:text-primary"
+        >
           {row.organization_name}
         </.link>
       </:col>
-      <:col :let={row} field={:plan_key} label="Plan" sortable>{row.plan_key || "—"}</:col>
-      <:col :let={row} field={:status} label="Status" sortable>
-        <.badge color={status_color(row.status)} label={to_string(row.status)} />
+      <:col :let={row} label="Plan" field={:plan_key} sortable>{row.plan_key || "—"}</:col>
+      <:col :let={row} label="Status" field={:status} sortable>
+        <.status_badge status={row.status} />
       </:col>
-      <:col :let={row} field={:current_period_end} label="Period ends" sortable>
+      <:col :let={row} label="Period ends" field={:current_period_end} sortable>
         {date(row.current_period_end)}
       </:col>
-      <:col :let={row} field={:cancel_at_period_end} label="Cancels" sortable>
-        {if row.cancel_at_period_end, do: "yes", else: "no"}
+      <:col :let={row} label="Cancels" field={:cancel_at_period_end} sortable>
+        <.badge :if={row.cancel_at_period_end} color="warning">At period end</.badge>
+        <span :if={!row.cancel_at_period_end} class="text-base-content/50">No</span>
       </:col>
-      <:col :let={row} field={:stripe_subscription_id} label="Stripe id">
-        <code class="text-xs">{row.stripe_subscription_id}</code>
+      <:col :let={row} label="Stripe id">
+        <code class="font-mono text-xs">{row.stripe_subscription_id}</code>
       </:col>
     </.data_table>
   </AdminLayouts.admin>

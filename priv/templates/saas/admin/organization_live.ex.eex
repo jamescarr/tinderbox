@@ -2,9 +2,10 @@
 Admin: one organization, with its members, subscription and pending invitations.
 """
 
-use <%= inspect(@web) %>, :admin_live_view
+use <%= inspect(@web) %>, :live_view
 
 alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
 on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
@@ -24,56 +25,70 @@ def mount(%{"id" => id}, _session, socket) do
    |> assign(:pending, Enum.filter(organization.invitations, &is_nil(&1.accepted_at)))}
 end
 
-defp time(nil), do: "—"
-defp time(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
-
 @impl true
 def render(assigns) do
   ~H"""
   <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:organizations}>
-    <.card>
-      <.card_header title={@organization.name} description={"Slug: #{@organization.slug}"}>
-        <:action>
-          <.link navigate={~p"/admin/organizations"} class="text-sm underline">All organizations</.link>
-        </:action>
-      </.card_header>
-      <.card_content>
-        <p class="text-sm text-gray-500">Created {time(@organization.inserted_at)}</p>
-        <p class="text-sm text-gray-500">Stripe customer: {@organization.stripe_customer_id || "none"}</p>
-      </.card_content>
-    </.card>
+    <div class="space-y-6">
+      <.card id="organization">
+        <:title>{@organization.name}</:title>
+        <:actions>
+          <.link navigate={~p"/admin/organizations"} class="btn btn-ghost btn-sm">
+            <.icon name="hero-arrow-left-micro" class="size-4" /> All organizations
+          </.link>
+        </:actions>
+        <.description_list>
+          <:item label="Slug"><span class="font-mono text-xs">{@organization.slug}</span></:item>
+          <:item label="Created">{format_datetime(@organization.inserted_at)}</:item>
+          <:item label="Stripe customer">{@organization.stripe_customer_id || "—"}</:item>
+        </.description_list>
+      </.card>
 
-    <.card class="mt-6">
-      <.card_header title="Subscription" />
-      <.card_content>
-        <p :if={!@organization.subscription} class="text-sm text-gray-500">No subscription.</p>
-        <dl :if={@organization.subscription} class="grid grid-cols-2 gap-2 text-sm">
-          <dt class="text-gray-500">Plan</dt>
-          <dd>{@organization.subscription.plan_key || "—"}</dd>
-          <dt class="text-gray-500">Status</dt>
-          <dd>{@organization.subscription.status}</dd>
-          <dt class="text-gray-500">Period ends</dt>
-          <dd>{time(@organization.subscription.current_period_end)}</dd>
-          <dt class="text-gray-500">Stripe subscription</dt>
-          <dd><code class="text-xs">{@organization.subscription.stripe_subscription_id}</code></dd>
-        </dl>
-      </.card_content>
-    </.card>
+      <.card id="subscription">
+        <:title>Subscription</:title>
+        <.description_list :if={@organization.subscription}>
+          <:item label="Plan">{@organization.subscription.plan_key || "—"}</:item>
+          <:item label="Status"><.status_badge status={@organization.subscription.status} /></:item>
+          <:item label="Period ends">
+            {format_datetime(@organization.subscription.current_period_end)}
+          </:item>
+          <:item label="Stripe subscription">
+            <code class="font-mono text-xs">{@organization.subscription.stripe_subscription_id}</code>
+          </:item>
+        </.description_list>
+        <.empty_state
+          :if={!@organization.subscription}
+          icon="hero-credit-card"
+          title="No subscription"
+        >
+          This organization has not chosen a plan.
+        </.empty_state>
+      </.card>
 
-    <h3 class="mt-6 mb-2 text-lg font-semibold">Members</h3>
-    <.table id="members" rows={@organization.memberships}>
-      <:col :let={membership} label="Email">{to_string(membership.user.email)}</:col>
-      <:col :let={membership} label="Role">{membership.role}</:col>
-      <:col :let={membership} label="Joined">{time(membership.inserted_at)}</:col>
-    </.table>
+      <.card>
+        <:title>Members</:title>
+        <.table id="members" rows={@organization.memberships}>
+          <:col :let={membership} label="Email">
+            <div class="flex items-center gap-3">
+              <.avatar name={to_string(membership.user.email)} />
+              {to_string(membership.user.email)}
+            </div>
+          </:col>
+          <:col :let={membership} label="Role"><.badge>{membership.role}</.badge></:col>
+          <:col :let={membership} label="Joined">{format_datetime(membership.inserted_at)}</:col>
+        </.table>
+      </.card>
 
-    <h3 class="mt-6 mb-2 text-lg font-semibold">Pending invitations</h3>
-    <p :if={@pending == []} class="text-sm text-gray-500">None.</p>
-    <.table :if={@pending != []} id="invitations" rows={@pending}>
-      <:col :let={invitation} label="Email">{to_string(invitation.email)}</:col>
-      <:col :let={invitation} label="Role">{invitation.role}</:col>
-      <:col :let={invitation} label="Expires">{time(invitation.expires_at)}</:col>
-    </.table>
+      <.card>
+        <:title>Pending invitations</:title>
+        <.table :if={@pending != []} id="invitations" rows={@pending}>
+          <:col :let={invitation} label="Email">{to_string(invitation.email)}</:col>
+          <:col :let={invitation} label="Role"><.badge>{invitation.role}</.badge></:col>
+          <:col :let={invitation} label="Expires">{format_datetime(invitation.expires_at)}</:col>
+        </.table>
+        <.empty_state :if={@pending == []} icon="hero-envelope" title="No pending invitations" />
+      </.card>
+    </div>
   </AdminLayouts.admin>
   """
 end

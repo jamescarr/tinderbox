@@ -8,7 +8,19 @@ defmodule Tinderbox.MixProject do
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
-      deps: deps()
+      deps: deps(),
+      # The SaaS generator calls the Ash/Spark igniter helpers. A project without
+      # Ash (`--stack ui`) still compiles this package when a generator is
+      # re-run, and would otherwise warn about every one of them.
+      elixirc_options: [
+        no_warn_undefined: [
+          Ash.Igniter,
+          Ash.Resource.Igniter,
+          Ash.Domain.Igniter,
+          Spark.Igniter,
+          AshAuthentication.Igniter
+        ]
+      ]
     ]
   end
 

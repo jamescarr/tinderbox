@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Tinderbox.Install do
-  @shortdoc "Installs one of the stacks (api | worker | saas) into the current project"
+  @shortdoc "Installs one of the stacks (api | worker | saas | ui) into the current project"
 
   @moduledoc """
   Entry point igniter runs for `mix igniter.install tinderbox` — and
@@ -20,17 +20,28 @@ defmodule Mix.Tasks.Tinderbox.Install do
   # SaaS stack
   mix igniter.new my_app --with phx.new \\
     --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
-    --stack saas
+    --stack saas --themepack ember
+
+  # Only the themepack UI kit, on a plain Phoenix project
+  mix igniter.new my_app --with phx.new \\
+    --install tinderbox@path:/Users/jamescarr/projects/upmarkethq/tinderbox \\
+    --stack ui --themepack harbor
   ```
 
-  * `--stack api|worker|saas` (required) selects the generator
-    (`tinderbox.gen.api` / `tinderbox.gen.worker` / `tinderbox.gen.saas`).
+  * `--stack api|worker|saas|ui` (required) selects the generator
+    (`tinderbox.gen.api` / `tinderbox.gen.worker` / `tinderbox.gen.saas` /
+    `tinderbox.gen.ui`).
   * `--broker sqs|pubsub|rabbitmq|kafka|nats` is passed to the worker generator.
     The SaaS stack always runs its event bus on NATS JetStream, whatever
     `--broker` says.
+  * `--themepack ember|slate|harbor` picks the UI kit's look for `saas` and `ui`
+    (default `ember`); the other stacks ignore it.
   * `--no-compose` skips `docker-compose.yml` / `.env.example`.
   * `--no-mise` skips `.mise.toml` (toolchain pins, environment, dev-loop tasks).
   * `--no-demo` skips the API stack's demo domain and resource (ignored by saas).
+
+  The `ui` stack generates neither `docker-compose.yml` nor `.mise.toml`: it
+  only adds the UI kit to the Phoenix project.
 
   Because only one stack is generated per project, the dependency list and the
   composed tasks are computed from `--stack` in `info/2`: an API project does not
@@ -52,7 +63,14 @@ defmodule Mix.Tasks.Tinderbox.Install do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix igniter.install tinderbox --stack saas",
-      schema: [stack: :string, broker: :string, compose: :boolean, mise: :boolean, demo: :boolean],
+      schema: [
+        stack: :string,
+        broker: :string,
+        compose: :boolean,
+        mise: :boolean,
+        demo: :boolean,
+        themepack: :string
+      ],
       defaults: [broker: "sqs", compose: true, mise: true, demo: true],
       required: [:stack],
       # Keep the template out of the generated app's runtime dependencies.
@@ -69,21 +87,24 @@ defmodule Mix.Tasks.Tinderbox.Install do
     opts = igniter.args.options
     flags = igniter.args.argv_flags
 
-    igniter =
-      case opts[:stack] do
-        "api" ->
-          Igniter.compose_task(igniter, "tinderbox.gen.api", flags)
+    case opts[:stack] do
+      "ui" ->
+        igniter
+        |> Igniter.compose_task("tinderbox.gen.ui", flags)
+        |> drop_self_dependency()
 
-        "worker" ->
-          Igniter.compose_task(igniter, "tinderbox.gen.worker", flags)
+      stack when stack in ["api", "worker", "saas"] ->
+        igniter
+        |> Igniter.compose_task("tinderbox.gen.#{stack}", flags)
+        |> compose_services(opts)
+        |> drop_self_dependency()
 
-        "saas" ->
-          Igniter.compose_task(igniter, "tinderbox.gen.saas", flags)
+      other ->
+        Mix.raise(~s|Unknown --stack #{inspect(other)}. Must be "api", "worker", "saas" or "ui".|)
+    end
+  end
 
-        other ->
-          Mix.raise(~s|Unknown --stack #{inspect(other)}. Must be "api", "worker" or "saas".|)
-      end
-
+  defp compose_services(igniter, opts) do
     broker = broker(opts)
 
     igniter =
@@ -98,19 +119,16 @@ defmodule Mix.Tasks.Tinderbox.Install do
         igniter
       end
 
-    igniter =
-      if opts[:mise] do
-        Igniter.compose_task(
-          igniter,
-          "tinderbox.gen.mise",
-          ["--stack", opts[:stack], "--broker", broker] ++
-            if(opts[:compose], do: [], else: ["--no-compose"])
-        )
-      else
-        igniter
-      end
-
-    drop_self_dependency(igniter)
+    if opts[:mise] do
+      Igniter.compose_task(
+        igniter,
+        "tinderbox.gen.mise",
+        ["--stack", opts[:stack], "--broker", broker] ++
+          if(opts[:compose], do: [], else: ["--no-compose"])
+      )
+    else
+      igniter
+    end
   end
 
   # `mix igniter.new … --install tinderbox@path:…` leaves a path dependency that
@@ -160,6 +178,8 @@ defmodule Mix.Tasks.Tinderbox.Install do
 
   defp composes("saas"),
     do: ["tinderbox.gen.saas", "tinderbox.gen.compose", "tinderbox.gen.mise"]
+
+  defp composes("ui"), do: ["tinderbox.gen.ui"]
 
   defp composes(_missing_or_unknown), do: []
 

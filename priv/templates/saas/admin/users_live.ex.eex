@@ -2,25 +2,30 @@
 Admin: every user, searchable and sortable, with a button to grant or revoke
 the platform admin role.
 
-The table is Petal's `<.data_table>` over an in-memory list (the newest 1000
-users): fine at admin scale, and it keeps sorting, filtering and paging out of
-this module.
+The table is the UI kit's `<.data_table>` over an in-memory list (the newest
+1000 users), searched, sorted and paged by `ListState`: fine at admin scale,
+and it keeps sorting, filtering and paging out of this module.
 """
 
-use <%= inspect(@web) %>, :admin_live_view
+use <%= inspect(@web) %>, :live_view
 
-alias PetalComponents.DataTable.Engine
-alias PetalComponents.DataTable.State
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
 on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
 
-@fields [:email, :role, :confirmed_at, :inserted_at]
 @limit 1000
 
 @impl true
 def mount(_params, _session, socket) do
-  state = %State{order_by: [{:inserted_at, :desc}], page_size: 25}
+  state =
+    ListState.new(
+      search_fields: [:email],
+      sortable: [:email, :role, :confirmed_at, :inserted_at],
+      sort_by: :inserted_at,
+      sort_dir: :desc,
+      page_size: 25
+    )
 
   {:ok,
    socket
@@ -31,7 +36,7 @@ end
 
 @impl true
 def handle_event("table", params, socket) do
-  {:noreply, run(socket, State.handle_op(socket.assigns.table, params, fields: @fields))}
+  {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
 end
 
 def handle_event("set_role", %{"id" => id, "role" => role}, socket) when role in ~w(admin member) do
@@ -71,12 +76,9 @@ defp load_rows(socket) do
 end
 
 defp run(socket, state) do
-  {rows, state} = Engine.List.run(socket.assigns.all_rows, state)
+  {rows, state} = ListState.run(socket.assigns.all_rows, state)
   assign(socket, rows: rows, table: state)
 end
-
-defp time(nil), do: "—"
-defp time(datetime), do: Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
 
 @impl true
 def render(assigns) do
@@ -86,26 +88,29 @@ def render(assigns) do
       id="users"
       rows={@rows}
       state={@table}
-      on_change="table"
       searchable
-      page_size_options={[25, 50, 100]}
+      search_placeholder="Search by email…"
+      row_id={&"user-#{&1.id}"}
     >
-      <:col :let={row} field={:email} label="Email" sortable filterable="text">{row.email}</:col>
-      <:col :let={row} field={:role} label="Role" sortable>
-        <.badge color={if row.role == :admin, do: "warning", else: "gray"} label={to_string(row.role)} />
+      <:col :let={row} label="Email" field={:email} sortable>
+        <div class="flex items-center gap-3">
+          <.avatar name={row.email} />
+          <span class="font-medium">{row.email}</span>
+        </div>
       </:col>
-      <:col :let={row} field={:confirmed_at} label="Confirmed" sortable>
-        {time(row.confirmed_at)}
+      <:col :let={row} label="Role" field={:role} sortable>
+        <.badge color={if row.role == :admin, do: "warning", else: "neutral"}>{row.role}</.badge>
       </:col>
-      <:col :let={row} field={:inserted_at} label="Registered" sortable>
-        {time(row.inserted_at)}
+      <:col :let={row} label="Confirmed" field={:confirmed_at} sortable>
+        {format_datetime(row.confirmed_at)}
+      </:col>
+      <:col :let={row} label="Registered" field={:inserted_at} sortable>
+        {format_datetime(row.inserted_at)}
       </:col>
       <:action :let={row}>
         <.button
           :if={row.id != @current_user.id}
-          size="xs"
-          variant="outline"
-          color="gray"
+          class="btn btn-ghost btn-xs"
           phx-click="set_role"
           phx-value-id={row.id}
           phx-value-role={if row.role == :admin, do: "member", else: "admin"}

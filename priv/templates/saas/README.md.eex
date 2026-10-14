@@ -72,7 +72,18 @@ IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
 * New organization pages mount `<%= inspect(@web) %>.LiveOrganization`
   (`:require_organization`, or `:require_manager` for owner/admin-only pages) and
   import `<%= inspect(@web) %>.LiveHelpers` (`find/4`, `report/3`, `manager?/1`,
-  `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables.
+  `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables, and
+  `current_page` to highlight its entry; add the entry to the `:nav` slot in
+  `<%= inspect(@web) %>.Layouts.app/1`.
+* Build pages from the UI kit, `<%= inspect(@web) %>.UI`, which every template imports:
+  `page_header`, `card`, `stat_grid`, `badge`/`status_badge`, `alert`,
+  `empty_state`, `tabs`, `modal`, `dropdown`, `feed`, `description_list` and
+  `data_table`. A list page keeps its rows and a `ListState` in assigns and runs
+  every `"table"` event through `ListState.update/2` and `ListState.run/2` (see
+  the admin users page); a short list passes `data_table` its rows and no state.
+  Every component is on show, live, at `/dev/ui`. Style with daisyUI's semantic
+  colors (`bg-base-100`, `text-primary`, …), never Tailwind's palette, so the
+  themepack (`mix tinderbox.gen.ui --themepack …`) and dark mode keep working.
 * Notify an organization's owners and admins with
   `<%= inspect(@accounts) %>.managers/1` as the recipients. From an action,
   `change {<%= inspect(@accounts) %>.Changes.NotifyManagers, key: "thing.created", data: {Module, :function}}`

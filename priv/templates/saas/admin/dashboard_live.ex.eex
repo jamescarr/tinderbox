@@ -2,12 +2,13 @@
 Admin dashboard: how many users, organizations and active subscriptions there are.
 """
 
-use <%= inspect(@web) %>, :admin_live_view
+use <%= inspect(@web) %>, :live_view
 
 require Ash.Query
 
 alias <%= inspect(@accounts) %>.Organization
 alias <%= inspect(@prefix) %>.Billing.Subscription
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
 
 on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
 on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
@@ -34,26 +35,21 @@ end
 def render(assigns) do
   ~H"""
   <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:dashboard}>
-    <div class="grid gap-4 sm:grid-cols-3">
-      <.card>
-        <.card_header title="Users" />
-        <.card_content>
-          <p class="text-3xl font-semibold">{@users}</p>
-        </.card_content>
-      </.card>
-      <.card>
-        <.card_header title="Organizations" />
-        <.card_content>
-          <p class="text-3xl font-semibold">{@organizations}</p>
-        </.card_content>
-      </.card>
-      <.card>
-        <.card_header title="Active subscriptions" />
-        <.card_content>
-          <p class="text-3xl font-semibold">{@active_subscriptions}</p>
-        </.card_content>
-      </.card>
-    </div>
+    <.stat_grid>
+      <:stat label="Users" value={@users} icon="hero-users" navigate={~p"/admin/users"} />
+      <:stat
+        label="Organizations"
+        value={@organizations}
+        icon="hero-building-office"
+        navigate={~p"/admin/organizations"}
+      />
+      <:stat
+        label="Active subscriptions"
+        value={@active_subscriptions}
+        icon="hero-credit-card"
+        navigate={~p"/admin/subscriptions"}
+      />
+    </.stat_grid>
   </AdminLayouts.admin>
   """
 end
