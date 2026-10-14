@@ -24,6 +24,7 @@ defmodule Tinderbox.Gen.Saas do
   | `#{inspect(__MODULE__)}.Notifications` | notification facade, Local adapter, inbox, preferences, email |
   | `#{inspect(__MODULE__)}.Events` | JetStream publisher, stream bootstrap, consumer, Ash notifier |
   | `#{inspect(__MODULE__)}.Api` | AshJsonApi mount for the accounts domain |
+  | `#{inspect(__MODULE__)}.Connections` | OAuth2 client credentials per organization: provider behaviour (Hydra, Auth0), token verification, the API plug |
   | `#{inspect(__MODULE__)}.Admin` | `/admin` (UI kit) and `/admin/flags` (FunWithFlags) |
   | `#{inspect(__MODULE__)}.Mfa` | two-factor authentication (TOTP, or the SSO provider's MFA), `/settings/security`, `/admin/security` |
   | `#{inspect(__MODULE__)}.Ops` | health, PromEx, OpenTelemetry, mail, release, CI |
@@ -39,6 +40,7 @@ defmodule Tinderbox.Gen.Saas do
   alias Tinderbox.Gen.Saas.Admin
   alias Tinderbox.Gen.Saas.Api
   alias Tinderbox.Gen.Saas.Billing
+  alias Tinderbox.Gen.Saas.Connections
   alias Tinderbox.Gen.Saas.Events
   alias Tinderbox.Gen.Saas.Flags
   alias Tinderbox.Gen.Saas.Mfa
@@ -56,6 +58,8 @@ defmodule Tinderbox.Gen.Saas do
     * `:prefix` - base module, e.g. `MyApp`
     * `:web` - web module, e.g. `MyAppWeb`
     * `:accounts` / `:user` / `:token` - `MyApp.Accounts`, `.User`, `.Token`
+    * `:connections` / `:connection` / `:provider` - `MyApp.Connections`, `.Connection`,
+      `.Provider`: the API connections, which the web layer and the tests refer to
     * `:secrets` - `MyApp.Secrets`
     * `:repo`, `:endpoint`, `:router`, `:mailer`, `:pubsub`
     * `:opts` - the task's options
@@ -86,6 +90,7 @@ defmodule Tinderbox.Gen.Saas do
     |> Notifications.apply(assigns)
     |> Events.apply(assigns)
     |> Api.apply(assigns)
+    |> Connections.apply(assigns)
     |> Flags.apply(assigns)
     |> Admin.apply(assigns)
     |> Mfa.apply(assigns)
@@ -111,6 +116,7 @@ defmodule Tinderbox.Gen.Saas do
     {igniter, router} = Igniter.Libs.Phoenix.select_router(igniter)
     # Strings, not aliases: `Accounts` below is this package's own module.
     accounts = Module.concat(prefix, "Accounts")
+    connections = Module.concat(prefix, "Connections")
 
     {igniter,
      [
@@ -120,6 +126,9 @@ defmodule Tinderbox.Gen.Saas do
        web: web,
        accounts: accounts,
        user: Module.concat(accounts, "User"),
+       connections: connections,
+       connection: Module.concat(connections, "Connection"),
+       provider: Module.concat(connections, "Provider"),
        token: Module.concat(accounts, "Token"),
        secrets: Module.concat(prefix, "Secrets"),
        repo: Module.concat(prefix, "Repo"),

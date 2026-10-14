@@ -16,8 +16,9 @@ dev-loop tasks.
 3. **SaaS stack** — a Phoenix LiveView application with password and SSO sign-in,
    two-factor authentication (TOTP, or the SSO provider's MFA),
    organizations with memberships and invitations, notifications (in-app inbox and
-   email), Stripe subscriptions, an admin area, a JSON:API with OpenAPI docs,
-   JetStream domain events, feature flags, health, metrics and tracing, a release
+   email), Stripe subscriptions, an admin area, a JSON:API with OpenAPI docs and
+   OAuth2 client-credentials connections for machines, JetStream domain events,
+   feature flags, health, metrics and tracing, a release
    `Dockerfile` and a CI workflow — every page built on the themepack UI kit.
 
 Separately, **`mix tinderbox.gen.ui`** adds that UI kit to any Phoenix LiveView
@@ -271,6 +272,29 @@ Ash packages the other stacks use, then adds:
   through the installer's `:api` pipeline. A request without a token gets `200` with
   an empty `data` list, not `403`: the installer configures Ash to filter instead of
   forbid.
+* **API connections** — `/connections` lists an organization's OAuth2
+  client-credentials connections (every member sees them); owners and admins create
+  and revoke them. `<App>.Connections.Connection` records a client held by an
+  authorization server that `OAUTH_PROVIDER` selects through
+  `<App>.Connections.Provider`, the way `STORAGE_BACKEND` selects the storage
+  backend: `hydra` (Ory Hydra, in compose at `:4444` tokens and `:4445` admin, keeping
+  its clients in a `hydra` database on the compose Postgres; with `HYDRA_ADMIN_TOKEN`
+  set it drives hosted Ory Network) or `auth0` (the Management API; a
+  Machine-to-Machine application with `create:clients`, `delete:clients` and
+  `create:client_grants`). Both adapters are always generated; the tests use an
+  in-memory `fake` one. Dex cannot issue `client_credentials` tokens, which is why it
+  stays for SSO only. The secret is shown once, on the page, and stored nowhere. A
+  client asks the provider's token endpoint for a JWT access token with
+  `audience=$OAUTH_AUDIENCE`; `<App>.Connections.Tokens` verifies it against the
+  issuer's JWKS (OIDC discovery: `iss`, `aud`, `exp`, `nbf` and an asymmetric
+  algorithm), and `<App>Web.Plugs.LoadConnection`, after the user's bearer token in
+  the `:api` pipeline, makes the unrevoked connection behind it the Ash actor. A
+  token that was not issued by `OAUTH_ISSUER` is left alone (the policies see no
+  actor); one that was and is not valid, or whose connection is revoked, gets `401`
+  and `WWW-Authenticate: Bearer error="invalid_token"`. Revoking deletes the client
+  at the provider and marks the row, so a token that has not expired stops working
+  on its next request. A connection has no scopes: it reads what the read policies
+  allow it, and `<App>.Accounts.Organization` lets it read its own organization.
 * **Admin** — `/admin` (the UI kit, in the app shell): dashboard, users, organizations (and one
   organization), subscriptions, and the FunWithFlags dashboard at `/admin/flags`.
   Only `:admin` users get in: anyone else is sent to the dashboard, the flag
@@ -311,7 +335,8 @@ In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
 `runtime.exs` raises when it is missing) and `CLOAK_KEY` (`openssl rand -base64 32`;
 encrypts the two-factor secrets, so keep it). Also set `PHX_HOST`, `PHX_SERVER=true`, the
-`NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`, `MFA_*` and `ADMIN_EMAILS` values of `.mise.toml`.
+`NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`, `MFA_*`, `OAUTH_*` (and `HYDRA_*` or `AUTH0_*`) and
+`ADMIN_EMAILS` values of `.mise.toml`.
 Run migrations with the release's `bin/migrate`. With `SMTP_USERNAME` (and
 `SMTP_PASSWORD`) set, mail is authenticated and upgraded with verified STARTTLS;
 behind PgBouncer set `DATABASE_POOLER=pgbouncer` (unnamed prepared statements and
@@ -367,7 +392,9 @@ colors and radii, so a pack restyles all of them, in light and dark.
 * `docker-compose.yml` — Postgres (host port `$PGPORT`, default 5432), Floci (`:4566`,
   S3 + SQS), floci-gcp (`:4588`, GCS + Pub/Sub) and their bootstrap jobs, plus
   RabbitMQ, Redpanda or NATS (JetStream, `:4222`) for those brokers; the SaaS stack
-  adds NATS, Dex (`:5556`) and Mailpit (SMTP `$SMTP_PORT`, UI `$MAILPIT_UI_PORT`,
+  adds NATS, Dex (`:5556`), Ory Hydra (`:4444` tokens, `:4445` admin, with two
+  one-shot jobs that create and migrate its database) and Mailpit (SMTP
+  `$SMTP_PORT`, UI `$MAILPIT_UI_PORT`,
   default 1025 and 8025). A worker on `nats` also gets a `nats-bootstrap` job that
   creates its two streams and the consumer. The app itself runs on the host, so
   `FLOCI_HOSTNAME` is deliberately unset: Floci then embeds `localhost` in the SQS
@@ -608,6 +635,31 @@ Beyond that, generated projects were run end to end against the emulators:
   Registered, Make admin), organizations → View and subscriptions pages; the flag
   dashboard; light and dark. SSO was not exercised in this run (another project held
   Dex's port); `ADMIN_EMAILS` made the password user an admin.
+* **saas API connections** — generated as above (the generator's own tests plus
+  `mise run check` on the fresh project: 22 tests, among them three
+  `ConnectionsLiveTest` and six `ApiConnectionsTest` cases that run on the `fake`
+  provider; `MIX_ENV=prod mix compile --warnings-as-errors` is clean). Compose came up
+  with `hydra` healthy and `hydra-db` / `hydra-migrate` exited 0, discovery answering
+  `jwks_uri` `http://localhost:4444/.well-known/jwks.json`. Under `mise run dev`, in a
+  browser: **API connections** in the sidebar, creating `CI` showed the client id,
+  secret, token endpoint and audience once (dismissed with Done). `curl -u` against
+  `:4444/oauth2/token` gave a JWT (`client_id`, `iss` `http://localhost:4444/`,
+  `aud` `http://localhost:4000/api`); with it `GET /api/organizations` listed only that
+  connection's organization (a second user's organization was absent), and
+  `/admin/clients` listed the client. Revoking it on the page (confirm dialog) turned
+  the row to Revoked without a button; the same token was answered `401`,
+  `WWW-Authenticate: Bearer error="invalid_token"` and the JSON:API error body, a new
+  token request with the old credentials was `invalid_client`, and the client was gone
+  from Hydra. `GET /api/organizations` without a token stayed `200` with an empty
+  `data`, and a signed-in user's bearer token still listed their organizations. After
+  `mise run down && mise run up` a connection created before was still in Hydra and
+  its token flow worked. Throwaway tests against that Hydra: a member's create is
+  forbidden before the provider is called; an unreachable provider is reported on the
+  name field; a create whose row fails to write (unknown organization, as a platform
+  admin) deletes the client it registered; a second revoke is refused. The other
+  projects on this machine held 4222, 8222, 4566, 4588 and 5556, so those host ports
+  were moved with a `docker-compose.override.yml` (and `NATS_PORT` in
+  `.mise.local.toml`) instead of stopping them.
 * **saas production config and building blocks** — a project generated from this
   branch (`tb_learn`, ports as above, against the compose services of another
   project) compiled with `--warnings-as-errors`, passed its 7 tests without the
@@ -633,6 +685,10 @@ switch, `mise run stripe` — the Stripe CLI installs through mise and starts, b
 `stripe listen` needs a login), a real OIDC issuer other than Dex, an SMTP server other
 than Mailpit, a collector for the OpenTelemetry export, and SSO with the app moved
 off port 4000.
+
+Not exercised for API connections: the `auth0` adapter (no tenant was at hand: its
+requests follow the Management API's documented shapes only), and Hydra as hosted Ory
+Network (`HYDRA_ADMIN_TOKEN`).
 
 If something else already owns 5432, 1025 or 8025 on your machine, set `PGPORT`,
 `SMTP_PORT` or `MAILPIT_UI_PORT` in `.mise.local.toml`: compose publishes

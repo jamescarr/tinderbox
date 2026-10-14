@@ -43,7 +43,7 @@ defmodule Tinderbox.EnvTest do
     refute "KAFKA_BROKERS" in api
   end
 
-  test "the saas stack documents SSO, mail, Stripe, admins and tracing, but no worker variables" do
+  test "the saas stack documents SSO, mail, Stripe, OAuth connections, admins and tracing, but no worker variables" do
     names = names(sections(stack: "saas", broker: :nats))
 
     for name <- ~w(
@@ -52,6 +52,8 @@ defmodule Tinderbox.EnvTest do
           MFA_REQUIRED MFA_SSO
           SMTP_HOST SMTP_PORT MAILPIT_UI_PORT MAIL_FROM
           STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_PRICE_STARTER STRIPE_PRICE_PRO
+          OAUTH_PROVIDER OAUTH_ISSUER OAUTH_AUDIENCE HYDRA_ADMIN_URL
+          AUTH0_DOMAIN AUTH0_CLIENT_ID AUTH0_CLIENT_SECRET
           ADMIN_EMAILS OTEL_SERVICE_NAME
         ) do
       assert name in names, "#{name} is missing from the saas environment"
@@ -61,6 +63,8 @@ defmodule Tinderbox.EnvTest do
     for name <- ~w(HEALTH_PORT NATS_STREAM NATS_CONSUMER NATS_PUBLISH_SUBJECT) do
       refute name in names
     end
+
+    refute "OAUTH_ISSUER" in names(sections(stack: "api", broker: :sqs))
   end
 
   test "the saas SSO block points at the compose Dex, named after the app" do

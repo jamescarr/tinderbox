@@ -1,0 +1,112 @@
+@moduledoc """
+An OAuth2 client-credentials connection of an organization.
+
+The client lives at the authorization server (`provider`); this row records
+that it exists, whose it is, and whether it was revoked. The client secret is
+never stored: the server keeps its hash, and `:create` returns it once, as
+record metadata (`record.__metadata__.client_secret`), for the page to show.
+
+Every member of the organization can read its connections; only owners and
+admins create and revoke them.
+
+A connection is also an *actor*: `<%= inspect(@web) %>.Plugs.LoadConnection` sets the
+connection behind a valid access token as the actor of the API request. See the
+organization's read policy for what that lets it see.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@connections) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshPaperTrail.Resource]
+
+postgres do
+  table "connections"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :organization, on_delete: :delete
+    reference :created_by, on_delete: :nilify
+  end
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  create_version_on_destroy? false
+  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+actions do
+  defaults [:read]
+
+  create :create do
+    description "Registers a client with the provider and records it; the secret comes back once, as metadata"
+    accept [:name, :organization_id]
+
+    change relate_actor(:created_by)
+    change <%= inspect(@connections) %>.Changes.RegisterClient
+  end
+
+  update :revoke do
+    description "Deletes the client at the provider and marks the connection revoked"
+    accept []
+    require_atomic? false
+
+    change set_attribute(:revoked_at, &__MODULE__.now/0)
+    change <%= inspect(@connections) %>.Changes.DeleteClient
+  end
+
+  read :by_client_id do
+    description "The unrevoked connection of a client"
+    get? true
+    argument :client_id, :string, allow_nil?: false
+    filter expr(client_id == ^arg(:client_id) and is_nil(revoked_at))
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(exists(organization.memberships, user_id == ^actor(:id)))
+  end
+
+  policy action([:create, :revoke]) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :name, :string, allow_nil?: false, public?: true
+
+  # Set by `RegisterClient`, never accepted from a caller.
+  attribute :client_id, :string, allow_nil?: false, public?: true
+
+  # The adapter that holds the client (`hydra`, `auth0`, `fake`).
+  attribute :provider, :string, allow_nil?: false, public?: true
+
+  attribute :revoked_at, :utc_datetime, public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+  belongs_to :created_by, <%= inspect(@user) %>, public?: true
+end
+
+identities do
+  identity :unique_client_id, [:client_id]
+end
+
+@doc false
+def now, do: DateTime.utc_now() |> DateTime.truncate(:second)

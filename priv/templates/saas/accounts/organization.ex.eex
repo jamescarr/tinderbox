@@ -71,6 +71,11 @@ policies do
   # creates, renames and the like are forbidden.
   policy action_type(:read) do
     authorize_if expr(exists(memberships, user_id == ^actor(:id)))
+
+    # A connection token's actor is a `<%= inspect(@connection) %>`: it reads the
+    # one organization it belongs to. (`actor(:organization_id)` is `nil` for a
+    # user, which matches nothing.)
+    authorize_if expr(id == ^actor(:organization_id))
   end
 
   policy action_type(:create) do

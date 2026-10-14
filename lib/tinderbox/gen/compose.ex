@@ -5,9 +5,12 @@ defmodule Tinderbox.Gen.Compose do
   Every stack gets the same backing services — Postgres (when `db?`), Floci for
   S3/SQS and floci-gcp for GCS/Pub/Sub — plus the broker-specific service the
   worker stack needs. The SaaS stack always adds NATS (its event bus), Dex (a
-  local OIDC provider, configured by `docker/dex/config.yaml`) and Mailpit (an
-  SMTP sink with a web inbox). The application itself is *not* a compose service: it runs
-  on the host under `mix`, so every endpoint is published on `localhost`.
+  local OIDC provider, configured by `docker/dex/config.yaml`), Ory Hydra (the
+  OAuth2 server behind API connections, kept in a `hydra` database on the
+  Postgres, created and migrated by two one-shot jobs; with `db?` only) and
+  Mailpit (an SMTP sink with a web inbox). The application itself is *not* a
+  compose service: it runs on the host under `mix`, so every endpoint is published
+  on `localhost`.
 
   The compose file is rendered from `priv/templates`; `.env.example` comes from
   `Tinderbox.Env`, the same data `Tinderbox.Gen.Mise` puts in `.mise.toml`.

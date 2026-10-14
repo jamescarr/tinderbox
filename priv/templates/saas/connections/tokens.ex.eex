@@ -1,0 +1,185 @@
+@moduledoc """
+Verifies the OAuth2 access tokens of API connections.
+
+The tokens are JWTs signed asymmetrically by the authorization server. They are
+verified against the issuer's JWKS, found through OIDC discovery
+(`<issuer>/.well-known/openid-configuration`), so the same code serves every
+provider: `iss` must be the configured issuer, `aud` must contain the configured
+audience, and `exp` / `nbf` must hold. Which claim names the client is the
+provider's business (`<%= inspect(@provider) %>.client_id/1`).
+
+The key set is cached in `:persistent_term`, no process involved. A token signed
+with a key that is not cached refetches the set, at most once a minute, which
+picks up the issuer's key rotation without letting a forged `kid` turn every
+request into an outbound call.
+"""
+
+require Logger
+
+alias <%= inspect(@provider) %>
+
+@algorithms ~w(RS256 RS384 RS512 PS256 PS384 PS512 ES256 ES384 ES512 EdDSA)
+
+# Seconds; an unknown `kid` refetches the JWKS at most this often.
+@refetch_after 60
+
+@type error ::
+        :not_ours
+        | :invalid_algorithm
+        | :unknown_key
+        | :invalid_signature
+        | :expired
+        | :wrong_audience
+
+@doc """
+Verifies `token` and returns its claims.
+
+`{:error, :not_ours}` means the token was not issued by the configured issuer
+(a signed-in user's token, or garbage): it is somebody else's business, not a
+forgery. Every other error is a token that claims to be ours and is not valid.
+"""
+@spec verify(String.t()) :: {:ok, map()} | {:error, error()}
+def verify(token) when is_binary(token) do
+  config = Provider.config()
+
+  with {:ok, claims} <- peek_claims(token),
+       :ok <- check_issuer(claims, config[:issuer]),
+       {:ok, header} <- peek_header(token),
+       {:ok, algorithm} <- check_algorithm(header),
+       {:ok, jwk} <- key(config[:issuer], header["kid"]),
+       :ok <- check_signature(jwk, algorithm, token),
+       :ok <- check_lifetime(claims),
+       :ok <- check_audience(claims, config[:audience]) do
+    {:ok, claims}
+  end
+end
+
+@doc """
+Caches the key set `jwks` (a decoded JWKS document) for `issuer`. Encryption keys
+and keys without a `kid` are dropped. The fetch path uses it; tests use it to
+trust a key pair of their own.
+"""
+@spec cache(String.t(), map()) :: :ok
+def cache(issuer, %{"keys" => keys}) when is_list(keys) do
+  jwks =
+    for %{"kid" => kid} = key <- keys, key["use"] != "enc", into: %{} do
+      {kid, JOSE.JWK.from_map(key)}
+    end
+
+  :persistent_term.put({__MODULE__, issuer}, %{keys: jwks, fetched_at: now()})
+end
+
+# -- reading the token ------------------------------------------------------
+
+defp peek_claims(token) do
+  {_meta, claims} = token |> JOSE.JWT.peek_payload() |> JOSE.JWT.to_map()
+  if is_map(claims), do: {:ok, claims}, else: {:error, :not_ours}
+rescue
+  _error -> {:error, :not_ours}
+end
+
+defp peek_header(token) do
+  {_meta, header} = token |> JOSE.JWT.peek_protected() |> JOSE.JWS.to_map()
+  if is_map(header), do: {:ok, header}, else: {:error, :invalid_algorithm}
+rescue
+  _error -> {:error, :invalid_algorithm}
+end
+
+# -- checks -----------------------------------------------------------------
+
+defp check_issuer(%{"iss" => issuer}, issuer), do: :ok
+defp check_issuer(_claims, _issuer), do: {:error, :not_ours}
+
+defp check_algorithm(%{"alg" => algorithm}) when algorithm in @algorithms, do: {:ok, algorithm}
+defp check_algorithm(_header), do: {:error, :invalid_algorithm}
+
+defp check_signature(jwk, algorithm, token) do
+  case JOSE.JWT.verify_strict(jwk, [algorithm], token) do
+    {true, _jwt, _jws} -> :ok
+    _invalid -> {:error, :invalid_signature}
+  end
+rescue
+  _error -> {:error, :invalid_signature}
+end
+
+defp check_lifetime(%{"exp" => exp} = claims) when is_integer(exp) do
+  now = System.os_time(:second)
+
+  if exp > now and valid_from?(claims["nbf"], now), do: :ok, else: {:error, :expired}
+end
+
+defp check_lifetime(_claims), do: {:error, :expired}
+
+defp valid_from?(nil, _now), do: true
+defp valid_from?(nbf, now), do: is_integer(nbf) and nbf <= now
+
+defp check_audience(claims, audience) do
+  if audience in List.wrap(claims["aud"]), do: :ok, else: {:error, :wrong_audience}
+end
+
+# -- keys -------------------------------------------------------------------
+
+defp key(issuer, kid) when is_binary(kid) do
+  case lookup(issuer, kid) do
+    {:ok, jwk} -> {:ok, jwk}
+    :error -> refetch(issuer, kid)
+  end
+end
+
+defp key(_issuer, _kid), do: {:error, :unknown_key}
+
+defp refetch(issuer, kid) do
+  with true <- stale?(issuer),
+       :ok <- fetch(issuer),
+       {:ok, jwk} <- lookup(issuer, kid) do
+    {:ok, jwk}
+  else
+    _no_key -> {:error, :unknown_key}
+  end
+end
+
+defp lookup(issuer, kid) do
+  case :persistent_term.get({__MODULE__, issuer}, nil) do
+    %{keys: %{^kid => jwk}} -> {:ok, jwk}
+    _none -> :error
+  end
+end
+
+defp stale?(issuer) do
+  case :persistent_term.get({__MODULE__, issuer}, nil) do
+    %{fetched_at: fetched_at} -> now() - fetched_at >= @refetch_after
+    nil -> true
+  end
+end
+
+defp fetch(issuer) do
+  base = String.trim_trailing(issuer, "/")
+
+  with {:ok, %{status: 200, body: %{"jwks_uri" => jwks_uri}}} <-
+         get(base <> "/.well-known/openid-configuration"),
+       {:ok, %{status: 200, body: %{"keys" => _keys} = jwks}} <- get(jwks_uri) do
+    cache(issuer, jwks)
+  else
+    failure ->
+      Logger.warning("could not fetch the signing keys of #{issuer}: #{inspect(failure)}")
+      retry_later(issuer)
+  end
+end
+
+# No retries and a short timeout: this runs inside an API request.
+defp get(url), do: Req.get(url, retry: false, receive_timeout: 5_000)
+
+# A failed fetch keeps the keys it has but counts as an attempt, so an issuer that
+# is down is asked once a minute, not once a request.
+defp retry_later(issuer) do
+  keys =
+    case :persistent_term.get({__MODULE__, issuer}, nil) do
+      %{keys: keys} -> keys
+      nil -> %{}
+    end
+
+  :persistent_term.put({__MODULE__, issuer}, %{keys: keys, fetched_at: now()})
+  :error
+end
+
+defp now, do: System.monotonic_time(:second)

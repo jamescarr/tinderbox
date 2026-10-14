@@ -1,0 +1,102 @@
+@moduledoc """
+`<%= inspect(@connections) %>.Provider` for Auth0, through its Management API.
+
+Each connection is a Machine-to-Machine application (`app_type:
+"non_interactive"`, `client_credentials` only) granted access to the API
+identified by `audience`, with no scopes. Auth0 removes a client's grant with
+the client.
+
+Config (`config <%= inspect(@app) %>, :connections`): `auth0_domain`, `audience` (the identifier
+of the API registered in Auth0), and `auth0_client_id` / `auth0_client_secret` of a
+Machine-to-Machine application authorized for the Management API with the scopes
+`create:clients`, `delete:clients` and `create:client_grants`.
+
+The Management API token is fetched on every call: creating and revoking
+connections is human-paced.
+"""
+
+@behaviour <%= inspect(@provider) %>
+
+alias <%= inspect(@provider) %>
+
+@impl true
+def register_client(name, organization_id) do
+  config = Provider.config()
+
+  with {:ok, token} <- management_token(config),
+       {:ok, client} <- create_client(config, token, name, organization_id),
+       :ok <- create_grant(config, token, client["client_id"]) do
+    {:ok, %{client_id: client["client_id"], client_secret: client["client_secret"]}}
+  end
+end
+
+@impl true
+def delete_client(client_id) do
+  config = Provider.config()
+
+  with {:ok, token} <- management_token(config) do
+    case Req.delete(api(config, "/clients/" <> client_id), auth: {:bearer, token}) do
+      {:ok, %{status: status}} when status in [204, 404] -> :ok
+      {:ok, %{status: status, body: body}} -> {:error, {:auth0, status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+end
+
+# Access tokens carry the client in `azp`.
+@impl true
+def client_id(claims), do: claims["azp"]
+
+@impl true
+def token_endpoint, do: "https://#{Provider.config()[:auth0_domain]}/oauth/token"
+
+defp management_token(config) do
+  body = %{
+    grant_type: "client_credentials",
+    client_id: config[:auth0_client_id],
+    client_secret: config[:auth0_client_secret],
+    audience: "https://#{config[:auth0_domain]}/api/v2/"
+  }
+
+  case Req.post(token_endpoint(), json: body) do
+    {:ok, %{status: 200, body: %{"access_token" => token}}} -> {:ok, token}
+    {:ok, %{status: status, body: body}} -> {:error, {:auth0, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp create_client(config, token, name, organization_id) do
+  body = %{
+    name: name,
+    app_type: "non_interactive",
+    grant_types: ["client_credentials"],
+    token_endpoint_auth_method: "client_secret_post",
+    client_metadata: %{organization_id: organization_id}
+  }
+
+  case Req.post(api(config, "/clients"), json: body, auth: {:bearer, token}) do
+    {:ok, %{status: 201, body: %{"client_id" => _, "client_secret" => _} = client}} -> {:ok, client}
+    {:ok, %{status: status, body: body}} -> {:error, {:auth0, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+# A client without a grant cannot get a token for the API: take it back.
+defp create_grant(config, token, client_id) do
+  body = %{client_id: client_id, audience: config[:audience], scope: []}
+
+  case Req.post(api(config, "/client-grants"), json: body, auth: {:bearer, token}) do
+    {:ok, %{status: 201}} ->
+      :ok
+
+    failure ->
+      Req.delete(api(config, "/clients/" <> client_id), auth: {:bearer, token})
+
+      case failure do
+        {:ok, %{status: status, body: body}} -> {:error, {:auth0, status, body}}
+        {:error, reason} -> {:error, reason}
+      end
+  end
+end
+
+defp api(config, path), do: "https://#{config[:auth0_domain]}/api/v2" <> path

@@ -95,6 +95,16 @@ defmodule Tinderbox.Env do
        ]},
       {"MFA: MFA_REQUIRED=true makes everyone set up a second factor at their next sign-in; MFA_SSO=idp accepts the SSO provider's MFA (see config/runtime.exs)",
        [{"MFA_REQUIRED", "false"}, {"MFA_SSO", "local"}]},
+      {"OAuth2 API connections: Ory Hydra locally; OAUTH_PROVIDER auth0 uses the AUTH0_* values (replace in .mise.local.toml)",
+       [
+         {"OAUTH_PROVIDER", "hydra"},
+         {"OAUTH_ISSUER", "http://localhost:4444/"},
+         {"OAUTH_AUDIENCE", "http://localhost:4000/api"},
+         {"HYDRA_ADMIN_URL", "http://localhost:4445"},
+         {"AUTH0_DOMAIN", "replace-me.auth0.com"},
+         {"AUTH0_CLIENT_ID", "replace_me"},
+         {"AUTH0_CLIENT_SECRET", "replace_me"}
+       ]},
       {"Mail: Mailpit (UI http://localhost:8025; SMTP_PORT and MAILPIT_UI_PORT are the host ports compose publishes)",
        [
          {"SMTP_HOST", "localhost"},

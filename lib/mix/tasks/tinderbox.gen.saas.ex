@@ -89,7 +89,10 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
           {:gen_smtp, "~> 1.3"},
           # The password strategy installer adds exactly this requirement itself; a
           # different one would make it stop and ask whether to replace it.
-          {:bcrypt_elixir, "~> 3.0"}
+          {:bcrypt_elixir, "~> 3.0"},
+          # Verifies the access tokens of API connections against the issuer's JWKS;
+          # already in the lock through joken.
+          {:jose, "~> 1.11"}
         ] ++ Tinderbox.Gen.Saas.Mfa.deps()
     }
   end
