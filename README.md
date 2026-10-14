@@ -565,9 +565,14 @@ Beyond that, generated projects were run end to end against the emulators:
   dashboard; light and dark. SSO was not exercised in this run (another project held
   Dex's port); `ADMIN_EMAILS` made the password user an admin.
 * **saas API connections** — generated as above (the generator's own tests plus
-  `mise run check` on the fresh project: 22 tests, among them three
-  `ConnectionsLiveTest` and six `ApiConnectionsTest` cases that run on the `fake`
-  provider; `MIX_ENV=prod mix compile --warnings-as-errors` is clean). Compose came up
+  `mise run check` on the fresh project, regenerated from the final templates: 22
+  tests, among them three `ConnectionsLiveTest` and six `ApiConnectionsTest` cases
+  that run on the `fake` provider; `MIX_ENV=prod mix compile --warnings-as-errors`
+  is clean). With `ash` 3.36.0, which a fresh resolution now picks, generation stops
+  in `mix ash.codegen` (`Multiple actions (2) with the name read` on
+  `Accounts.UserIdentity`, which the AshAuthentication installer helper creates; `main`
+  fails the same way), so that run pinned `{:ash, "== 3.35.0"}` and ran the three
+  tasks the generator had queued by hand. Compose came up
   with `hydra` healthy and `hydra-db` / `hydra-migrate` exited 0, discovery answering
   `jwks_uri` `http://localhost:4444/.well-known/jwks.json`. Under `mise run dev`, in a
   browser: **API connections** in the sidebar, creating `CI` showed the client id,
@@ -584,8 +589,10 @@ Beyond that, generated projects were run end to end against the emulators:
   `mise run down && mise run up` a connection created before was still in Hydra and
   its token flow worked. Throwaway tests against that Hydra: a member's create is
   forbidden before the provider is called; an unreachable provider is reported on the
-  name field; a create whose row fails to write (unknown organization, as a platform
-  admin) deletes the client it registered; a second revoke is refused. The other
+  name field; a second revoke is refused; a create whose row fails to write (unknown
+  organization, as a platform admin) deletes the client it registered, which was run
+  again on the regenerated project, along with a token from an issuer whose JWKS
+  cannot be fetched, with nothing cached, being answered `401` in 45 ms. The other
   projects on this machine held 4222, 8222, 4566, 4588 and 5556, so those host ports
   were moved with a `docker-compose.override.yml` (and `NATS_PORT` in
   `.mise.local.toml`) instead of stopping them.
