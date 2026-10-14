@@ -1,0 +1,43 @@
+@moduledoc """
+Carries what the identity provider says about how the user authenticated (the
+`amr` and `acr` claims of the ID token) from the SSO register action to the sign-in
+callback, as `:sso_assurance` metadata on the user:
+`<%= inspect(@mfa) %>.sign_in_step/2` reads it when `MFA_SSO=idp`.
+
+The claims come from the ID token, not from `user_info`: Assent drops `amr` and
+`acr` from `user_info` (`@id_token_names_to_exclude`). Assent has validated the
+token (signature, issuer, audience, expiry, nonce) before the action runs, so
+reading its claims here without verifying again is safe.
+"""
+
+use Ash.Resource.Change
+
+@type assurance :: %{amr: [String.t()], acr: String.t() | nil}
+
+@impl true
+def change(changeset, _opts, _context) do
+  assurance = assurance(Ash.Changeset.get_argument(changeset, :oauth_tokens))
+
+  Ash.Changeset.after_action(changeset, fn _changeset, user ->
+    {:ok, Ash.Resource.put_metadata(user, :sso_assurance, assurance)}
+  end)
+end
+
+@doc "The `amr` and `acr` claims of the ID token in the provider's `oauth_tokens`."
+@spec assurance(map() | nil) :: assurance()
+def assurance(%{"id_token" => token}) when is_binary(token) do
+  case Joken.peek_claims(token) do
+    {:ok, claims} ->
+      %{
+        amr: claims |> Map.get("amr", []) |> List.wrap() |> Enum.map(&to_string/1),
+        acr: claims["acr"] && to_string(claims["acr"])
+      }
+
+    {:error, _reason} ->
+      none()
+  end
+end
+
+def assurance(_oauth_tokens), do: none()
+
+defp none, do: %{amr: [], acr: nil}

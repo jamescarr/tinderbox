@@ -1,0 +1,115 @@
+@moduledoc """
+The pages of the second sign-in step, rendered by `<%= inspect(@web) %>.MfaController`: the
+code prompt, the QR code to set a factor up, and the recovery codes shown once
+after setting up. The user is not signed in yet on the first two, so they render
+in the signed-out layout.
+"""
+
+use <%= inspect(@web) %>, :html
+
+attr :flash, :map, required: true
+attr :form, :any, required: true
+attr :error, :string, default: nil
+
+def challenge(assigns) do
+  ~H"""
+  <Layouts.app flash={@flash}>
+    <div class="mx-auto max-w-md">
+      <.card id="mfa-challenge">
+        <:title>Two-factor authentication</:title>
+        <:description>
+          Enter the 6-digit code from your authenticator app, or a recovery code.
+        </:description>
+
+        <.alert :if={@error} kind="error" class="mb-4">{@error}</.alert>
+
+        <.form for={@form} action={~p"/mfa"} id="mfa-challenge-form">
+          <.input
+            field={@form[:code]}
+            label="Authentication code"
+            autocomplete="one-time-code"
+            autofocus
+          />
+          <.button class="btn btn-primary w-full">Verify</.button>
+        </.form>
+
+        <:footer>
+          <.form for={%{}} action={~p"/mfa/cancel"} id="mfa-cancel-form">
+            <.button class="btn btn-ghost btn-sm">Cancel sign-in</.button>
+          </.form>
+        </:footer>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end
+
+attr :flash, :map, required: true
+attr :enrollment, :map, required: true
+attr :form, :any, required: true
+attr :error, :string, default: nil
+
+def setup(assigns) do
+  ~H"""
+  <Layouts.app flash={@flash}>
+    <div class="mx-auto max-w-md">
+      <.card id="mfa-setup">
+        <:title>Set up two-factor authentication</:title>
+        <:description>
+          Scan the QR code with an authenticator app, then enter the code it shows.
+        </:description>
+
+        <div class="mb-4 flex justify-center rounded-box bg-white p-3">
+          {raw(@enrollment.qr_svg)}
+        </div>
+        <p class="mb-4 text-sm text-base-content/70">
+          Or enter this key by hand: <code id="mfa-manual-key" class="font-mono">{@enrollment.manual_key}</code>
+        </p>
+
+        <.alert :if={@error} kind="error" class="mb-4">{@error}</.alert>
+
+        <.form for={@form} action={~p"/mfa/setup"} id="mfa-setup-form">
+          <.input
+            field={@form[:code]}
+            label="Authentication code"
+            autocomplete="one-time-code"
+            autofocus
+          />
+          <.button class="btn btn-primary w-full">Turn on</.button>
+        </.form>
+
+        <:footer>
+          <.form for={%{}} action={~p"/mfa/cancel"} id="mfa-cancel-form">
+            <.button class="btn btn-ghost btn-sm">Cancel sign-in</.button>
+          </.form>
+        </:footer>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end
+
+attr :flash, :map, required: true
+attr :codes, :list, required: true
+attr :return_to, :string, required: true
+
+def recovery_codes(assigns) do
+  ~H"""
+  <Layouts.app flash={@flash}>
+    <div class="mx-auto max-w-md">
+      <.card id="mfa-recovery">
+        <:title>Save your recovery codes</:title>
+        <:description>
+          Each code works once, if you lose your authenticator. They are shown only now.
+        </:description>
+
+        <ul id="recovery-codes" class="mb-4 grid grid-cols-2 gap-2 font-mono text-sm">
+          <li :for={code <- @codes}>{code}</li>
+        </ul>
+
+        <.link href={@return_to} class="btn btn-primary w-full">Continue</.link>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end

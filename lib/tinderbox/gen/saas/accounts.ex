@@ -145,8 +145,6 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     )
   end
 
-  # `add_new_secret_from_env/5` only looks at the first `secret_for` clause, so a
-  # re-run would stack a second copy of every later clause; check ourselves.
   defp add_sso_secrets(igniter, secrets, user) do
     [
       client_id: :sso_client_id,
@@ -155,14 +153,13 @@ defmodule Tinderbox.Gen.Saas.Accounts do
       base_url: :sso_base_url
     ]
     |> Enum.reduce(igniter, fn {option, env_key}, igniter ->
-      path = [:authentication, :strategies, :sso, option]
-      {igniter, present?} = Edits.source_contains?(igniter, secrets, inspect(path))
-
-      if present? do
-        igniter
-      else
-        AshAuthentication.Igniter.add_new_secret_from_env(igniter, secrets, user, path, env_key)
-      end
+      Edits.ensure_secret_from_env(
+        igniter,
+        secrets,
+        user,
+        [:authentication, :strategies, :sso, option],
+        env_key
+      )
     end)
   end
 

@@ -1,0 +1,140 @@
+@moduledoc """
+Multi-factor authentication: what the rest of the application calls.
+
+## Policy
+
+After a sign-in, `sign_in_step/2` decides what happens next:
+
+  * `:complete` - signed in. The user has no second factor and none is
+    required, or the identity provider already did the second factor.
+  * `:challenge` - the user has a factor and must enter a code.
+  * `:enroll` - the user has no factor and `MFA_REQUIRED=true`: set one up first.
+
+The identity provider's MFA counts only when `MFA_SSO=idp` and the ID token of
+that SSO sign-in carries a qualifying `amr` (`SSO_MFA_AMR`, default `mfa`) or
+`acr` (`SSO_MFA_ACR`). Anything less falls back to the local rules above. With
+the default, `MFA_SSO=local`, an SSO sign-in goes through the same second
+factor as a password sign-in. Settings are in `config/runtime.exs`.
+
+`MFA_REQUIRED` enrolls on trust: the first sign-in after the switch gives the
+second factor to whoever holds the password (or the SSO session) at that moment.
+Switch it on after everyone who matters has enrolled, or accept that.
+
+## Providers
+
+Storage, enrollment and recovery codes are a `<%= inspect(@mfa) %>.Provider`:
+`<%= inspect(@mfa) %>.Totp` unless `config <%= inspect(@app) %>, <%= inspect(@mfa) %>, provider: …` says
+otherwise. The functions that take a code or a user delegate to it.
+"""
+
+@type step :: :complete | :challenge | :enroll
+
+@doc "What a sign-in through `activity` leads to for `user`. See the module doc."
+@spec sign_in_step(struct(), term()) :: step()
+def sign_in_step(user, activity) do
+  cond do
+    idp_satisfied?(user, activity) -> :complete
+    enrolled?(user) -> :challenge
+    required?() -> :enroll
+    true -> :complete
+  end
+end
+
+@doc """
+Whether the identity provider's MFA settles this sign-in: `MFA_SSO=idp`, an SSO
+activity, and an ID token whose `amr`/`acr` qualify (the user carries them as
+`:sso_assurance` metadata, put there by
+`<%= inspect(@record_sso_assurance) %>`).
+"""
+@spec idp_satisfied?(struct(), term()) :: boolean()
+def idp_satisfied?(user, {:sso, _phase}) do
+  sso_mode() == :idp and
+    assurance_satisfied?(Map.get(user.__metadata__, :sso_assurance, %{amr: [], acr: nil}))
+end
+
+def idp_satisfied?(_user, _activity), do: false
+
+@doc "Whether `amr`/`acr` claims include one that is configured to count as MFA."
+@spec assurance_satisfied?(%{amr: [String.t()], acr: String.t() | nil}) :: boolean()
+def assurance_satisfied?(%{amr: amr, acr: acr}) do
+  Enum.any?(amr, &(&1 in sso_mfa_amr())) or (acr != nil and acr in sso_mfa_acr())
+end
+
+@doc "Whether everyone has to have a second factor (`MFA_REQUIRED`)."
+@spec required?() :: boolean()
+def required?, do: Keyword.get(config(), :required, false)
+
+@doc "`:local` or `:idp` (`MFA_SSO`)."
+@spec sso_mode() :: :local | :idp
+def sso_mode, do: Keyword.get(config(), :sso, :local)
+
+@doc "The name an authenticator app shows next to the account."
+@spec issuer() :: String.t()
+def issuer, do: Keyword.get(config(), :issuer, <%= inspect(inspect(@prefix)) %>)
+
+@doc "The `amr` values that count as MFA."
+@spec sso_mfa_amr() :: [String.t()]
+def sso_mfa_amr, do: Keyword.get(config(), :sso_mfa_amr, ["mfa"])
+
+@doc "The `acr` values that count as MFA."
+@spec sso_mfa_acr() :: [String.t()]
+def sso_mfa_acr, do: Keyword.get(config(), :sso_mfa_acr, [])
+
+@doc "Whether the user has a confirmed second factor."
+@spec enrolled?(struct()) :: boolean()
+def enrolled?(user), do: status(user) != nil
+
+@doc "The user's confirmed factor, or `nil`."
+@spec status(struct()) :: <%= inspect(@mfa) %>.Provider.status() | nil
+def status(user), do: provider().status(user)
+
+@doc "The confirmed factors of `users`, by user id."
+@spec statuses([struct()]) :: %{optional(term()) => <%= inspect(@mfa) %>.Provider.status()}
+def statuses(users), do: provider().statuses(users)
+
+@doc "Starts enrolling a factor. See `<%= inspect(@mfa) %>.Provider`."
+@spec begin_enrollment(struct()) ::
+        {:ok, <%= inspect(@mfa) %>.Provider.enrollment()} | {:error, :already_enrolled}
+def begin_enrollment(user), do: provider().begin_enrollment(user)
+
+@doc "Confirms the factor; returns the recovery codes, once."
+@spec confirm_enrollment(struct(), String.t()) ::
+        {:ok, [String.t()]} | {:error, :invalid_code | :not_started | :already_enrolled}
+def confirm_enrollment(user, code), do: provider().confirm_enrollment(user, code)
+
+@doc "Abandons an enrollment that was not confirmed."
+@spec cancel_enrollment(struct()) :: :ok
+def cancel_enrollment(user), do: provider().cancel_enrollment(user)
+
+@doc "Checks a code or a recovery code; repeated failures lock the factor for 15 minutes."
+@spec verify(struct(), String.t()) :: :ok | {:error, :invalid_code | :locked | :not_enrolled}
+def verify(user, code), do: provider().verify(user, code)
+
+@doc "Replaces the recovery codes once `code` is accepted; returns the new ones, once."
+@spec regenerate_recovery_codes(struct(), String.t()) ::
+        {:ok, [String.t()]} | {:error, :invalid_code | :locked | :not_enrolled}
+def regenerate_recovery_codes(user, code) do
+  with :ok <- verify(user, code), do: provider().regenerate_recovery_codes(user)
+end
+
+@doc "Turns the user's second factor off once `code` is accepted, unless it is required."
+@spec disable(struct(), String.t()) ::
+        :ok | {:error, :required | :invalid_code | :locked | :not_enrolled}
+def disable(user, code) do
+  if required?() do
+    {:error, :required}
+  else
+    with :ok <- verify(user, code), do: provider().remove(user)
+  end
+end
+
+@doc """
+Removes the user's second factor without a code: an administrator's reset.
+Who may do it is the caller's business (`<%= inspect(@web) %>.LiveAdmin`).
+"""
+@spec reset(struct()) :: :ok
+def reset(user), do: provider().remove(user)
+
+defp provider, do: Keyword.get(config(), :provider, <%= inspect(@mfa) %>.Totp)
+
+defp config, do: Application.get_env(<%= inspect(@app) %>, __MODULE__, [])

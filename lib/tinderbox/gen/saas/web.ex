@@ -145,29 +145,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     if present? do
       igniter
     else
-      Igniter.Project.Module.find_and_update_module!(igniter, router, fn zipper ->
-        with {:ok, zipper} <-
-               Igniter.Code.Common.move_to(zipper, fn candidate ->
-                 Igniter.Code.Function.function_call?(
-                   candidate,
-                   :ash_authentication_live_session,
-                   [
-                     1,
-                     2,
-                     3,
-                     4
-                   ]
-                 )
-               end),
-             {:ok, zipper} <- Igniter.Code.Common.move_to_do_block(zipper) do
-          {:ok, Igniter.Code.Common.add_code(zipper, live_routes())}
-        else
-          _ ->
-            {:warning,
-             "Could not find `ash_authentication_live_session` in #{inspect(router)}. " <>
-               "Add these routes inside it by hand:\n\n" <> live_routes()}
-        end
-      end)
+      Edits.add_to_live_session(igniter, router, :authenticated_routes, live_routes())
     end
   end
 

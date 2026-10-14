@@ -1,0 +1,16 @@
+# Encryption at rest with <%= inspect(@vault) %> (AES-GCM, through AshCloak): the TOTP secrets of
+# multi-factor authentication, and any attribute you encrypt the same way. CLOAK_KEY is
+# 32 random bytes, base64 (`openssl rand -base64 32`). The default is for development
+# and tests only; production refuses to start without the variable.
+cloak_key =
+  System.get_env("CLOAK_KEY") ||
+    if config_env() == :prod do
+      raise "environment variable CLOAK_KEY is missing. Generate one with: openssl rand -base64 32"
+    else
+      "pStNbheoBKYqXYaAI0EtEDdrNml+TJNNHjJMD//dhc4="
+    end
+
+config <%= inspect(@app) %>, <%= inspect(@vault) %>,
+  ciphers: [
+    default: {Cloak.Ciphers.AES.GCM, tag: "AES.GCM.V1", key: Base.decode64!(cloak_key), iv_length: 12}
+  ]

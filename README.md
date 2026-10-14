@@ -14,6 +14,7 @@ dev-loop tasks.
    and publishes the transformed message to a second endpoint of the same broker.
    Brokers: `sqs`, `pubsub`, `rabbitmq`, `kafka`, `nats`.
 3. **SaaS stack** — a Phoenix LiveView application with password and SSO sign-in,
+   two-factor authentication (TOTP, or the SSO provider's MFA),
    organizations with memberships and invitations, notifications (in-app inbox and
    email), Stripe subscriptions, an admin area, a JSON:API with OpenAPI docs,
    JetStream domain events, feature flags, health, metrics and tracing, a release
@@ -215,6 +216,28 @@ Ash packages the other stacks use, then adds:
   `:admin`: an email in `ADMIN_EMAILS` gets `:admin` when it registers. The list is
   empty in production unless you set it. The magic-link route the installer adds is
   removed.
+* **Two-factor authentication** — for the two setups a SaaS meets: self-hosted TOTP,
+  and an identity provider that already does MFA. People turn TOTP on at
+  `/settings/security` (QR code, a confirming code, ten recovery codes shown once);
+  sign-in then asks for a code at `/mfa` (`<App>Web.MfaController`) before anyone is
+  signed in. Ten wrong codes in a row lock the factor for 15 minutes, a code is never
+  accepted twice, recovery codes are stored as SHA-256 hashes, and the TOTP secret is
+  encrypted at rest (AshCloak, AES-GCM, `<App>.Vault`, keyed by `CLOAK_KEY`).
+  Platform admins see everyone's status at `/admin/security` and can reset a user
+  who lost the device and the codes. `MFA_REQUIRED=true` sends everyone without a
+  factor to set one up at their next sign-in (and takes away the switch to turn it
+  off); that enrolls whoever holds the password at that moment, so switch it on
+  after the people who matter have enrolled. `MFA_SSO=idp` trusts the MFA the
+  provider reports in the OIDC ID token (`amr`, or `acr` against `SSO_MFA_ACR`;
+  `SSO_ACR_VALUES` asks the provider to step up, `urn:okta:loa:2fa:any` for Okta);
+  an SSO sign-in without it falls back to the same code prompt, it is not refused.
+  `<App>.Accounts.MFA` is the facade and `<App>.Accounts.MFA.Provider` the behaviour
+  for another kind of factor. Only sign-ins finished by `<App>Web.AuthController` are
+  gated: code that signs a user in some other way has to call
+  `MFA.sign_in_step/2` too. A project generated before this existed gets it with
+  `mix tinderbox.gen.mfa` (it adds `nimble_totp`, `eqrcode`, `cloak` and `ash_cloak`
+  itself, creates an `add_mfa` migration, and replaces `AuthController` only while it
+  is still the installer's).
 * **Organizations** — `<App>.Accounts.Organization`, `Membership` (`owner`, `admin`,
   `member`) and `Invitation` (email, role, token link). The creator becomes the
   owner; the last owner cannot be removed or demoted. Re-inviting an address updates
@@ -285,8 +308,9 @@ Ash packages the other stacks use, then adds:
 
 In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
-`runtime.exs` raises when it is missing). Also set `PHX_HOST`, `PHX_SERVER=true`, the
-`NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*` and `ADMIN_EMAILS` values of `.mise.toml`.
+`runtime.exs` raises when it is missing) and `CLOAK_KEY` (`openssl rand -base64 32`;
+encrypts the two-factor secrets, so keep it). Also set `PHX_HOST`, `PHX_SERVER=true`, the
+`NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`, `MFA_*` and `ADMIN_EMAILS` values of `.mise.toml`.
 Run migrations with the release's `bin/migrate`. With `SMTP_USERNAME` (and
 `SMTP_PASSWORD`) set, mail is authenticated and upgraded with verified STARTTLS;
 behind PgBouncer set `DATABASE_POOLER=pgbouncer` (unnamed prepared statements and
@@ -507,6 +531,44 @@ Beyond that, generated projects were run end to end against the emulators:
 * **saas re-run** — `mix tinderbox.gen.saas` in a generated project reports
   "File already exists" for each module it would create and writes nothing; the
   guarded edits are only covered by the test that applies the generator twice.
+* **saas two-factor authentication** — a project generated from this branch
+  (`mfa_demo`, ports from `.mise.local.toml` because other projects held 4222, 4566,
+  4588 and 5556): `mise run check` passed (formatting, warnings-as-errors compile,
+  38 tests, 25 of them the generated MFA tests: the facade and TOTP provider, the
+  controller, the settings page). Under `mise run dev`, in a browser:
+  * a password user turned TOTP on at `/settings/security` (QR code and manual key,
+    a confirming code, ten recovery codes); the code was computed from the displayed
+    key by a script, not by an authenticator app, and the QR code was not scanned;
+  * sign out and in landed on `/mfa` with `/dashboard` sent back to `/sign-in`
+    meanwhile; a wrong code gave the error and stayed, the right code signed in, a
+    recovery code signed in once and was refused the second time;
+  * `/admin/security` as an `ADMIN_EMAILS` user listed the user as On with nine
+    recovery codes; Reset (with its confirm dialog) turned it Off;
+  * with `MFA_REQUIRED=true` a user without a factor was sent to `/mfa/setup` after the
+    password, confirming showed the recovery codes, Continue signed in, and
+    `/settings/security` had no turn-off form;
+  * SSO through Dex with `MFA_SSO=idp`: with no factor the SSO sign-in completed, and
+    with one it went to `/mfa`, because Dex sends no `amr`; so what was seen is the
+    fallback to the local rules. A throwaway test of the `sso` strategy's `:register`
+    action with an unsigned ID token carrying `amr: ["pwd","mfa"]` put that on the
+    user, and with `MFA_SSO=idp` `sign_in_step/2` was `:complete` for the SSO sign-in
+    and `:enroll` for a password one under `MFA_REQUIRED`;
+  * with `SSO_ACR_VALUES=urn:okta:loa:2fa:any` the redirect to the provider carried
+    `acr_values=urn%3Aokta%3Aloa%3A2fa%3Aany` next to `scope=openid profile email`;
+  * `MIX_ENV=prod mix run -e ''` without `CLOAK_KEY` (everything else set) exited with
+    `environment variable CLOAK_KEY is missing`.
+
+  `mix tinderbox.gen.mfa` was run in a project generated from the commit before this
+  one (`pre_mfa`, not `main`, which is behind it): it added the four packages to
+  `mix.exs`, created the modules, `*_add_mfa.exs` (a `mfa_factors` table only) and the
+  tests, put Security in the user menu and Two-factor in the admin navigation, and
+  replaced `AuthController`. With the `tinderbox` dependency removed again,
+  `mise run check` passed (38 tests); `/settings/security` rendered under
+  `mise run dev`; running the task again exited 1 with
+  `already exists: this project has multi-factor authentication`.
+  **Not exercised:** a real identity provider that sends `amr`/`acr` (Okta, Entra,
+  Auth0, Keycloak), an authenticator app, concurrent guesses against the lockout, and
+  the customized-`AuthController` warning outside the generator test.
 * **saas `mix <app>.gen.domain`** — in a project generated from this branch
   (`saas_check`, ports as above),
   `mix saas_check.gen.domain SaasCheck.Upstreams --queues upstreams:5,dead_letters --yes`

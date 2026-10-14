@@ -1,0 +1,63 @@
+use <%= inspect(@web) %>, :controller
+use AshAuthentication.Phoenix.Controller
+
+alias <%= inspect(@mfa) %>
+alias <%= inspect(@web) %>.MfaController
+
+# A sign-in is not finished here: `<%= inspect(@mfa) %>.sign_in_step/2` decides whether the
+# user is signed in now, has to enter a second factor, or has to set one up first
+# (`<%= inspect(@web) %>.MfaController`).
+def success(conn, activity, user, _token) do
+  return_to = get_session(conn, :return_to) || ~p"/"
+  conn = delete_session(conn, :return_to)
+
+  case MFA.sign_in_step(user, activity) do
+    :complete -> MfaController.complete_sign_in(conn, user, return_to, message(activity))
+    step -> MfaController.start(conn, user, step, return_to)
+  end
+end
+
+def failure(conn, activity, reason) do
+  message =
+    case {activity, reason} do
+      {_,
+       %AshAuthentication.Errors.AuthenticationFailed{
+         caused_by: %Ash.Error.Forbidden{
+           errors: [%AshAuthentication.Errors.CannotConfirmUnconfirmedUser{}]
+         }
+       }} ->
+        """
+        You have already signed in another way, but have not confirmed your account.
+        You can confirm your account using the link we sent to you, or by resetting your password.
+        """
+
+      {_,
+       %AshAuthentication.Errors.AuthenticationFailed{
+         caused_by: %AshAuthentication.Errors.ConfirmationRequired{}
+       }} ->
+        """
+        An account with this email already exists. We've sent a link to that
+        address - confirm it to finish linking this provider to your account.
+        """
+
+      _ ->
+        "Incorrect email or password"
+    end
+
+  conn
+  |> put_flash(:error, message)
+  |> redirect(to: ~p"/sign-in")
+end
+
+def sign_out(conn, _params) do
+  return_to = get_session(conn, :return_to) || ~p"/"
+
+  conn
+  |> clear_session(<%= inspect(@app) %>)
+  |> put_flash(:info, "You are now signed out")
+  |> redirect(to: return_to)
+end
+
+defp message({:confirm_new_user, :confirm}), do: "Your email address has now been confirmed"
+defp message({:password, :reset}), do: "Your password has successfully been reset"
+defp message(_activity), do: "You are now signed in"

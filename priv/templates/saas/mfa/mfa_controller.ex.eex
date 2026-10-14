@@ -1,0 +1,227 @@
+@moduledoc """
+The second step of signing in. `<%= inspect(@web) %>.AuthController.success/4` hands a
+user here when `<%= inspect(@mfa) %>.sign_in_step/2` says a code is needed (`:challenge`)
+or a factor has to be set up first (`:enroll`).
+
+Until the second step is done the user is not signed in: the session holds only
+`:mfa_pending` (who, which step, where to go next, when it started), and the
+sign-in token the first step produced is revoked, since it would otherwise be a
+bearer token that skips the second factor. The pending state expires after 10
+minutes.
+
+  * `GET /mfa` asks for a code, `POST /mfa` checks it (an authenticator code, or a
+    recovery code);
+  * `GET /mfa/setup` shows the QR code, `POST /mfa/setup` confirms the first code, signs
+    the user in and shows the recovery codes once;
+  * `POST /mfa/cancel` abandons the sign-in.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+alias <%= inspect(@mfa) %>
+alias <%= inspect(@user) %>
+
+@pending_ttl_seconds 600
+
+# -- from the first step ------------------------------------------------------
+
+@doc """
+Parks the sign-in of `user` until the second step (`:challenge` or `:enroll`) is
+done, and sends them to it.
+"""
+@spec start(Plug.Conn.t(), struct(), :challenge | :enroll, String.t()) :: Plug.Conn.t()
+def start(conn, user, step, return_to) do
+  revoke_token(user)
+
+  conn
+  |> configure_session(renew: true)
+  |> put_session(:mfa_pending, %{
+    "user_id" => user.id,
+    "step" => Atom.to_string(step),
+    "return_to" => return_to,
+    "started_at" => System.os_time(:second)
+  })
+  |> redirect(to: if(step == :challenge, do: ~p"/mfa", else: ~p"/mfa/setup"))
+end
+
+@doc "Signs `user` in (session and token) and redirects to `return_to` with `message`."
+@spec complete_sign_in(Plug.Conn.t(), struct(), String.t(), String.t()) :: Plug.Conn.t()
+def complete_sign_in(conn, user, return_to, message) do
+  case sign_in(conn, user) do
+    {:ok, conn} -> conn |> put_flash(:info, message) |> redirect(to: return_to)
+    :error -> sign_in_failed(conn)
+  end
+end
+
+# -- the second step ----------------------------------------------------------
+
+# GET /mfa
+def challenge(conn, _params) do
+  with_pending(conn, :challenge, fn _user, _return_to -> render_challenge(conn, nil, 200) end)
+end
+
+# POST /mfa
+def verify(conn, params) do
+  with_pending(conn, :challenge, fn user, return_to ->
+    case MFA.verify(user, code(params)) do
+      :ok ->
+        complete_sign_in(conn, user, return_to, "You are now signed in")
+
+      {:error, :invalid_code} ->
+        render_challenge(
+          conn,
+          "That code is not valid. Try again, or enter a recovery code.",
+          422
+        )
+
+      {:error, :locked} ->
+        conn
+        |> delete_session(:mfa_pending)
+        |> put_flash(:error, "Too many incorrect codes. Try again in 15 minutes.")
+        |> redirect(to: ~p"/sign-in")
+
+      {:error, :not_enrolled} ->
+        expired(conn)
+    end
+  end)
+end
+
+# GET /mfa/setup
+def setup(conn, _params) do
+  with_pending(conn, :enroll, fn user, _return_to ->
+    case MFA.begin_enrollment(user) do
+      {:ok, enrollment} -> render_setup(conn, enrollment, nil, 200)
+      {:error, :already_enrolled} -> challenge_instead(conn)
+    end
+  end)
+end
+
+# POST /mfa/setup
+def confirm(conn, params) do
+  with_pending(conn, :enroll, fn user, return_to ->
+    case MFA.confirm_enrollment(user, code(params)) do
+      {:ok, codes} ->
+        case sign_in(conn, user) do
+          {:ok, conn} -> render(conn, :recovery_codes, codes: codes, return_to: return_to)
+          :error -> sign_in_failed(conn)
+        end
+
+      {:error, :invalid_code} ->
+        # The same secret: the QR code the user already scanned stays valid.
+        case MFA.begin_enrollment(user) do
+          {:ok, enrollment} -> render_setup(conn, enrollment, "That code is not valid.", 422)
+          {:error, :already_enrolled} -> challenge_instead(conn)
+        end
+
+      {:error, :already_enrolled} ->
+        challenge_instead(conn)
+
+      {:error, :not_started} ->
+        redirect(conn, to: ~p"/mfa/setup")
+    end
+  end)
+end
+
+# POST /mfa/cancel
+def cancel(conn, _params) do
+  conn
+  |> delete_session(:mfa_pending)
+  |> put_flash(:info, "Sign-in cancelled.")
+  |> redirect(to: ~p"/sign-in")
+end
+
+# -- helpers ------------------------------------------------------------------
+
+# Runs `fun` for a pending sign-in at `step`; anywhere else the user is sent to
+# the step they are at, or back to the sign-in page when nothing is pending.
+defp with_pending(conn, step, fun) do
+  case pending(conn) do
+    {:ok, user, ^step, return_to} -> fun.(user, return_to)
+    {:ok, _user, :challenge, _return_to} -> redirect(conn, to: ~p"/mfa")
+    {:ok, _user, :enroll, _return_to} -> redirect(conn, to: ~p"/mfa/setup")
+    :error -> expired(conn)
+  end
+end
+
+defp pending(conn) do
+  with %{"user_id" => id, "step" => step, "return_to" => return_to, "started_at" => started_at} <-
+         get_session(conn, :mfa_pending),
+       true <- is_integer(started_at) and System.os_time(:second) - started_at <= @pending_ttl_seconds,
+       {:ok, step} <- step(step),
+       {:ok, user} <- Ash.get(User, id, authorize?: false) do
+    {:ok, user, step, return_to}
+  else
+    _ -> :error
+  end
+end
+
+defp step("challenge"), do: {:ok, :challenge}
+defp step("enroll"), do: {:ok, :enroll}
+defp step(_other), do: :error
+
+# The user turned out to have a factor already: ask for a code instead.
+defp challenge_instead(conn) do
+  pending = Map.put(get_session(conn, :mfa_pending), "step", "challenge")
+
+  conn
+  |> put_session(:mfa_pending, pending)
+  |> redirect(to: ~p"/mfa")
+end
+
+defp sign_in(conn, user) do
+  with {:ok, user} <- ensure_token(user) do
+    {:ok,
+     conn
+     |> delete_session(:mfa_pending)
+     |> AshAuthentication.Plug.Helpers.store_in_session(user)
+     |> assign(:current_user, user)}
+  end
+end
+
+# The session stores the token; a user fetched for the second step has none yet.
+defp ensure_token(user) do
+  case user.__metadata__[:token] do
+    token when is_binary(token) ->
+      {:ok, user}
+
+    _none ->
+      case AshAuthentication.Jwt.token_for_user(user) do
+        {:ok, token, _claims} -> {:ok, Ash.Resource.put_metadata(user, :token, token)}
+        :error -> :error
+      end
+  end
+end
+
+defp revoke_token(user) do
+  case user.__metadata__[:token] do
+    token when is_binary(token) -> AshAuthentication.TokenResource.revoke(<%= inspect(@token) %>, token)
+    _none -> :ok
+  end
+end
+
+defp sign_in_failed(conn) do
+  conn
+  |> delete_session(:mfa_pending)
+  |> put_flash(:error, "Could not sign you in. Try again.")
+  |> redirect(to: ~p"/sign-in")
+end
+
+defp expired(conn) do
+  conn
+  |> delete_session(:mfa_pending)
+  |> put_flash(:error, "Your sign-in expired. Sign in again.")
+  |> redirect(to: ~p"/sign-in")
+end
+
+defp code(%{"mfa" => %{"code" => code}}) when is_binary(code), do: code
+defp code(_params), do: ""
+
+defp form, do: Phoenix.Component.to_form(%{"code" => ""}, as: :mfa)
+
+defp render_challenge(conn, error, status) do
+  conn |> put_status(status) |> render(:challenge, form: form(), error: error)
+end
+
+defp render_setup(conn, enrollment, error, status) do
+  conn |> put_status(status) |> render(:setup, enrollment: enrollment, form: form(), error: error)
+end

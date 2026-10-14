@@ -1,0 +1,10 @@
+@moduledoc """
+Encrypts attributes at rest through AshCloak: the TOTP secrets of multi-factor
+authentication (`<%= inspect(@mfa_factor) %>`), and any attribute you encrypt the
+same way. The key comes from `CLOAK_KEY` (see `config/runtime.exs`).
+
+The cipher is AES-GCM, which authenticates the ciphertext. Do not switch to
+`Cloak.Ciphers.AES.CTR`: it has no authentication.
+"""
+
+use Cloak.Vault, otp_app: <%= inspect(@app) %>

@@ -93,6 +93,8 @@ defmodule Tinderbox.Env do
          {"SSO_CLIENT_SECRET", "#{app_dash}-dev-secret"},
          {"SSO_REDIRECT_URI", "http://localhost:4000/auth"}
        ]},
+      {"MFA: MFA_REQUIRED=true makes everyone set up a second factor at their next sign-in; MFA_SSO=idp accepts the SSO provider's MFA (see config/runtime.exs)",
+       [{"MFA_REQUIRED", "false"}, {"MFA_SSO", "local"}]},
       {"Mail: Mailpit (UI http://localhost:8025; SMTP_PORT and MAILPIT_UI_PORT are the host ports compose publishes)",
        [
          {"SMTP_HOST", "localhost"},

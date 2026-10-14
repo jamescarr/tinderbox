@@ -1,0 +1,139 @@
+@moduledoc """
+Admin: who has two-factor authentication on, since when, and whether the factor
+is locked after too many wrong codes, with a button to remove a user's factor when
+they have lost the authenticator and the recovery codes. The user signs in with the
+password again, and sets up a new factor if one is required.
+
+The table is the UI kit's `<.data_table>` over an in-memory list (the newest
+1000 users), like `<%= inspect(@web) %>.Admin.UsersLive`.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
+alias <%= inspect(@mfa) %>
+alias <%= inspect(@user) %>
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@limit 1000
+
+@impl true
+def mount(_params, _session, socket) do
+  state =
+    ListState.new(
+      search_fields: [:email],
+      sortable: [:email, :enabled, :enrolled_at, :last_used_at, :recovery_codes_left],
+      sort_by: :email,
+      sort_dir: :asc,
+      page_size: 25
+    )
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Two-factor authentication")
+   |> load_rows()
+   |> run(state)}
+end
+
+@impl true
+def handle_event("table", params, socket) do
+  {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
+end
+
+def handle_event("reset", %{"id" => id}, socket) do
+  user = Ash.get!(User, id, actor: socket.assigns.current_user)
+  :ok = MFA.reset(user)
+
+  {:noreply,
+   socket
+   |> put_flash(:info, "Two-factor authentication was removed for #{user.email}.")
+   |> load_rows()
+   |> run(socket.assigns.table)}
+end
+
+defp load_rows(socket) do
+  users =
+    User
+    |> Ash.Query.sort(created_at: :desc)
+    |> Ash.Query.limit(@limit)
+    |> Ash.read!(actor: socket.assigns.current_user)
+
+  statuses = MFA.statuses(users)
+  now = DateTime.utc_now()
+
+  rows =
+    Enum.map(users, fn user ->
+      status = Map.get(statuses, user.id)
+
+      %{
+        id: user.id,
+        email: to_string(user.email),
+        enabled: status != nil,
+        enrolled_at: status && status.enrolled_at,
+        last_used_at: status && status.last_used_at,
+        recovery_codes_left: status && status.recovery_codes_left,
+        locked: locked?(status, now)
+      }
+    end)
+
+  assign(socket, :all_rows, rows)
+end
+
+defp locked?(%{locked_until: %DateTime{} = until}, now), do: DateTime.compare(until, now) == :gt
+defp locked?(_status, _now), do: false
+
+defp run(socket, state) do
+  {rows, state} = ListState.run(socket.assigns.all_rows, state)
+  assign(socket, rows: rows, table: state)
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:security}>
+    <.data_table
+      id="mfa-users"
+      rows={@rows}
+      state={@table}
+      searchable
+      search_placeholder="Search by email…"
+      row_id={&"mfa-user-#{&1.id}"}
+    >
+      <:col :let={row} label="Email" field={:email} sortable>
+        <div class="flex items-center gap-3">
+          <.avatar name={row.email} />
+          <span class="font-medium">{row.email}</span>
+        </div>
+      </:col>
+      <:col :let={row} label="Two-factor" field={:enabled} sortable>
+        <.badge color={if row.enabled, do: "success", else: "neutral"}>
+          {if row.enabled, do: "On", else: "Off"}
+        </.badge>
+        <.badge :if={row.locked} color="warning">Locked</.badge>
+      </:col>
+      <:col :let={row} label="Set up" field={:enrolled_at} sortable>
+        {format_datetime(row.enrolled_at)}
+      </:col>
+      <:col :let={row} label="Last used" field={:last_used_at} sortable>
+        {format_datetime(row.last_used_at)}
+      </:col>
+      <:col :let={row} label="Recovery codes" field={:recovery_codes_left} sortable>
+        {row.recovery_codes_left || "—"}
+      </:col>
+      <:action :let={row}>
+        <.button
+          :if={row.enabled}
+          class="btn btn-ghost btn-xs"
+          phx-click="reset"
+          phx-value-id={row.id}
+          data-confirm={"Remove two-factor authentication for #{row.email}?"}
+        >
+          Reset
+        </.button>
+      </:action>
+    </.data_table>
+  </AdminLayouts.admin>
+  """
+end
