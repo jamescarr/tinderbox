@@ -1,0 +1,32 @@
+@moduledoc """
+`<%= inspect(@connections) %>.Provider` without a server: it invents a client id and secret
+and forgets them. For the test environment (`OAUTH_PROVIDER` is forced to
+`fake` there) and for a dev box that does not run Hydra.
+
+A connection created under it has no client anywhere, so nothing can ask for a
+token for it; the tests sign their own, as the generated API test does.
+"""
+
+@behaviour <%= inspect(@provider) %>
+
+alias <%= inspect(@provider) %>
+
+@impl true
+def register_client(_name, _organization_id) do
+  {:ok,
+   %{
+     client_id: "fake_" <> random(12),
+     client_secret: random(32)
+   }}
+end
+
+@impl true
+def delete_client(_client_id), do: :ok
+
+@impl true
+def client_id(claims), do: claims["client_id"]
+
+@impl true
+def token_endpoint, do: String.trim_trailing(Provider.config()[:issuer], "/") <> "/oauth2/token"
+
+defp random(bytes), do: bytes |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)

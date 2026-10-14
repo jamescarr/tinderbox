@@ -1,0 +1,20 @@
+# OAuth2 API connections: the authorization server that holds each organization's
+# client credentials and issues the access tokens the JSON:API accepts.
+#
+#   OAUTH_PROVIDER     hydra | auth0 (tests always use the in-memory `fake`, no server needed)
+#   OAUTH_ISSUER       the `iss` of its access tokens, exactly: Hydra's URLS_SELF_ISSUER
+#                      (trailing slash), https://<tenant>.auth0.com/ for Auth0
+#   OAUTH_AUDIENCE     the identifier tokens must carry in `aud`; clients pass it as
+#                      `audience=` when they ask for a token (Auth0: the API's identifier)
+#   HYDRA_ADMIN_URL    Hydra's admin API; HYDRA_ADMIN_TOKEN only for Ory Network
+#   AUTH0_*            a Machine-to-Machine application allowed create:clients,
+#                      delete:clients and create:client_grants on the Management API
+config <%= inspect(@app) %>, :connections,
+  provider: if(config_env() == :test, do: "fake", else: System.get_env("OAUTH_PROVIDER", "hydra")),
+  issuer: System.get_env("OAUTH_ISSUER", "http://localhost:4444/"),
+  audience: System.get_env("OAUTH_AUDIENCE", "http://localhost:4000/api"),
+  hydra_admin_url: System.get_env("HYDRA_ADMIN_URL", "http://localhost:4445"),
+  hydra_admin_token: System.get_env("HYDRA_ADMIN_TOKEN"),
+  auth0_domain: System.get_env("AUTH0_DOMAIN", "replace-me.auth0.com"),
+  auth0_client_id: System.get_env("AUTH0_CLIENT_ID", "replace_me"),
+  auth0_client_secret: System.get_env("AUTH0_CLIENT_SECRET", "replace_me")

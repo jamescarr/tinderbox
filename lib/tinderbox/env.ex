@@ -93,6 +93,16 @@ defmodule Tinderbox.Env do
          {"SSO_CLIENT_SECRET", "#{app_dash}-dev-secret"},
          {"SSO_REDIRECT_URI", "http://localhost:4000/auth"}
        ]},
+      {"OAuth2 API connections: Ory Hydra locally; OAUTH_PROVIDER auth0 uses the AUTH0_* values (replace in .mise.local.toml)",
+       [
+         {"OAUTH_PROVIDER", "hydra"},
+         {"OAUTH_ISSUER", "http://localhost:4444/"},
+         {"OAUTH_AUDIENCE", "http://localhost:4000/api"},
+         {"HYDRA_ADMIN_URL", "http://localhost:4445"},
+         {"AUTH0_DOMAIN", "replace-me.auth0.com"},
+         {"AUTH0_CLIENT_ID", "replace_me"},
+         {"AUTH0_CLIENT_SECRET", "replace_me"}
+       ]},
       {"Mail: Mailpit (UI http://localhost:8025; SMTP_PORT and MAILPIT_UI_PORT are the host ports compose publishes)",
        [
          {"SMTP_HOST", "localhost"},

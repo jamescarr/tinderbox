@@ -1,0 +1,74 @@
+@moduledoc """
+Plug that turns an OAuth2 access token into the actor of an API request.
+
+It runs in the `:api` pipeline after AshAuthentication has had its chance, so a
+signed-in user's bearer token keeps working exactly as before. A request with no
+bearer token, or one a user is already signed in with, passes through untouched,
+and so does a token that was not issued by the connections' issuer: whatever it
+is, it is not this plug's business, and the policies see no actor.
+
+A token that *is* from the issuer must be valid (`<%= inspect(@connections) %>.Tokens`) and
+belong to an unrevoked `<%= inspect(@connection) %>`. Then that connection becomes the Ash
+actor (and `conn.assigns.current_connection`). Anything else is answered with
+`401` and `WWW-Authenticate: Bearer error="invalid_token"`; revoking a
+connection therefore takes effect on its next request, not when the token expires.
+"""
+
+@behaviour Plug
+
+import Plug.Conn
+
+alias <%= inspect(@connections) %>
+alias <%= inspect(@connections) %>.Provider
+alias <%= inspect(@connections) %>.Tokens
+
+@impl Plug
+def init(opts), do: opts
+
+@impl Plug
+def call(conn, _opts) do
+  with nil <- conn.assigns[:current_user],
+       ["Bearer " <> token | _] <- get_req_header(conn, "authorization") do
+    authenticate(conn, token)
+  else
+    _anonymous_or_user -> conn
+  end
+end
+
+defp authenticate(conn, token) do
+  case Tokens.verify(token) do
+    {:ok, claims} -> load_connection(conn, Provider.client_id(claims))
+    {:error, :not_ours} -> conn
+    {:error, _invalid} -> unauthorized(conn)
+  end
+end
+
+defp load_connection(conn, client_id) do
+  case Connections.active_by_client_id(client_id) do
+    {:ok, %<%= inspect(@connection) %>{} = connection} ->
+      conn
+      |> assign(:current_connection, connection)
+      |> Ash.PlugHelpers.set_actor(connection)
+
+    _revoked_unknown_or_failed ->
+      unauthorized(conn)
+  end
+end
+
+defp unauthorized(conn) do
+  body = %{
+    errors: [
+      %{
+        status: "401",
+        title: "Unauthorized",
+        detail: "The bearer token is not valid for this API"
+      }
+    ]
+  }
+
+  conn
+  |> put_resp_header("www-authenticate", ~s(Bearer error="invalid_token"))
+  |> put_resp_content_type("application/vnd.api+json")
+  |> send_resp(401, Jason.encode!(body))
+  |> halt()
+end

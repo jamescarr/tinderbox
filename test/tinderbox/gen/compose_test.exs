@@ -74,7 +74,7 @@ defmodule Tinderbox.Gen.ComposeTest do
     assert ready =~ ~r/nats-bootstrap:\s+condition: service_completed_successfully/
   end
 
-  test "saas adds Dex, Mailpit and NATS, and Dex's config next to them" do
+  test "saas adds Dex, Hydra, Mailpit and NATS, and Dex's config next to them" do
     igniter = compose(:nats, stack: "saas")
     content = source(igniter, "docker-compose.yml")
 
@@ -84,6 +84,14 @@ defmodule Tinderbox.Gen.ComposeTest do
     assert content =~ ~s|"${SMTP_PORT:-1025}:1025"|
     assert content =~ ~s|"${MAILPIT_UI_PORT:-8025}:8025"|
     assert content =~ "image: nats:2.15-alpine"
+
+    # Hydra keeps its clients in the Postgres above; two jobs create and migrate
+    # its database before it starts.
+    assert content =~ "image: oryd/hydra:v26.2.0"
+    assert content =~ "CREATE DATABASE hydra"
+    assert content =~ "STRATEGIES_ACCESS_TOKEN: jwt"
+    assert content =~ ~s(["migrate", "sql", "up", "-e", "--yes"])
+    refute compose_content(:sqs) =~ "oryd/hydra"
     # The application creates its own stream (`Test.Events.StreamBootstrap`).
     refute content =~ "nats-bootstrap"
 

@@ -1,0 +1,53 @@
+defmodule <%= inspect(@web) %>.ConnectionsLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  setup do
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  test "the owner creates a connection and sees its secret once", %{conn: conn, owner: owner} do
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/connections")
+
+    view |> form("#connection-form", connection: %{name: "CI"}) |> render_submit()
+
+    assert has_element?(view, "#new-credentials")
+    assert render(view) =~ "Copy the client secret now"
+    assert has_element?(view, "#connections", "CI")
+
+    view |> element("#new-credentials button", "Done") |> render_click()
+
+    refute has_element?(view, "#new-credentials")
+  end
+
+  test "the owner revokes a connection", %{conn: conn, owner: owner, organization: organization} do
+    connection = connection_fixture(organization, owner)
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/connections")
+
+    view |> element("#connection-#{connection.id} button", "Revoke") |> render_click()
+
+    assert has_element?(view, "#connection-#{connection.id}", "Revoked")
+    refute has_element?(view, "#connection-#{connection.id} button", "Revoke")
+  end
+
+  test "a member sees the list but cannot create or revoke", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+    connection_fixture(organization, owner)
+
+    {:ok, view, _html} = live(sign_in(conn, member), ~p"/connections")
+
+    assert has_element?(view, "#connections", "CI")
+    refute has_element?(view, "#connection-form")
+    refute has_element?(view, "button", "Revoke")
+  end
+end

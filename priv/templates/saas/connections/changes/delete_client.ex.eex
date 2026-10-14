@@ -1,0 +1,31 @@
+@moduledoc """
+Deletes a connection's OAuth2 client at the provider, inside the revoke action,
+before the row is marked revoked.
+
+When the provider refuses, the action fails and nothing changes locally: the
+connection stays active and the manager can try again. A client the provider no
+longer knows counts as deleted, so a retry after a half-finished revoke succeeds.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@connections) %>.Provider
+
+@impl true
+def change(%{data: %{revoked_at: %DateTime{}}} = changeset, _opts, _context) do
+  Ash.Changeset.add_error(changeset, field: :revoked_at, message: "already revoked")
+end
+
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_action(changeset, fn changeset ->
+    case Provider.delete_client(changeset.data.client_id) do
+      :ok ->
+        changeset
+
+      {:error, reason} ->
+        Ash.Changeset.add_error(changeset,
+          message: "could not delete the client at #{Provider.name()}: #{inspect(reason)}"
+        )
+    end
+  end)
+end

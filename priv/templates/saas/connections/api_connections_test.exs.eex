@@ -1,0 +1,114 @@
+defmodule <%= inspect(@web) %>.ApiConnectionsTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+
+  # The `fake` provider issues no tokens, so the tests sign their own with a key
+  # pair they trust: the issuer's key set is cached exactly as a fetch would.
+  setup do
+    owner = user_fixture()
+    organization = organization_fixture(owner)
+    connection = connection_fixture(organization, owner)
+    config = Application.fetch_env!(<%= inspect(@app) %>, :connections)
+
+    key = JOSE.JWK.generate_key({:rsa, 2048})
+    {_kty, public} = key |> JOSE.JWK.to_public() |> JOSE.JWK.to_map()
+
+    :ok =
+      <%= inspect(@connections) %>.Tokens.cache(config[:issuer], %{
+        "keys" => [Map.merge(public, %{"kid" => "test", "use" => "sig", "alg" => "RS256"})]
+      })
+
+    %{
+      owner: owner,
+      organization: organization,
+      connection: connection,
+      config: config,
+      key: key
+    }
+  end
+
+  test "an active connection reads its own organization", ctx do
+    %{conn: conn, key: key, config: config, connection: connection, organization: organization} =
+      ctx
+
+    response = conn |> api(token(key, claims(config, connection))) |> json_response(200)
+
+    assert [%{"id" => id}] = response["data"]
+    assert id == organization.id
+  end
+
+  test "a revoked connection is refused on the next request", ctx do
+    %{conn: conn, key: key, config: config, connection: connection, owner: owner} = ctx
+    token = token(key, claims(config, connection))
+
+    assert [_organization] = conn |> api(token) |> json_response(200) |> Map.fetch!("data")
+
+    Ash.update!(connection, %{}, action: :revoke, actor: owner)
+
+    conn = api(conn, token)
+
+    assert json_response(conn, 401)
+    assert get_resp_header(conn, "www-authenticate") == [~s(Bearer error="invalid_token")]
+  end
+
+  test "a token signed with another key is refused", ctx do
+    %{conn: conn, config: config, connection: connection} = ctx
+    forged = token(JOSE.JWK.generate_key({:rsa, 2048}), claims(config, connection))
+
+    assert conn |> api(forged) |> json_response(401)
+  end
+
+  test "an expired token is refused", ctx do
+    %{conn: conn, key: key, config: config, connection: connection} = ctx
+    expired = token(key, claims(config, connection, %{"exp" => now() - 1}))
+
+    assert conn |> api(expired) |> json_response(401)
+  end
+
+  test "a token for another audience is refused", ctx do
+    %{conn: conn, key: key, config: config, connection: connection} = ctx
+    other = token(key, claims(config, connection, %{"aud" => ["https://other.example"]}))
+
+    assert conn |> api(other) |> json_response(401)
+  end
+
+  test "a token from another issuer is not this API's business", ctx do
+    %{conn: conn, key: key, config: config, connection: connection} = ctx
+    foreign = token(key, claims(config, connection, %{"iss" => "https://elsewhere.example/"}))
+
+    assert %{"data" => []} = conn |> api(foreign) |> json_response(200)
+  end
+
+  defp now, do: System.os_time(:second)
+
+  defp claims(config, connection, overrides \\ %{}) do
+    Map.merge(
+      %{
+        "iss" => config[:issuer],
+        "aud" => [config[:audience]],
+        "client_id" => connection.client_id,
+        "sub" => connection.client_id,
+        "iat" => now(),
+        "exp" => now() + 60
+      },
+      overrides
+    )
+  end
+
+  defp token(key, claims) do
+    {_alg, compact} =
+      key
+      |> JOSE.JWT.sign(%{"alg" => "RS256", "kid" => "test"}, claims)
+      |> JOSE.JWS.compact()
+
+    compact
+  end
+
+  defp api(conn, token) do
+    conn
+    |> put_req_header("accept", "application/vnd.api+json")
+    |> put_req_header("authorization", "Bearer " <> token)
+    |> get(~p"/api/organizations")
+  end
+end

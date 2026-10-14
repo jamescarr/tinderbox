@@ -19,7 +19,9 @@ defmodule Tinderbox.Gen.SaasTest do
     {:ok, igniter: Saas.apply(saas_project(), [])}
   end
 
-  test "creates the accounts, billing, notification and event modules", %{igniter: igniter} do
+  test "creates the accounts, billing, notification, event and connection modules", %{
+    igniter: igniter
+  } do
     for path <- ~w(
           lib/test/accounts/organization.ex
           lib/test/accounts/membership.ex
@@ -56,10 +58,23 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/organization_controller.ex
           lib/test_web/stripe_webhook_handler.ex
           .github/workflows/ci.yml
+          lib/test/connections.ex
+          lib/test/connections/connection.ex
+          lib/test/connections/provider.ex
+          lib/test/connections/providers/hydra.ex
+          lib/test/connections/providers/auth0.ex
+          lib/test/connections/providers/fake.ex
+          lib/test/connections/tokens.ex
+          lib/test/connections/changes/register_client.ex
+          lib/test/connections/changes/delete_client.ex
+          lib/test_web/plugs/load_connection.ex
+          lib/test_web/connections_live.ex
           lib/mix/tasks/test.gen.domain.ex
           test/support/fixtures.ex
           test/support/live_test_helpers.ex
           test/test_web/live/members_live_test.exs
+          test/test_web/live/connections_live_test.exs
+          test/test_web/api_connections_test.exs
           priv/repo/migrations/20250101000000_create_fun_with_flags_toggles.exs
         ) do
       assert_creates(igniter, path)
@@ -139,6 +154,32 @@ defmodule Tinderbox.Gen.SaasTest do
     assert_has(router, ~s|scope "/api"|)
     assert_has(router, "forward \"/\", TestWeb.AshJsonApiRouter")
     assert_has(source(igniter, "lib/test_web/ash_json_api_router.ex"), "Test.Accounts")
+  end
+
+  test "API connections: the plug sits after the user actor, the page is routed, the config and domain are registered",
+       %{igniter: igniter} do
+    router = source(igniter, "lib/test_web/router.ex")
+
+    assert order(router, "plug :set_actor, :user") <
+             order(router, "plug TestWeb.Plugs.LoadConnection")
+
+    assert_has(router, ~s|live "/connections", ConnectionsLive|)
+
+    runtime = source(igniter, "config/runtime.exs")
+
+    assert_has(runtime, "config :test, :connections")
+    assert_has(runtime, ~s|System.get_env("OAUTH_ISSUER", "http://localhost:4444/")|)
+
+    assert_has(source(igniter, "config/config.exs"), "Test.Connections")
+    assert_has(source(igniter, "lib/test/accounts/organization.ex"), "actor(:organization_id)")
+
+    assert_has(
+      source(igniter, "lib/test_web/components/layouts.ex"),
+      ~s|navigate={~p"/connections"}|
+    )
+
+    assert_has(source(igniter, "test/support/fixtures.ex"), "def connection_fixture(")
+    assert_has(source(igniter, "lib/test/connections/provider.ex"), ~s|"auth0" -> |)
   end
 
   test "the endpoint verifies Stripe's signature before the body is parsed", %{igniter: igniter} do
