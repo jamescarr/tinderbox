@@ -8,6 +8,11 @@ defmodule Tinderbox.Gen.Saas.Edits do
   installer that would have created it may have been skipped.
   """
 
+  # `ash_authentication` is an optional dependency: the API and worker stacks never
+  # load this module's callers, but compiling it as part of tinderbox must stay quiet
+  # in a project that does not have the package.
+  @compile {:no_warn_undefined, AshAuthentication.Igniter}
+
   alias Igniter.Code.Common
   alias Igniter.Code.Function
   alias Sourceror.Zipper
@@ -105,11 +110,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
   """
   @spec add_child_after(Igniter.t(), module(), module(), String.t(), module()) :: Igniter.t()
   def add_child_after(igniter, application, module, child, anchor) do
-    {igniter, present?} = source_contains?(igniter, application, inspect(module))
-
-    if present? do
-      igniter
-    else
+    unless_contains(igniter, application, inspect(module), fn igniter ->
       update_existing(igniter, application, fn zipper ->
         with {:ok, body} <- Function.move_to_def(zipper, :start, 2),
              {:ok, assignment} <-
@@ -124,7 +125,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
                "#{inspect(application)}. Add it by hand."}
         end
       end)
-    end
+    end)
   end
 
   defp children?(call) do
@@ -151,7 +152,7 @@ defmodule Tinderbox.Gen.Saas.Edits do
 
   @doc """
   Appends `code` after the last top-level statement of `module`. The caller
-  guards against appending twice (see `source_contains?/3`).
+  guards against appending twice (see `unless_contains/4`).
   """
   @spec append_to_module(Igniter.t(), module(), String.t()) :: Igniter.t()
   def append_to_module(igniter, module, code) do
@@ -216,6 +217,86 @@ defmodule Tinderbox.Gen.Saas.Edits do
     end)
   end
 
+  @doc """
+  Adds `code` (routes, say) inside the router's
+  `ash_authentication_live_session <session>` block. The caller guards against
+  adding it twice (see `unless_contains/4`). A warning, with the code to paste,
+  when the router has no such session.
+  """
+  @spec add_to_live_session(Igniter.t(), module(), atom(), String.t()) :: Igniter.t()
+  def add_to_live_session(igniter, router, session, code) do
+    update_existing(igniter, router, fn zipper ->
+      with {:ok, zipper} <-
+             Common.move_to(zipper, fn candidate ->
+               Function.function_call?(candidate, :ash_authentication_live_session, [1, 2, 3, 4]) and
+                 Function.argument_equals?(candidate, 0, session)
+             end),
+           {:ok, zipper} <- Common.move_to_do_block(zipper) do
+        {:ok, Common.add_code(zipper, code)}
+      else
+        _ ->
+          {:warning,
+           "Could not find `ash_authentication_live_session #{inspect(session)}` in " <>
+             "#{inspect(router)}. Add these routes inside it by hand:\n\n" <> code}
+      end
+    end)
+  end
+
+  @doc """
+  Sets `option` to `value_code` (code, not a value) in the `type` `name`
+  authentication strategy of an Ash resource: replaces the option when the
+  strategy already sets it, and adds it otherwise.
+
+      authentication do
+        strategies do
+          oidc :sso do
+            authorization_params MyApp.Secrets
+  """
+  @spec put_strategy_option(Igniter.t(), module(), atom(), atom(), atom(), String.t()) ::
+          Igniter.t()
+  def put_strategy_option(igniter, resource, type, name, option, value_code) do
+    update_existing(igniter, resource, fn zipper ->
+      with {:ok, inside} <- enter_sections(zipper, [:authentication, :strategies]),
+           {:ok, strategy} <-
+             Function.move_to_function_call_in_current_scope(
+               inside,
+               type,
+               [1, 2],
+               &Function.argument_equals?(&1, 0, name)
+             ),
+           {:ok, body} <- Common.move_to_do_block(strategy) do
+        case Function.move_to_function_call_in_current_scope(body, option, 1) do
+          {:ok, call} ->
+            Function.update_nth_argument(call, 0, fn argument ->
+              {:ok, Common.replace_code(argument, value_code)}
+            end)
+
+          :error ->
+            {:ok, Common.add_code(body, "#{option} #{value_code}")}
+        end
+      else
+        _ ->
+          {:warning,
+           "Could not find the #{type} #{inspect(name)} strategy in #{inspect(resource)}; " <>
+             "set `#{option} #{value_code}` in it by hand."}
+      end
+    end)
+  end
+
+  @doc """
+  Adds a `secret_for` clause for `path` to `secrets`, reading the application
+  env `env_key` of the resource's app, unless `secrets` has a clause for `path`
+  already.
+  """
+  @spec ensure_secret_from_env(Igniter.t(), module(), module(), [atom()], atom()) :: Igniter.t()
+  def ensure_secret_from_env(igniter, secrets, resource, path, env_key) do
+    # `add_new_secret_from_env/5` only looks at the first `secret_for` clause, so a
+    # re-run would stack a second copy of every later clause; check ourselves.
+    unless_contains(igniter, secrets, inspect(path), fn igniter ->
+      AshAuthentication.Igniter.add_new_secret_from_env(igniter, secrets, resource, path, env_key)
+    end)
+  end
+
   defp enter_sections(zipper, []), do: {:ok, zipper}
 
   defp enter_sections(zipper, [section | rest]) do
@@ -243,6 +324,19 @@ defmodule Tinderbox.Gen.Saas.Edits do
 
       {:error, igniter} ->
         {igniter, false}
+    end
+  end
+
+  @doc """
+  Runs `fun` on the igniter unless `module`'s source already contains `snippet`
+  (compared as `source_contains?/3` does). The guard for edits that must not be applied twice.
+  """
+  @spec unless_contains(Igniter.t(), module(), String.t(), (Igniter.t() -> Igniter.t())) ::
+          Igniter.t()
+  def unless_contains(igniter, module, snippet, fun) when is_function(fun, 1) do
+    case source_contains?(igniter, module, snippet) do
+      {igniter, true} -> igniter
+      {igniter, false} -> fun.(igniter)
     end
   end
 

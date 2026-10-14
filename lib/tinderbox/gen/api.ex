@@ -64,13 +64,9 @@ defmodule Tinderbox.Gen.Api do
 
     igniter =
       igniter
-      |> Igniter.Project.Module.create_module(
-        catalog,
-        Gen.render_template("api/catalog.ex.eex", assigns)
-      )
-      |> Igniter.Project.Module.create_module(
-        item,
-        Gen.render_template("api/catalog_item.ex.eex", assigns)
+      |> Gen.create_modules(
+        [{catalog, "api/catalog.ex.eex"}, {item, "api/catalog_item.ex.eex"}],
+        assigns
       )
       |> Igniter.Project.Config.configure(
         "config.exs",

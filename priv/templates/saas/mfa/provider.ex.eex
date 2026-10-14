@@ -1,0 +1,55 @@
+@moduledoc """
+A second-factor provider: where a user's factor is stored, how it is enrolled
+and checked, and how its recovery codes work. `<%= inspect(@mfa) %>` is the facade
+the rest of the application calls; it picks the provider with
+
+    config <%= inspect(@app) %>, <%= inspect(@mfa) %>, provider: MyApp.Accounts.MFA.Other
+
+and defaults to `<%= inspect(@mfa) %>.Totp` (authenticator apps, codes of 6 digits).
+
+An implementation owns its storage, its enrollment and its recovery codes. The
+facade owns the policy: when a factor is required, whether the identity
+provider's MFA counts, and who may turn it off. Multi-factor authentication
+asserted by the identity provider (`MFA_SSO=idp`) needs no provider at all; it
+is policy in the facade.
+
+A user without a confirmed factor has no `t:status/0`.
+"""
+
+@typedoc "What the user needs to add the factor to an authenticator app."
+@type enrollment :: %{uri: String.t(), manual_key: String.t(), qr_svg: String.t()}
+
+@typedoc "A confirmed factor."
+@type status :: %{
+        enrolled_at: DateTime.t(),
+        last_used_at: DateTime.t() | nil,
+        recovery_codes_left: non_neg_integer(),
+        locked_until: DateTime.t() | nil
+      }
+
+@type user :: struct()
+
+@doc "The user's confirmed factor, or `nil`."
+@callback status(user()) :: status() | nil
+
+@doc "The confirmed factors of `users`, by user id. Users without one are not keys."
+@callback statuses([user()]) :: %{optional(term()) => status()}
+
+@doc "Starts enrolling a factor; calling it again before confirming shows the same secret."
+@callback begin_enrollment(user()) :: {:ok, enrollment()} | {:error, :already_enrolled}
+
+@doc "Confirms the factor with a code from the authenticator; returns the recovery codes, once."
+@callback confirm_enrollment(user(), code :: String.t()) ::
+            {:ok, [String.t()]} | {:error, :invalid_code | :not_started | :already_enrolled}
+
+@doc "Abandons an enrollment that was not confirmed."
+@callback cancel_enrollment(user()) :: :ok
+
+@doc "Checks a code from the authenticator, or a recovery code (which is then spent)."
+@callback verify(user(), code :: String.t()) :: :ok | {:error, :invalid_code | :locked | :not_enrolled}
+
+@doc "Replaces the recovery codes, returning the new ones once."
+@callback regenerate_recovery_codes(user()) :: {:ok, [String.t()]} | {:error, :not_enrolled}
+
+@doc "Removes the user's factor, confirmed or not."
+@callback remove(user()) :: :ok

@@ -2,6 +2,7 @@ defmodule Tinderbox.Gen.StorageTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   alias Tinderbox.Gen.Storage
 
@@ -80,12 +81,6 @@ defmodule Tinderbox.Gen.StorageTest do
       |> source("config/runtime.exs")
 
     assert length(String.split(runtime, "http_client: ExAws.Request.Req")) == 2
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 
   defp at(string, substring), do: :binary.match(string, substring) |> elem(0)

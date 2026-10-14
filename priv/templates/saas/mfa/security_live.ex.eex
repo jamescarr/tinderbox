@@ -1,0 +1,201 @@
+@moduledoc """
+`/settings/security`: turn two-factor authentication on (QR code, then a code to
+confirm it), see its state, replace the recovery codes and turn it off. Replacing
+the codes and turning it off ask for a current code, so an unattended session
+cannot do either. With `MFA_REQUIRED` there is no switch to turn it off.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@mfa) %>
+alias <%= inspect(@web) %>.MfaHTML
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :optional_organization}
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok,
+   socket
+   |> assign(:page_title, "Security")
+   |> assign(:enrollment, nil)
+   |> assign(:recovery_codes, nil)
+   |> assign(:required?, MFA.required?())
+   |> assign(:sso_idp?, MFA.sso_mode() == :idp)
+   |> assign(:confirm_form, code_form(:confirm))
+   |> assign(:regenerate_form, code_form(:regenerate))
+   |> assign(:disable_form, code_form(:disable))
+   |> load_status()}
+end
+
+@impl true
+def handle_event("start", _params, socket) do
+  case MFA.begin_enrollment(socket.assigns.current_user) do
+    {:ok, enrollment} -> {:noreply, assign(socket, :enrollment, enrollment)}
+    {:error, :already_enrolled} -> {:noreply, load_status(socket)}
+  end
+end
+
+def handle_event("cancel", _params, socket) do
+  :ok = MFA.cancel_enrollment(socket.assigns.current_user)
+  {:noreply, assign(socket, :enrollment, nil)}
+end
+
+def handle_event("confirm", params, socket) do
+  case MFA.confirm_enrollment(socket.assigns.current_user, code(params, "confirm")) do
+    {:ok, codes} ->
+      {:noreply,
+       socket
+       |> assign(:recovery_codes, codes)
+       |> assign(:enrollment, nil)
+       |> load_status()
+       |> put_flash(:info, "Two-factor authentication is on.")}
+
+    {:error, :already_enrolled} ->
+      {:noreply, socket |> assign(:enrollment, nil) |> load_status()}
+
+    {:error, reason} ->
+      {:noreply, refuse(socket, reason)}
+  end
+end
+
+def handle_event("regenerate", params, socket) do
+  case MFA.regenerate_recovery_codes(socket.assigns.current_user, code(params, "regenerate")) do
+    {:ok, codes} ->
+      {:noreply,
+       socket
+       |> assign(:recovery_codes, codes)
+       |> load_status()
+       |> put_flash(:info, "New recovery codes. The old ones no longer work.")}
+
+    {:error, reason} ->
+      {:noreply, refuse(socket, reason)}
+  end
+end
+
+def handle_event("disable", params, socket) do
+  case MFA.disable(socket.assigns.current_user, code(params, "disable")) do
+    :ok ->
+      {:noreply,
+       socket
+       |> assign(:recovery_codes, nil)
+       |> load_status()
+       |> put_flash(:info, "Two-factor authentication is off.")}
+
+    {:error, reason} ->
+      {:noreply, refuse(socket, reason)}
+  end
+end
+
+def handle_event("done", _params, socket) do
+  {:noreply, assign(socket, :recovery_codes, nil)}
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load_status(socket) do
+  assign(socket, :status, MFA.status(socket.assigns.current_user))
+end
+
+defp code_form(name), do: to_form(%{"code" => ""}, as: name)
+
+defp code(params, form) do
+  case params do
+    %{^form => %{"code" => code}} when is_binary(code) -> code
+    _params -> ""
+  end
+end
+
+defp refuse(socket, reason), do: put_flash(socket, :error, MfaHTML.error_message(reason))
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+    current_page={:security}
+  >
+    <.page_header>
+      Security
+      <:subtitle>Protect your account with a second step when you sign in.</:subtitle>
+    </.page_header>
+
+    <div class="space-y-6">
+      <.alert :if={@sso_idp?} kind="info">
+        When you sign in with your company's identity provider, its multi-factor
+        authentication counts. This second step covers password sign-ins, and SSO sign-ins
+        where the provider did not ask for one.
+      </.alert>
+
+      <MfaHTML.recovery_codes_card :if={@recovery_codes} id="mfa-recovery" codes={@recovery_codes}>
+        <.button class="btn btn-primary" phx-click="done">I have saved them</.button>
+      </MfaHTML.recovery_codes_card>
+
+      <.card id="mfa-status">
+        <:title>Two-factor authentication</:title>
+        <:description>Time-based codes from an authenticator app.</:description>
+        <:actions>
+          <.badge :if={@status} color="success">On</.badge>
+          <.badge :if={!@status} color="neutral">Off</.badge>
+        </:actions>
+
+        <div :if={!@status and !@enrollment}>
+          <p class="mb-4 text-sm text-base-content/70">
+            Sign-ins ask for a code from an app such as 1Password, Authy or Google
+            Authenticator, as well as your password.
+          </p>
+          <.button id="mfa-start" class="btn btn-primary" phx-click="start">Turn on</.button>
+        </div>
+
+        <div :if={@enrollment} id="mfa-setup" class="space-y-4">
+          <p class="text-sm">
+            Scan the QR code with an authenticator app, then enter the code it shows.
+          </p>
+          <MfaHTML.enrollment_key enrollment={@enrollment} />
+          <.form for={@confirm_form} id="mfa-confirm-form" phx-submit="confirm">
+            <MfaHTML.code_input field={@confirm_form[:code]} />
+            <div class="flex gap-2">
+              <.button class="btn btn-primary">Turn on</.button>
+              <.button type="button" class="btn btn-ghost" phx-click="cancel">Cancel</.button>
+            </div>
+          </.form>
+        </div>
+
+        <div :if={@status} class="space-y-6">
+          <.description_list>
+            <:item label="Set up">{format_datetime(@status.enrolled_at)}</:item>
+            <:item label="Last used">{format_datetime(@status.last_used_at)}</:item>
+            <:item label="Recovery codes left">{@status.recovery_codes_left}</:item>
+          </.description_list>
+
+          <.form for={@regenerate_form} id="mfa-regenerate-form" phx-submit="regenerate">
+            <MfaHTML.code_input
+              field={@regenerate_form[:code]}
+              label="Authentication code, to replace the recovery codes"
+            />
+            <.button class="btn">Replace recovery codes</.button>
+          </.form>
+
+          <.form :if={!@required?} for={@disable_form} id="mfa-disable-form" phx-submit="disable">
+            <MfaHTML.code_input
+              field={@disable_form[:code]}
+              label="Authentication code, to turn two-factor authentication off"
+            />
+            <.button class="btn btn-error btn-soft">Turn off</.button>
+          </.form>
+
+          <.alert :if={@required?} kind="info">
+            Two-factor authentication is required, so it cannot be turned off.
+          </.alert>
+        </div>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end

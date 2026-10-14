@@ -1,0 +1,166 @@
+defmodule <%= inspect(@mfa) %>Test do
+  use <%= inspect(@prefix) %>.DataCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@prefix) %>.MFATestHelpers
+
+  alias <%= inspect(@mfa) %>
+  alias <%= inspect(@record_sso_assurance) %>
+
+  setup do
+    mfa_test_env()
+    %{user: user_fixture()}
+  end
+
+  describe "enrolling" do
+    test "a wrong code is refused, and the previous period's code confirms", %{user: user} do
+      secret = start_enrollment!(user)
+
+      assert {:error, :invalid_code} = MFA.confirm_enrollment(user, wrong_code(secret))
+      refute MFA.enrolled?(user)
+
+      assert {:ok, codes} = MFA.confirm_enrollment(user, code(secret, -30))
+      assert length(codes) == 10
+      assert MFA.enrolled?(user)
+      assert MFA.status(user).recovery_codes_left == 10
+      assert {:error, :already_enrolled} = MFA.begin_enrollment(user)
+    end
+
+    test "a refresh shows the same secret, and cancelling forgets it", %{user: user} do
+      secret = start_enrollment!(user)
+      assert start_enrollment!(user) == secret
+
+      assert :ok = MFA.cancel_enrollment(user)
+      refute MFA.enrolled?(user)
+      assert {:error, :not_started} = MFA.confirm_enrollment(user, code(secret, 0))
+    end
+  end
+
+  describe "verifying" do
+    test "a code works once", %{user: user} do
+      {secret, _codes} = enroll!(user)
+
+      assert :ok = MFA.verify(user, code(secret, 0))
+      assert {:error, :invalid_code} = MFA.verify(user, code(secret, 0))
+    end
+
+    test "a recovery code works once, in any case and grouping", %{user: user} do
+      {_secret, [first, second | _rest]} = enroll!(user)
+
+      assert :ok = MFA.verify(user, first)
+      assert {:error, :invalid_code} = MFA.verify(user, first)
+      assert MFA.status(user).recovery_codes_left == 9
+
+      assert :ok = MFA.verify(user, second |> String.upcase() |> String.replace("-", " "))
+      assert MFA.status(user).recovery_codes_left == 8
+    end
+
+    test "ten wrong codes lock the factor, even against the right code", %{user: user} do
+      {secret, _codes} = enroll!(user)
+      {nine, [tenth]} = secret |> wrong_codes() |> Enum.take(10) |> Enum.split(9)
+
+      assert Enum.map(nine, &MFA.verify(user, &1)) == List.duplicate({:error, :invalid_code}, 9)
+      assert {:error, :locked} = MFA.verify(user, tenth)
+      assert {:error, :locked} = MFA.verify(user, code(secret, 0))
+      assert %DateTime{} = MFA.status(user).locked_until
+    end
+
+    test "a user without a factor has nothing to verify", %{user: user} do
+      assert {:error, :not_enrolled} = MFA.verify(user, "123456")
+    end
+  end
+
+  describe "recovery codes" do
+    test "replacing them needs a code and retires the old ones", %{user: user} do
+      {secret, [old | _rest]} = enroll!(user)
+
+      assert {:error, :invalid_code} =
+               MFA.regenerate_recovery_codes(user, wrong_code(secret))
+
+      assert {:ok, new} = MFA.regenerate_recovery_codes(user, code(secret, 0))
+      assert length(new) == 10
+      assert {:error, :invalid_code} = MFA.verify(user, old)
+      assert :ok = MFA.verify(user, hd(new))
+    end
+  end
+
+  describe "turning it off" do
+    test "needs a code, and the administrator's reset does not", %{user: user} do
+      {secret, _codes} = enroll!(user)
+
+      assert {:error, :invalid_code} = MFA.disable(user, wrong_code(secret))
+      assert MFA.enrolled?(user)
+
+      assert :ok = MFA.disable(user, code(secret, 0))
+      refute MFA.enrolled?(user)
+
+      enroll!(user)
+      assert :ok = MFA.reset(user)
+      refute MFA.enrolled?(user)
+    end
+
+    test "is refused when two-factor authentication is required", %{user: user} do
+      {secret, _codes} = enroll!(user)
+      put_mfa_config(required: true)
+
+      assert {:error, :required} = MFA.disable(user, code(secret, 0))
+      assert MFA.enrolled?(user)
+    end
+  end
+
+  describe "sign_in_step/2" do
+    test "follows the user's factor and the requirement", %{user: user} do
+      assert MFA.sign_in_step(user, {:password, :sign_in}) == :complete
+
+      put_mfa_config(required: true)
+      assert MFA.sign_in_step(user, {:password, :sign_in}) == :enroll
+
+      enroll!(user)
+      assert MFA.sign_in_step(user, {:password, :sign_in}) == :challenge
+    end
+
+    test "the identity provider's MFA counts only with MFA_SSO=idp", %{user: user} do
+      enroll!(user)
+
+      asserted = fn amr, acr ->
+        Ash.Resource.put_metadata(user, :sso_assurance, %{amr: amr, acr: acr})
+      end
+
+      # `local` (the default): the second factor is asked for after SSO as well.
+      assert MFA.sign_in_step(asserted.(["pwd", "mfa"], nil), {:sso, :callback}) == :challenge
+
+      put_mfa_config(sso: :idp, sso_mfa_acr: ["urn:okta:loa:2fa:any"])
+
+      assert MFA.sign_in_step(asserted.(["pwd", "mfa"], nil), {:sso, :callback}) == :complete
+      assert MFA.sign_in_step(asserted.([], "urn:okta:loa:2fa:any"), {:sso, :callback}) == :complete
+      assert MFA.sign_in_step(asserted.(["pwd"], "urn:okta:loa:1fa"), {:sso, :callback}) == :challenge
+      assert MFA.sign_in_step(user, {:sso, :callback}) == :challenge
+
+      # Only an SSO sign-in can be vouched for by the provider.
+      assert MFA.sign_in_step(asserted.(["mfa"], nil), {:password, :sign_in}) == :challenge
+    end
+  end
+
+  describe "the ID token's assurance" do
+    test "amr and acr are read from the claims" do
+      token = jwt(%{"amr" => ["pwd", "mfa"], "acr" => "x"})
+
+      assert RecordSsoAssurance.assurance(%{"id_token" => token}) ==
+               %{amr: ["pwd", "mfa"], acr: "x"}
+    end
+
+    test "a single amr value is a list, and no token means no assurance" do
+      assert RecordSsoAssurance.assurance(%{"id_token" => jwt(%{"amr" => "mfa"})}) ==
+               %{amr: ["mfa"], acr: nil}
+
+      assert RecordSsoAssurance.assurance(%{"id_token" => "not a token"}) == %{amr: [], acr: nil}
+      assert RecordSsoAssurance.assurance(%{}) == %{amr: [], acr: nil}
+    end
+  end
+
+  # An unsigned token: only the claims are read.
+  defp jwt(claims) do
+    encode = &Base.url_encode64(Jason.encode!(&1), padding: false)
+    encode.(%{"alg" => "none"}) <> "." <> encode.(claims) <> "."
+  end
+end

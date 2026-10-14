@@ -1,0 +1,100 @@
+@moduledoc """
+A user's second factor: a TOTP secret (encrypted at rest by AshCloak with
+`<%= inspect(@vault) %>`), the hashed recovery codes, and the failed-attempt counter
+behind the lockout. A factor is pending until `confirmed_at` is set.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@accounts) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  extensions: [AshCloak]
+
+postgres do
+  table "mfa_factors"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :user, on_delete: :delete
+  end
+end
+
+# The secret is stored as `encrypted_totp_secret`; `totp_secret` is a calculation
+# that has to be loaded on purpose.
+cloak do
+  vault <%= inspect(@vault) %>
+  attributes [:totp_secret]
+  decrypt_by_default []
+end
+
+actions do
+  defaults [:read, :destroy]
+
+  create :create do
+    accept [:user_id, :totp_secret]
+  end
+
+  update :confirm do
+    accept [:recovery_code_hashes, :last_used_at]
+
+    change set_attribute(:confirmed_at, &DateTime.utc_now/0)
+  end
+
+  update :record_success do
+    accept [:last_used_at, :recovery_code_hashes]
+
+    change set_attribute(:failed_attempts, 0)
+    change set_attribute(:locked_until, nil)
+  end
+
+  update :record_failure do
+    # In the database, not in the loaded record: parallel guesses cannot undercount.
+    change atomic_update(:failed_attempts, expr(failed_attempts + 1))
+  end
+
+  update :lock do
+    accept [:locked_until]
+
+    change set_attribute(:failed_attempts, 0)
+  end
+
+  update :replace_recovery_codes do
+    accept [:recovery_code_hashes]
+  end
+end
+
+# Only <%= inspect(@mfa) %> and its provider touch factors, with `authorize?: false`,
+# after they have decided who may act: not even an admin reads a secret through
+# the actions.
+policies do
+  policy always() do
+    forbid_if always()
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :totp_secret, :binary, allow_nil?: false, sensitive?: true
+  attribute :confirmed_at, :utc_datetime
+  attribute :last_used_at, :utc_datetime
+  attribute :failed_attempts, :integer, allow_nil?: false, default: 0
+  attribute :locked_until, :utc_datetime
+
+  # SHA-256 of each unused recovery code; the codes themselves are shown once.
+  attribute :recovery_code_hashes, {:array, :string},
+    allow_nil?: false,
+    default: [],
+    sensitive?: true
+
+  timestamps()
+end
+
+relationships do
+  belongs_to :user, <%= inspect(@user) %>, allow_nil?: false, public?: true
+end
+
+identities do
+  identity :unique_user, [:user_id]
+end

@@ -59,13 +59,11 @@ defmodule Tinderbox.Gen.Saas.Connections do
       {plug_module(assigns), "load_connection_plug.ex.eex"}
     ]
 
-    Enum.reduce(modules, igniter, fn {module, template}, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        module,
-        Gen.render_template("saas/connections/" <> template, assigns)
-      )
-    end)
+    Gen.create_modules(
+      igniter,
+      Enum.map(modules, fn {module, template} -> {module, "saas/connections/" <> template} end),
+      assigns
+    )
   end
 
   defp register_domain(igniter, assigns) do
@@ -85,11 +83,7 @@ defmodule Tinderbox.Gen.Saas.Connections do
     Gen.append_to_runtime_exs(
       igniter,
       Gen.render_template("saas/connections/runtime_config.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_key?(igniter, "runtime.exs", assigns[:app], [
-          :connections
-        ])
-      end
+      Gen.runtime_configures?(assigns[:app], [:connections])
     )
   end
 
@@ -98,13 +92,13 @@ defmodule Tinderbox.Gen.Saas.Connections do
   defp add_plug(igniter, assigns) do
     router = assigns[:router]
     code = "plug #{inspect(plug_module(assigns))}"
-    {igniter, present?} = Edits.source_contains?(igniter, router, code)
 
-    if present? do
-      igniter
-    else
-      Igniter.Libs.Phoenix.append_to_pipeline(igniter, :api, code, router: router)
-    end
+    Edits.unless_contains(
+      igniter,
+      router,
+      code,
+      &Igniter.Libs.Phoenix.append_to_pipeline(&1, :api, code, router: router)
+    )
   end
 
   defp add_api_test(igniter, assigns) do

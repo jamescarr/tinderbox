@@ -93,6 +93,8 @@ defmodule Tinderbox.Env do
          {"SSO_CLIENT_SECRET", "#{app_dash}-dev-secret"},
          {"SSO_REDIRECT_URI", "http://localhost:4000/auth"}
        ]},
+      {"MFA: MFA_REQUIRED=true makes everyone set up a second factor at their next sign-in; MFA_SSO=idp accepts the SSO provider's MFA (see config/runtime.exs)",
+       [{"MFA_REQUIRED", "false"}, {"MFA_SSO", "local"}]},
       {"OAuth2 API connections: Ory Hydra locally; OAUTH_PROVIDER auth0 uses the AUTH0_* values (replace in .mise.local.toml)",
        [
          {"OAUTH_PROVIDER", "hydra"},

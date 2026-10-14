@@ -1,0 +1,34 @@
+# Multi-factor authentication (<%= inspect(@mfa) %>).
+#
+#   MFA_ISSUER       the name an authenticator app shows next to the account.
+#   MFA_REQUIRED     `true` makes everyone without a second factor set one up at their
+#                    next sign-in, and takes away the switch to turn it off.
+#   MFA_SSO          `local` (default): an SSO sign-in goes through the same second
+#                    factor as a password sign-in. `idp`: trust the MFA the identity
+#                    provider reports in the OIDC ID token (`amr`/`acr`); an SSO
+#                    sign-in that carries none of it falls back to the local rules.
+#   SSO_MFA_AMR      the `amr` values that count as MFA (comma separated, default `mfa`).
+#   SSO_MFA_ACR      the `acr` values that count as MFA (comma separated, default none);
+#                    for Okta, `urn:okta:loa:2fa:any`.
+#   SSO_ACR_VALUES   asks the identity provider to step the user up: sent to it as the
+#                    `acr_values` authorization parameter, for Okta
+#                    `urn:okta:loa:2fa:any`. Pair it with SSO_MFA_ACR.
+config <%= inspect(@app) %>, <%= inspect(@mfa) %>,
+  issuer: System.get_env("MFA_ISSUER", "<%= inspect(@prefix) %>"),
+  required: System.get_env("MFA_REQUIRED", "false") == "true",
+  sso:
+    (case System.get_env("MFA_SSO", "local") do
+       "local" -> :local
+       "idp" -> :idp
+       other -> raise "MFA_SSO must be local or idp, got: #{inspect(other)}"
+     end),
+  sso_mfa_amr: "SSO_MFA_AMR" |> System.get_env("mfa") |> String.split(",", trim: true) |> Enum.map(&String.trim/1),
+  sso_mfa_acr: "SSO_MFA_ACR" |> System.get_env("") |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+config <%= inspect(@app) %>,
+  sso_authorization_params:
+    [scope: "openid profile email"] ++
+      (case System.get_env("SSO_ACR_VALUES", "") do
+         "" -> []
+         acr_values -> [acr_values: acr_values]
+       end)

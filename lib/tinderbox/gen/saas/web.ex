@@ -33,7 +33,6 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> allow_button_type(assigns)
     |> replace_layouts(assigns)
     |> replace_landing_page(assigns)
-    |> create_live_helpers(assigns)
     |> create_live_views(assigns)
     |> add_routes(assigns)
     |> add_test_support(assigns)
@@ -111,22 +110,19 @@ defmodule Tinderbox.Gen.Saas.Web do
 
   # -- LiveViews and routes --------------------------------------------------
 
-  defp create_live_helpers(igniter, assigns) do
-    Igniter.Project.Module.create_module(
-      igniter,
-      Module.concat(assigns[:web], LiveHelpers),
-      Gen.render_template("saas/web/live_helpers.ex.eex", assigns)
-    )
-  end
-
   defp create_live_views(igniter, assigns) do
-    Enum.reduce(@live_views, igniter, fn name, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        Module.concat(assigns[:web], name),
-        Gen.render_template("saas/web/live/#{Macro.underscore(name)}.ex.eex", assigns)
-      )
-    end)
+    web = assigns[:web]
+
+    Gen.create_modules(
+      igniter,
+      [
+        {Module.concat(web, LiveHelpers), "saas/web/live_helpers.ex.eex"}
+        | Enum.map(@live_views, fn name ->
+            {Module.concat(web, name), "saas/web/live/#{Macro.underscore(name)}.ex.eex"}
+          end)
+      ],
+      assigns
+    )
   end
 
   defp add_routes(igniter, assigns) do
@@ -140,36 +136,12 @@ defmodule Tinderbox.Gen.Saas.Web do
   defp add_live_routes(igniter, assigns) do
     router = assigns[:router]
 
-    {igniter, present?} =
-      Edits.source_contains?(igniter, router, ~s(live "/dashboard", DashboardLive))
-
-    if present? do
-      igniter
-    else
-      Igniter.Project.Module.find_and_update_module!(igniter, router, fn zipper ->
-        with {:ok, zipper} <-
-               Igniter.Code.Common.move_to(zipper, fn candidate ->
-                 Igniter.Code.Function.function_call?(
-                   candidate,
-                   :ash_authentication_live_session,
-                   [
-                     1,
-                     2,
-                     3,
-                     4
-                   ]
-                 )
-               end),
-             {:ok, zipper} <- Igniter.Code.Common.move_to_do_block(zipper) do
-          {:ok, Igniter.Code.Common.add_code(zipper, live_routes())}
-        else
-          _ ->
-            {:warning,
-             "Could not find `ash_authentication_live_session` in #{inspect(router)}. " <>
-               "Add these routes inside it by hand:\n\n" <> live_routes()}
-        end
-      end)
-    end
+    Edits.unless_contains(
+      igniter,
+      router,
+      ~s(live "/dashboard", DashboardLive),
+      &Edits.add_to_live_session(&1, router, :authenticated_routes, live_routes())
+    )
   end
 
   defp live_routes do
@@ -189,11 +161,8 @@ defmodule Tinderbox.Gen.Saas.Web do
   # organization is kept in.
   defp add_switch_route(igniter, assigns) do
     router = assigns[:router]
-    {igniter, present?} = Edits.source_contains?(igniter, router, "OrganizationController")
 
-    if present? do
-      igniter
-    else
+    Edits.unless_contains(igniter, router, "OrganizationController", fn igniter ->
       Igniter.Libs.Phoenix.append_to_scope(
         igniter,
         "/",
@@ -202,7 +171,7 @@ defmodule Tinderbox.Gen.Saas.Web do
         arg2: assigns[:web],
         router: router
       )
-    end
+    end)
   end
 
   # -- test support ----------------------------------------------------------
@@ -211,14 +180,12 @@ defmodule Tinderbox.Gen.Saas.Web do
   # the app prefix, so `<App>.Fixtures` lands in `test/support/fixtures.ex`.
   defp add_test_support(igniter, assigns) do
     igniter
-    |> Igniter.Project.Module.create_module(
-      Module.concat(assigns[:prefix], "Fixtures"),
-      Gen.render_template("saas/test/fixtures.ex.eex", assigns),
-      location: :test_support
-    )
-    |> Igniter.Project.Module.create_module(
-      Module.concat(assigns[:web], "LiveTestHelpers"),
-      Gen.render_template("saas/test/live_test_helpers.ex.eex", assigns),
+    |> Gen.create_modules(
+      [
+        {Module.concat(assigns[:prefix], "Fixtures"), "saas/test/fixtures.ex.eex"},
+        {Module.concat(assigns[:web], "LiveTestHelpers"), "saas/test/live_test_helpers.ex.eex"}
+      ],
+      assigns,
       location: :test_support
     )
     |> Igniter.create_new_file(

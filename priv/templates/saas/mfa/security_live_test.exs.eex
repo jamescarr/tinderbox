@@ -1,0 +1,80 @@
+defmodule <%= inspect(@web) %>.SecurityLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@prefix) %>.MFATestHelpers
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@mfa) %>
+
+  setup do
+    mfa_test_env()
+    %{user: user_fixture()}
+  end
+
+  test "a user turns two-factor authentication on and is shown recovery codes", %{
+    conn: conn,
+    user: user
+  } do
+    {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
+
+    view |> element("#mfa-start") |> render_click()
+    assert has_element?(view, "#mfa-setup")
+
+    secret = manual_key_secret(view)
+
+    view
+    |> form("#mfa-confirm-form", confirm: %{code: code(secret)})
+    |> render_submit()
+
+    assert has_element?(view, "#recovery-codes")
+    assert has_element?(view, "#mfa-regenerate-form")
+    assert MFA.enrolled?(user)
+  end
+
+  test "a wrong code does not turn it on", %{conn: conn, user: user} do
+    {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
+    view |> element("#mfa-start") |> render_click()
+
+    html =
+      view
+      |> form("#mfa-confirm-form", confirm: %{code: wrong_code(manual_key_secret(view))})
+      |> render_submit()
+
+    assert html =~ "That code is not valid."
+    refute has_element?(view, "#recovery-codes")
+    refute MFA.enrolled?(user)
+  end
+
+  test "turning it off needs a current code", %{conn: conn, user: user} do
+    {secret, _codes} = enroll!(user)
+    {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
+
+    view |> form("#mfa-disable-form", disable: %{code: wrong_code(secret)}) |> render_submit()
+    assert MFA.enrolled?(user)
+
+    view
+    |> form("#mfa-disable-form", disable: %{code: code(secret)})
+    |> render_submit()
+
+    refute MFA.enrolled?(user)
+    assert has_element?(view, "#mfa-start")
+  end
+
+  test "there is no way to turn it off when it is required", %{conn: conn, user: user} do
+    enroll!(user)
+    put_mfa_config(required: true)
+
+    {:ok, view, _html} = live(sign_in(conn, user), ~p"/settings/security")
+
+    assert has_element?(view, "#mfa-regenerate-form")
+    refute has_element?(view, "#mfa-disable-form")
+  end
+
+  # The secret behind the key the page shows for typing in by hand.
+  defp manual_key_secret(view) do
+    [_match, key] = Regex.run(~r/>([A-Z2-7 ]+)</, view |> element("#mfa-manual-key") |> render())
+    key |> String.replace(" ", "") |> Base.decode32!(padding: false)
+  end
+end

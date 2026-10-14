@@ -101,12 +101,8 @@ defmodule Tinderbox.Gen.Saas.Ops do
         Gen.render_template("saas/ops/health_controller.ex.eex", assigns)
       )
 
-    {igniter, present?} = Edits.source_contains?(igniter, router, "HealthController")
-
     igniter =
-      if present? do
-        igniter
-      else
+      Edits.unless_contains(igniter, router, "HealthController", fn igniter ->
         # No `pipe_through`: the endpoint is probed by machines.
         Igniter.Libs.Phoenix.add_scope(
           igniter,
@@ -115,7 +111,7 @@ defmodule Tinderbox.Gen.Saas.Ops do
           arg2: assigns[:web],
           router: router
         )
-      end
+      end)
 
     exempt_health_from_force_ssl(igniter)
   end
@@ -148,13 +144,13 @@ defmodule Tinderbox.Gen.Saas.Ops do
     prom_ex = Module.concat(assigns[:prefix], "PromEx")
 
     igniter
-    |> Igniter.Project.Module.create_module(
-      prom_ex,
-      Gen.render_template("saas/ops/prom_ex.ex.eex", assigns)
-    )
-    |> Igniter.Project.Module.create_module(
-      Module.concat([assigns[:prefix], "PromEx", "Plugins", "App"]),
-      Gen.render_template("saas/ops/prom_ex_plugin.ex.eex", assigns)
+    |> Gen.create_modules(
+      [
+        {prom_ex, "saas/ops/prom_ex.ex.eex"},
+        {Module.concat([assigns[:prefix], "PromEx", "Plugins", "App"]),
+         "saas/ops/prom_ex_plugin.ex.eex"}
+      ],
+      assigns
     )
     |> Igniter.Project.Config.configure(
       "config.exs",
@@ -187,9 +183,7 @@ defmodule Tinderbox.Gen.Saas.Ops do
     )
     |> Gen.append_to_runtime_exs(
       Gen.render_template("saas/ops/otel_runtime.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_root_key?(igniter, "runtime.exs", :opentelemetry)
-      end
+      Gen.runtime_configures?(:opentelemetry)
     )
   end
 

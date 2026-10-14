@@ -4,6 +4,7 @@ defmodule Tinderbox.InstallSaasTest do
 
   import Igniter.Test
   import Tinderbox.Test.SaasFixtures
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   # `mix tinderbox.install --stack saas` against a project holding what the Phoenix
   # and Ash installers write; see `test/tinderbox/install_test.exs` for the other stacks.
@@ -91,11 +92,5 @@ defmodule Tinderbox.InstallSaasTest do
 
   defp install(argv) do
     Igniter.compose_task(saas_project(), "tinderbox.install", argv)
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 end

@@ -2,6 +2,7 @@ defmodule Tinderbox.Gen.ComposeTest do
   use ExUnit.Case, async: true
 
   import Igniter.Test
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   alias Tinderbox.Gen.Compose
 
@@ -238,11 +239,5 @@ defmodule Tinderbox.Gen.ComposeTest do
   defp compose_content(broker, opts \\ []) do
     path = Keyword.get(opts, :path, "docker-compose.yml")
     source(compose(broker, opts), path)
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 end

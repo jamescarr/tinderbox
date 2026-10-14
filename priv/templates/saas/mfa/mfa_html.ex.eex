@@ -1,0 +1,162 @@
+@moduledoc """
+The pages of the second sign-in step, rendered by `<%= inspect(@web) %>.MfaController`: the
+code prompt, the QR code to set a factor up, and the recovery codes shown once
+after setting up. The user is not signed in yet on the first two, so they render
+in the signed-out layout.
+
+The pieces those pages share with `<%= inspect(@web) %>.SecurityLive` are public
+components here: `code_input/1`, `enrollment_key/1`, `recovery_codes_card/1`, and
+`error_message/1` for what a refused code says.
+"""
+
+use <%= inspect(@web) %>, :html
+
+attr :flash, :map, required: true
+attr :form, :any, required: true
+attr :error, :string, default: nil
+
+def challenge(assigns) do
+  ~H"""
+  <.page flash={@flash}>
+    <.card id="mfa-challenge">
+      <:title>Two-factor authentication</:title>
+      <:description>
+        Enter the 6-digit code from your authenticator app, or a recovery code.
+      </:description>
+
+      <.alert :if={@error} kind="error" class="mb-4">{@error}</.alert>
+
+      <.form for={@form} action={~p"/mfa"} id="mfa-challenge-form">
+        <.code_input field={@form[:code]} autofocus />
+        <.button class="btn btn-primary w-full">Verify</.button>
+      </.form>
+
+      <:footer><.cancel_sign_in /></:footer>
+    </.card>
+  </.page>
+  """
+end
+
+attr :flash, :map, required: true
+attr :enrollment, :map, required: true
+attr :form, :any, required: true
+attr :error, :string, default: nil
+
+def setup(assigns) do
+  ~H"""
+  <.page flash={@flash}>
+    <.card id="mfa-setup">
+      <:title>Set up two-factor authentication</:title>
+      <:description>
+        Scan the QR code with an authenticator app, then enter the code it shows.
+      </:description>
+
+      <.enrollment_key enrollment={@enrollment} class="mb-4" />
+
+      <.alert :if={@error} kind="error" class="mb-4">{@error}</.alert>
+
+      <.form for={@form} action={~p"/mfa/setup"} id="mfa-setup-form">
+        <.code_input field={@form[:code]} autofocus />
+        <.button class="btn btn-primary w-full">Turn on</.button>
+      </.form>
+
+      <:footer><.cancel_sign_in /></:footer>
+    </.card>
+  </.page>
+  """
+end
+
+attr :flash, :map, required: true
+attr :codes, :list, required: true
+attr :return_to, :string, required: true
+
+def recovery_codes(assigns) do
+  ~H"""
+  <.page flash={@flash}>
+    <.recovery_codes_card id="mfa-recovery" codes={@codes}>
+      <.link href={@return_to} class="btn btn-primary w-full">Continue</.link>
+    </.recovery_codes_card>
+  </.page>
+  """
+end
+
+# -- shared with SecurityLive ---------------------------------------------------
+
+@doc "The field for an authenticator or recovery code."
+attr :field, Phoenix.HTML.FormField, required: true
+attr :label, :string, default: "Authentication code"
+attr :rest, :global
+
+def code_input(assigns) do
+  ~H"""
+  <.input field={@field} label={@label} autocomplete="one-time-code" {@rest} />
+  """
+end
+
+@doc "The QR code of an enrollment, and its key for typing in by hand."
+attr :enrollment, :map, required: true
+attr :class, :any, default: nil
+
+def enrollment_key(assigns) do
+  ~H"""
+  <div class={["space-y-3", @class]}>
+    <div class="flex justify-center rounded-box bg-white p-3">{raw(@enrollment.qr_svg)}</div>
+    <p class="text-sm text-base-content/70">
+      Or enter this key by hand: <code id="mfa-manual-key" class="font-mono">{@enrollment.manual_key}</code>
+    </p>
+  </div>
+  """
+end
+
+@doc "The recovery codes, shown once; the slot is what to do once they are saved."
+attr :id, :string, required: true
+attr :codes, :list, required: true
+slot :inner_block, required: true
+
+def recovery_codes_card(assigns) do
+  ~H"""
+  <.card id={@id}>
+    <:title>Save your recovery codes</:title>
+    <:description>
+      Each code works once, if you lose your authenticator. They are shown only now.
+    </:description>
+
+    <ul id="recovery-codes" class="mb-4 grid grid-cols-2 gap-2 font-mono text-sm">
+      <li :for={code <- @codes}>{code}</li>
+    </ul>
+
+    {render_slot(@inner_block)}
+  </.card>
+  """
+end
+
+@doc "What to tell someone whose code was refused for `reason`."
+@spec error_message(atom()) :: String.t()
+def error_message(:invalid_code), do: "That code is not valid."
+def error_message(:locked), do: "Too many incorrect codes. Try again in 15 minutes."
+
+def error_message(:required),
+  do: "Two-factor authentication is required, so it cannot be turned off."
+
+def error_message(_other), do: "Something went wrong. Reload the page and try again."
+
+# -- page parts -------------------------------------------------------------------
+
+attr :flash, :map, required: true
+slot :inner_block
+
+defp page(assigns) do
+  ~H"""
+  <Layouts.app flash={@flash}>
+    <div class="mx-auto max-w-md">{render_slot(@inner_block)}</div>
+  </Layouts.app>
+  """
+end
+
+defp cancel_sign_in(assigns) do
+  ~H"""
+  <.form for={%{}} action={~p"/mfa/cancel"} id="mfa-cancel-form">
+    <.button class="btn btn-ghost btn-sm">Cancel sign-in</.button>
+  </.form>
+  """
+end

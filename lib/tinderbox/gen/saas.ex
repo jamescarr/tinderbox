@@ -26,6 +26,7 @@ defmodule Tinderbox.Gen.Saas do
   | `#{inspect(__MODULE__)}.Api` | AshJsonApi mount for the accounts domain |
   | `#{inspect(__MODULE__)}.Connections` | OAuth2 client credentials per organization: provider behaviour (Hydra, Auth0), token verification, the API plug |
   | `#{inspect(__MODULE__)}.Admin` | `/admin` (UI kit) and `/admin/flags` (FunWithFlags) |
+  | `#{inspect(__MODULE__)}.Mfa` | two-factor authentication (TOTP, or the SSO provider's MFA), `/settings/security`, `/admin/security` |
   | `#{inspect(__MODULE__)}.Ops` | health, PromEx, OpenTelemetry, mail, release, CI |
 
   Edits to files the Phoenix and Ash installers created are guarded so that
@@ -42,6 +43,7 @@ defmodule Tinderbox.Gen.Saas do
   alias Tinderbox.Gen.Saas.Connections
   alias Tinderbox.Gen.Saas.Events
   alias Tinderbox.Gen.Saas.Flags
+  alias Tinderbox.Gen.Saas.Mfa
   alias Tinderbox.Gen.Saas.Notifications
   alias Tinderbox.Gen.Saas.Ops
   alias Tinderbox.Gen.Saas.Web
@@ -91,6 +93,7 @@ defmodule Tinderbox.Gen.Saas do
     |> Connections.apply(assigns)
     |> Flags.apply(assigns)
     |> Admin.apply(assigns)
+    |> Mfa.apply(assigns)
     |> Ops.apply(assigns)
     # One migration for everything above, named after what was generated.
     |> Ash.Igniter.codegen("add_saas_resources")

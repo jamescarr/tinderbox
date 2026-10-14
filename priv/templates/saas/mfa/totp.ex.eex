@@ -1,0 +1,291 @@
+@moduledoc """
+The default `<%= inspect(@mfa) %>.Provider`: time-based one-time passwords (RFC 6238,
+what authenticator apps generate) with recovery codes, stored in
+`<%= inspect(@mfa_factor) %>`.
+
+  * A code is 6 digits for a 30 second step. The previous step is accepted too,
+    for clock skew; a step is never accepted twice (`last_used_at`), so a
+    code that was shoulder-surfed cannot be replayed. A step or recovery code is
+    accepted once even when concurrent requests present it: the database decides.
+  * Ten wrong codes in a row lock the factor for 15 minutes. The counter is
+    incremented in the database, so parallel guesses cannot undercount.
+  * Recovery codes are 80 random bits, shown once and stored as SHA-256 hashes
+    (enough for codes that cannot be guessed). Each one works once.
+"""
+
+@behaviour <%= inspect(@mfa) %>.Provider
+
+require Ash.Query
+import Ash.Expr, only: [expr: 1]
+
+alias <%= inspect(@mfa_factor) %>
+
+@period 30
+@max_failures 10
+@lockout_seconds 15 * 60
+@recovery_code_count 10
+
+@impl true
+def status(user) do
+  case lookup(user) do
+    {:confirmed, factor} -> to_status(factor)
+    _pending_or_none -> nil
+  end
+end
+
+@impl true
+def statuses([]), do: %{}
+
+def statuses(users) do
+  ids = Enum.map(users, & &1.id)
+
+  MfaFactor
+  |> Ash.Query.filter(user_id in ^ids and not is_nil(confirmed_at))
+  |> Ash.read!(authorize?: false)
+  |> Map.new(&{&1.user_id, to_status(&1)})
+end
+
+@impl true
+def begin_enrollment(user) do
+  case lookup(user) do
+    {:confirmed, _factor} ->
+      {:error, :already_enrolled}
+
+    # A refresh shows the same QR code.
+    {:pending, factor} ->
+      {:ok, enrollment(user, secret(factor))}
+
+    :none ->
+      secret = NimbleTOTP.secret()
+
+      MfaFactor
+      |> Ash.Changeset.for_create(:create, %{user_id: user.id, totp_secret: secret},
+        authorize?: false
+      )
+      |> Ash.create!(authorize?: false)
+
+      {:ok, enrollment(user, secret)}
+  end
+end
+
+@impl true
+def confirm_enrollment(user, code) do
+  case lookup(user) do
+    :none ->
+      {:error, :not_started}
+
+    {:confirmed, _factor} ->
+      {:error, :already_enrolled}
+
+    {:pending, factor} ->
+      case matching_time(secret(factor), code, nil) do
+        nil ->
+          {:error, :invalid_code}
+
+        matched ->
+          codes = new_recovery_codes()
+
+          update!(factor, :confirm, %{
+            recovery_code_hashes: Enum.map(codes, &hash/1),
+            last_used_at: matched
+          })
+
+          {:ok, codes}
+      end
+  end
+end
+
+@impl true
+def cancel_enrollment(user) do
+  with {:pending, factor} <- lookup(user), do: Ash.destroy!(factor, authorize?: false)
+
+  :ok
+end
+
+@impl true
+def verify(user, code), do: with_confirmed(user, &check(&1, code))
+
+@impl true
+def regenerate_recovery_codes(user) do
+  with_confirmed(user, fn factor ->
+    codes = new_recovery_codes()
+    update!(factor, :replace_recovery_codes, %{recovery_code_hashes: Enum.map(codes, &hash/1)})
+    {:ok, codes}
+  end)
+end
+
+@impl true
+def remove(user) do
+  case lookup(user) do
+    :none ->
+      :ok
+
+    {_state, factor} ->
+      Ash.destroy!(factor, authorize?: false)
+      :ok
+  end
+end
+
+# -- verifying ---------------------------------------------------------------
+
+defp check(factor, code) do
+  now = DateTime.utc_now()
+  recovery_hash = hash(code)
+
+  cond do
+    locked?(factor, now) ->
+      {:error, :locked}
+
+    matched = matching_time(secret(factor), code, factor.last_used_at) ->
+      record_success(
+        factor,
+        %{last_used_at: matched},
+        expr(is_nil(last_used_at) or last_used_at < ^step_start(matched))
+      )
+
+    spent = Enum.find(factor.recovery_code_hashes, &Plug.Crypto.secure_compare(&1, recovery_hash)) ->
+      record_success(
+        factor,
+        %{recovery_code_hashes: List.delete(factor.recovery_code_hashes, spent)},
+        expr(fragment("? = ANY(?)", ^spent, recovery_code_hashes))
+      )
+
+    true ->
+      fail(factor, now)
+  end
+end
+
+# Another request may have spent the same code (or locked the factor) since the
+# read; the condition is checked by the UPDATE itself, so only one request wins.
+# A lost race is not a guess, so it does not count as a failure.
+defp record_success(factor, params, unspent) do
+  factor
+  |> Ash.Changeset.for_update(:record_success, params, authorize?: false)
+  |> Ash.Changeset.filter(expr(is_nil(locked_until) or locked_until <= now()))
+  |> Ash.Changeset.filter(unspent)
+  |> Ash.update(authorize?: false)
+  |> case do
+    {:ok, _factor} ->
+      :ok
+
+    {:error, %Ash.Error.Invalid{errors: errors} = error} ->
+      if Enum.any?(errors, &match?(%Ash.Error.Changes.StaleRecord{}, &1)),
+        do: {:error, :invalid_code},
+        else: raise(error)
+
+    {:error, error} ->
+      raise error
+  end
+end
+
+defp fail(factor, now) do
+  failed = update!(factor, :record_failure, %{})
+
+  if failed.failed_attempts >= @max_failures do
+    locked_until = now |> DateTime.add(@lockout_seconds) |> DateTime.truncate(:second)
+    update!(failed, :lock, %{locked_until: locked_until})
+    {:error, :locked}
+  else
+    {:error, :invalid_code}
+  end
+end
+
+defp locked?(%{locked_until: nil}, _now), do: false
+defp locked?(%{locked_until: until}, now), do: DateTime.compare(until, now) == :gt
+
+# The time of the step `code` is valid for: now, or one step back. That time, not
+# `now`, is what gets stored as `last_used_at`. NimbleTOTP compares steps
+# (`<=`), so the step back cannot be replayed either.
+defp matching_time(secret, code, since) do
+  code = String.replace(code, ~r/\s/, "")
+  now = System.os_time(:second)
+
+  Enum.find_value([now, now - @period], fn time ->
+    if NimbleTOTP.valid?(secret, code, time: time, since: since), do: DateTime.from_unix!(time)
+  end)
+end
+
+# The start of the step `time` falls in. Two requests can match the same code at
+# different seconds, so the success guard compares steps, as NimbleTOTP's `since:` does.
+defp step_start(time) do
+  unix = DateTime.to_unix(time)
+  DateTime.from_unix!(unix - rem(unix, @period))
+end
+
+# -- recovery codes ----------------------------------------------------------
+
+defp new_recovery_codes do
+  for _ <- 1..@recovery_code_count do
+    10
+    |> :crypto.strong_rand_bytes()
+    |> Base.encode32(case: :lower, padding: false)
+    |> group(4, "-")
+  end
+end
+
+defp hash(code) do
+  code
+  |> String.downcase()
+  |> String.replace(~r/[^a-z2-7]/, "")
+  |> then(&:crypto.hash(:sha256, &1))
+  |> Base.encode16(case: :lower)
+end
+
+# -- factors ------------------------------------------------------------------
+
+# :none, a factor being set up, or one in use.
+defp lookup(user) do
+  case factor(user) do
+    nil -> :none
+    %MfaFactor{confirmed_at: nil} = factor -> {:pending, factor}
+    %MfaFactor{} = factor -> {:confirmed, factor}
+  end
+end
+
+defp with_confirmed(user, fun) do
+  case lookup(user) do
+    {:confirmed, factor} -> fun.(factor)
+    _pending_or_none -> {:error, :not_enrolled}
+  end
+end
+
+defp factor(user) do
+  MfaFactor
+  |> Ash.Query.filter(user_id == ^user.id)
+  |> Ash.read_one!(authorize?: false)
+end
+
+defp secret(factor), do: Ash.load!(factor, :totp_secret, authorize?: false).totp_secret
+
+defp update!(factor, action, params) do
+  factor
+  |> Ash.Changeset.for_update(action, params, authorize?: false)
+  |> Ash.update!(authorize?: false)
+end
+
+defp to_status(factor) do
+  %{
+    enrolled_at: factor.confirmed_at,
+    last_used_at: factor.last_used_at,
+    recovery_codes_left: length(factor.recovery_code_hashes),
+    locked_until: factor.locked_until
+  }
+end
+
+defp enrollment(user, secret) do
+  issuer = <%= inspect(@mfa) %>.issuer()
+  uri = NimbleTOTP.otpauth_uri("#{issuer}:#{user.email}", secret, issuer: issuer)
+
+  %{
+    uri: uri,
+    manual_key: secret |> Base.encode32(padding: false) |> group(4, " "),
+    qr_svg: uri |> EQRCode.encode() |> EQRCode.svg(width: 200)
+  }
+end
+
+defp group(string, size, separator) do
+  string
+  |> String.graphemes()
+  |> Enum.chunk_every(size)
+  |> Enum.map_join(separator, &Enum.join/1)
+end

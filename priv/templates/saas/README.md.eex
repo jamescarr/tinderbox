@@ -1,9 +1,10 @@
 # <%= inspect(@prefix) %>
 
 A Phoenix and Ash application generated with tinderbox's SaaS stack: sign-in with a
-password or SSO (OpenID Connect), organizations with members and invitations,
-notifications (in-app and email), Stripe billing, an admin section, a JSON:API,
-events over NATS JetStream, feature flags, and health, metrics and tracing.
+password or SSO (OpenID Connect), two-factor authentication, organizations with
+members and invitations, notifications (in-app and email), Stripe billing, an admin
+section, a JSON:API, events over NATS JetStream, feature flags, and health, metrics
+and tracing.
 
 ## Running it
 
@@ -61,10 +62,12 @@ for a token (for Auth0 it is the identifier of the API you registered). The test
 use an in-memory `fake` provider whatever `OAUTH_PROVIDER` says.
 
 Production (the release image, `mix phx.gen.release --docker`) refuses to start
-without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
+without `DATABASE_URL`, `SECRET_KEY_BASE`, `TOKEN_SIGNING_SECRET` and `CLOAK_KEY`
+(`openssl rand -base64 32`: the key two-factor secrets are encrypted with; losing it
+locks everyone who turned two-factor on out of that factor). Also set
 `PHX_HOST`, `PHX_SERVER=true`, and the `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`,
-`OAUTH_*` and `ADMIN_EMAILS` values of `.mise.toml` (plus `HYDRA_*` or `AUTH0_*`
-for the provider you chose). Run migrations with the release's
+`MFA_*`, `OAUTH_*` and `ADMIN_EMAILS` values of `.mise.toml` (plus `HYDRA_*` or
+`AUTH0_*` for the provider you chose). Run migrations with the release's
 `bin/migrate`.
 
 With `SMTP_USERNAME` (and `SMTP_PASSWORD`) set, mail is authenticated and upgraded
@@ -93,6 +96,15 @@ IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
   `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables, and
   `current_page` to highlight its entry; add the entry to the `:nav` slot in
   `<%= inspect(@web) %>.Layouts.app/1`.
+* A sign-in is finished by `<%= inspect(@web) %>.AuthController`, which asks
+  `<%= inspect(@accounts) %>.MFA.sign_in_step/2` whether the user is signed in, has to enter
+  a code, or has to set a second factor up (`<%= inspect(@web) %>.MfaController`). Code
+  that signs a user in some other way (a token endpoint, another controller) has to
+  make the same call, or it skips the second factor. A different kind of factor is a
+  `<%= inspect(@accounts) %>.MFA.Provider`, set with
+  `config <%= inspect(@app) %>, <%= inspect(@accounts) %>.MFA, provider: …`. `CLOAK_KEY` encrypts the TOTP
+  secrets through `<%= inspect(@prefix) %>.Vault`; encrypt other attributes the same way
+  with AshCloak.
 * Build pages from the UI kit, `<%= inspect(@web) %>.UI`, which every template imports:
   `page_header`, `card`, `stat_grid`, `badge`/`status_badge`, `alert`,
   `empty_state`, `tabs`, `modal`, `dropdown`, `feed`, `description_list` and

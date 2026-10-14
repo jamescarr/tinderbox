@@ -7,6 +7,10 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
   * AshAuthentication with password and generic OIDC (`sso`) sign-in; Dex runs in
     docker compose as the local OIDC provider,
   * organizations, memberships and invitations (Ash policies, AshPaperTrail),
+  * multi-factor authentication: TOTP with recovery codes at `/settings/security`
+    (secrets encrypted with AshCloak), an admin reset at `/admin/security`,
+    `MFA_REQUIRED` to enforce it and `MFA_SSO=idp` to trust the SSO provider's MFA
+    (`mix tinderbox.gen.mfa` adds it to a project generated without it),
   * Stripe subscriptions (Checkout, Billing Portal, webhooks, AshOban sync),
   * an in-house notification platform (inbox, per-key channel rules, email)
     behind an adapter facade shaped like Knock,
@@ -65,30 +69,31 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
         {:ash_oban, "~> 0.9"},
         {:ash_paper_trail, "~> 0.8"}
       ],
-      adds_deps: [
-        {:gnat, "~> 1.18"},
-        {:stripity_stripe, "~> 3.3"},
-        {:slugify, "~> 1.3"},
-        # Not started by their own applications: `FunWithFlags.Supervisor` starts in
-        # the app's tree, after PubSub (see `Tinderbox.Gen.Saas.Flags`).
-        {:fun_with_flags, "~> 1.13", runtime: false},
-        {:fun_with_flags_ui, "~> 1.1", runtime: false},
-        {:prom_ex, "~> 1.12"},
-        {:opentelemetry, "~> 1.7"},
-        {:opentelemetry_api, "~> 1.5"},
-        {:opentelemetry_exporter, "~> 1.11"},
-        {:opentelemetry_phoenix, "~> 2.0"},
-        {:opentelemetry_bandit, "~> 0.3"},
-        {:opentelemetry_ecto, "~> 1.2"},
-        {:opentelemetry_oban, "~> 1.2"},
-        {:gen_smtp, "~> 1.3"},
-        # The password strategy installer adds exactly this requirement itself; a
-        # different one would make it stop and ask whether to replace it.
-        {:bcrypt_elixir, "~> 3.0"},
-        # Verifies the access tokens of API connections against the issuer's JWKS;
-        # already in the lock through joken.
-        {:jose, "~> 1.11"}
-      ]
+      adds_deps:
+        [
+          {:gnat, "~> 1.18"},
+          {:stripity_stripe, "~> 3.3"},
+          {:slugify, "~> 1.3"},
+          # Not started by their own applications: `FunWithFlags.Supervisor` starts in
+          # the app's tree, after PubSub (see `Tinderbox.Gen.Saas.Flags`).
+          {:fun_with_flags, "~> 1.13", runtime: false},
+          {:fun_with_flags_ui, "~> 1.1", runtime: false},
+          {:prom_ex, "~> 1.12"},
+          {:opentelemetry, "~> 1.7"},
+          {:opentelemetry_api, "~> 1.5"},
+          {:opentelemetry_exporter, "~> 1.11"},
+          {:opentelemetry_phoenix, "~> 2.0"},
+          {:opentelemetry_bandit, "~> 0.3"},
+          {:opentelemetry_ecto, "~> 1.2"},
+          {:opentelemetry_oban, "~> 1.2"},
+          {:gen_smtp, "~> 1.3"},
+          # The password strategy installer adds exactly this requirement itself; a
+          # different one would make it stop and ask whether to replace it.
+          {:bcrypt_elixir, "~> 3.0"},
+          # Verifies the access tokens of API connections against the issuer's JWKS;
+          # already in the lock through joken.
+          {:jose, "~> 1.11"}
+        ] ++ Tinderbox.Gen.Saas.Mfa.deps()
     }
   end
 

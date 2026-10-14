@@ -6,6 +6,7 @@ defmodule Tinderbox.Gen.SaasDomainTaskTest do
 
   import Igniter.Test
   import Tinderbox.Test.SaasFixtures
+  import Tinderbox.Test.SourceHelpers, only: [source: 2]
 
   setup_all do
     Application.put_env(:test, :ash_domains, [Test.Accounts])
@@ -74,11 +75,5 @@ defmodule Tinderbox.Gen.SaasDomainTaskTest do
   # which the module compiled in memory above is.
   defp gen_domain(project, argv) do
     Igniter.compose_task(project, Mix.Tasks.Test.Gen.Domain, argv)
-  end
-
-  defp source(igniter, path) do
-    igniter.rewrite
-    |> Rewrite.source!(path)
-    |> Rewrite.Source.get(:content)
   end
 end

@@ -30,36 +30,26 @@ defmodule Tinderbox.Gen.Saas.Notifications do
     |> add_queue(assigns)
     |> Gen.append_to_runtime_exs(
       Gen.render_template("saas/notifications/runtime_config.exs.eex", assigns),
-      fn igniter ->
-        Igniter.Project.Config.configures_key?(
-          igniter,
-          "runtime.exs",
-          assigns[:app],
-          [:mail_from]
-        )
-      end
+      Gen.runtime_configures?(assigns[:app], [:mail_from])
     )
   end
 
   defp create_modules(igniter, notifications, assigns) do
     modules = [
-      {notifications, "notifications.ex.eex"},
-      {Module.concat(notifications, "Notification"), "notification.ex.eex"},
-      {Module.concat(notifications, "Preference"), "preference.ex.eex"},
-      {Module.concat(notifications, "Catalog"), "catalog.ex.eex"},
-      {Module.concat(notifications, "Adapter"), "adapter.ex.eex"},
-      {Module.concat([notifications, "Adapters", "Local"]), "adapters/local.ex.eex"},
-      {Module.concat([notifications, "Workers", "SendEmail"]), "send_email.ex.eex"},
-      {Module.concat(assigns[:web], "LiveNotifications"), "live_notifications.ex.eex"}
+      {notifications, "saas/notifications/notifications.ex.eex"},
+      {Module.concat(notifications, "Notification"), "saas/notifications/notification.ex.eex"},
+      {Module.concat(notifications, "Preference"), "saas/notifications/preference.ex.eex"},
+      {Module.concat(notifications, "Catalog"), "saas/notifications/catalog.ex.eex"},
+      {Module.concat(notifications, "Adapter"), "saas/notifications/adapter.ex.eex"},
+      {Module.concat([notifications, "Adapters", "Local"]),
+       "saas/notifications/adapters/local.ex.eex"},
+      {Module.concat([notifications, "Workers", "SendEmail"]),
+       "saas/notifications/send_email.ex.eex"},
+      {Module.concat(assigns[:web], "LiveNotifications"),
+       "saas/notifications/live_notifications.ex.eex"}
     ]
 
-    Enum.reduce(modules, igniter, fn {module, template}, igniter ->
-      Igniter.Project.Module.create_module(
-        igniter,
-        module,
-        Gen.render_template("saas/notifications/" <> template, assigns)
-      )
-    end)
+    Gen.create_modules(igniter, modules, assigns)
   end
 
   defp register_domain(igniter, notifications, assigns) do
