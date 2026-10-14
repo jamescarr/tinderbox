@@ -1,0 +1,63 @@
+@moduledoc """
+Registers the OAuth2 client for a new connection at the provider, as part of the
+create action, and records its id.
+
+Only a hook is registered here, so validating a form (`AshPhoenix.Form.validate/2`)
+never talks to the provider. The provider is called in a `before_transaction`
+hook: after the changeset has validated and been authorized, and before the
+database transaction opens, so no connection is held while the provider answers.
+Its result is carried by hooks added to the changeset right there:
+
+  * `client_id` and `provider` are set from it (`allow_nil? false` attributes may
+    be set this early: Ash checks required values once the hooks have run),
+  * the client secret is attached to the record as metadata
+    (`record.__metadata__.client_secret`) and written nowhere,
+  * when the row then fails to write, the client is deleted again. This has to be
+    an `after_transaction` hook added *here*: Ash runs the ones a `before_action`
+    hook adds only when the action succeeds.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@connections) %>.Provider
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_transaction(changeset, &register/1)
+end
+
+defp register(changeset) do
+  name = Ash.Changeset.get_attribute(changeset, :name)
+  organization_id = Ash.Changeset.get_attribute(changeset, :organization_id)
+
+  # A missing name or organization is reported by the required-attribute check.
+  if is_nil(name) or is_nil(organization_id) do
+    changeset
+  else
+    case Provider.register_client(name, organization_id) do
+      {:ok, %{client_id: client_id, client_secret: secret}} ->
+        changeset
+        |> Ash.Changeset.force_change_attribute(:client_id, client_id)
+        |> Ash.Changeset.force_change_attribute(:provider, Provider.name())
+        # Shown once, by the page; never written anywhere.
+        |> Ash.Changeset.after_action(fn _changeset, record ->
+          {:ok, Ash.Resource.put_metadata(record, :client_secret, secret)}
+        end)
+        # The row failed to write after the client was registered: take the client back.
+        |> Ash.Changeset.after_transaction(fn
+          _changeset, {:error, _} = error ->
+            Provider.delete_client(client_id)
+            error
+
+          _changeset, result ->
+            result
+        end)
+
+      {:error, reason} ->
+        Ash.Changeset.add_error(changeset,
+          field: :name,
+          message: "could not register the client with #{Provider.name()}: #{inspect(reason)}"
+        )
+    end
+  end
+end

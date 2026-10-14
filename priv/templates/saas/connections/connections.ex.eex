@@ -1,0 +1,39 @@
+@moduledoc """
+OAuth2 client-credentials connections: how machines call the JSON:API.
+
+An organization's owners and admins create a connection; the authorization
+server behind `<%= inspect(@provider) %>` (selected by `OAUTH_PROVIDER`) holds the client and
+issues access tokens for it. `<%= inspect(@web) %>.Plugs.LoadConnection` verifies those
+tokens (`<%= inspect(@connections) %>.Tokens`) and turns a valid one into the Ash actor, a
+`<%= inspect(@connection) %>`.
+
+This domain keeps one row per client. The row, not the token, is what grants
+access: revoking a connection deletes the client at the provider and marks the
+row, and the plug only accepts tokens whose client has an unrevoked row, so a
+token that is still within its lifetime stops working on the next request.
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>, extensions: [AshPaperTrail.Domain]
+
+paper_trail do
+  include_versions? true
+end
+
+resources do
+  resource <%= inspect(@connection) %>
+end
+
+@doc "The active connection registered under `client_id`; `{:ok, nil}` when there is none."
+@spec active_by_client_id(String.t() | nil) ::
+        {:ok, <%= inspect(@connection) %>.t() | nil} | {:error, term()}
+def active_by_client_id(nil), do: {:ok, nil}
+
+def active_by_client_id(client_id) do
+  <%= inspect(@connection) %>
+  |> Ash.Query.for_read(:by_client_id, %{client_id: client_id})
+  |> Ash.read_one(authorize?: false)
+end
+
+@doc "The audience access tokens must carry (`OAUTH_AUDIENCE`); clients send it as `audience=` when they ask for a token."
+@spec audience() :: String.t()
+def audience, do: <%= inspect(@provider) %>.config()[:audience]

@@ -13,18 +13,19 @@ defmodule Tinderbox.Gen.Saas.Web do
   * LiveViews inside the installer's `ash_authentication_live_session`:
     `/dashboard`, `/organizations/new`, `/organizations/members`,
     `/invitations/:token`, `/inbox`, `/settings/notifications`, `/billing`,
-    and `<App>Web.LiveHelpers`, what the organization-scoped ones share,
+    `/connections`, and `<App>Web.LiveHelpers`, what the organization-scoped ones
+    share,
   * `POST /organizations/switch`, the organization switcher's target,
-  * test support: `<App>.Fixtures` (users, organizations, memberships),
-    `<App>Web.LiveTestHelpers.sign_in/2`, and a test of the members page that
-    uses both.
+  * test support: `<App>.Fixtures` (users, organizations, memberships, API
+    connections), `<App>Web.LiveTestHelpers.sign_in/2`, and tests of the members
+    and connections pages that use them.
   """
 
   alias Tinderbox.Gen
   alias Tinderbox.Gen.Saas.Edits
 
   @live_views ~w(DashboardLive OrganizationNewLive MembersLive InvitationLive InboxLive
-                 NotificationSettingsLive BillingLive)
+                 NotificationSettingsLive BillingLive ConnectionsLive)
 
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
@@ -180,6 +181,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     live "/inbox", InboxLive
     live "/settings/notifications", NotificationSettingsLive
     live "/billing", BillingLive
+    live "/connections", ConnectionsLive
     """
   end
 
@@ -222,6 +224,10 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> Igniter.create_new_file(
       "test/#{assigns[:app]}_web/live/members_live_test.exs",
       Gen.render_template("saas/test/members_live_test.exs.eex", assigns)
+    )
+    |> Igniter.create_new_file(
+      "test/#{assigns[:app]}_web/live/connections_live_test.exs",
+      Gen.render_template("saas/test/connections_live_test.exs.eex", assigns)
     )
   end
 end

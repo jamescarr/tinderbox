@@ -1,0 +1,73 @@
+@moduledoc """
+The authorization server behind the API connections: it holds each connection's
+OAuth2 client and issues the access tokens the JSON:API accepts.
+
+`OAUTH_PROVIDER` (`config <%= inspect(@app) %>, :connections, provider: …`) selects the adapter, the
+way `STORAGE_BACKEND` selects the object storage backend:
+
+  * `"hydra"` - `<%= inspect(@connections) %>.Providers.Hydra`: Ory Hydra (open source, in
+    `docker-compose.yml`) or hosted Ory Network,
+  * `"auth0"` - `<%= inspect(@connections) %>.Providers.Auth0`: the Auth0 Management API,
+  * `"fake"` - `<%= inspect(@connections) %>.Providers.Fake`: no server; used by the tests.
+
+Token verification is the same for all of them (`<%= inspect(@connections) %>.Tokens`): asymmetric
+JWT access tokens checked against the issuer's JWKS. Only the claim that names
+the client differs, so that is part of the behaviour (`c:client_id/1`).
+"""
+
+@doc "Registers a client-credentials client for an organization; the secret is returned once, here."
+@callback register_client(name :: String.t(), organization_id :: String.t()) ::
+            {:ok, %{client_id: String.t(), client_secret: String.t()}} | {:error, term()}
+
+@doc "Deletes a client. One the server does not know any more counts as deleted."
+@callback delete_client(client_id :: String.t()) :: :ok | {:error, term()}
+
+@doc "The client an access token's claims were issued to."
+@callback client_id(claims :: map()) :: String.t() | nil
+
+@doc "The URL clients post `grant_type=client_credentials` to."
+@callback token_endpoint() :: String.t()
+
+@doc "The `config <%= inspect(@app) %>, :connections` keyword list."
+@spec config() :: keyword()
+def config, do: Application.fetch_env!(:<%= @app %>, :connections)
+
+@doc "The configured provider's name (`\"hydra\"`, `\"auth0\"` or `\"fake\"`)."
+@spec name() :: String.t()
+def name, do: config()[:provider]
+
+@doc "The adapter module for the configured provider."
+@spec adapter() :: module()
+def adapter do
+  case name() do
+    "hydra" ->
+      <%= inspect(@connections) %>.Providers.Hydra
+
+    "auth0" ->
+      <%= inspect(@connections) %>.Providers.Auth0
+
+    "fake" ->
+      <%= inspect(@connections) %>.Providers.Fake
+
+    other ->
+      raise ArgumentError,
+            "unknown OAUTH_PROVIDER #{inspect(other)}, expected \"hydra\", \"auth0\" or \"fake\""
+  end
+end
+
+@doc "See `c:register_client/2`."
+@spec register_client(String.t(), String.t()) ::
+        {:ok, %{client_id: String.t(), client_secret: String.t()}} | {:error, term()}
+def register_client(name, organization_id), do: adapter().register_client(name, organization_id)
+
+@doc "See `c:delete_client/1`."
+@spec delete_client(String.t()) :: :ok | {:error, term()}
+def delete_client(client_id), do: adapter().delete_client(client_id)
+
+@doc "See `c:client_id/1`."
+@spec client_id(map()) :: String.t() | nil
+def client_id(claims), do: adapter().client_id(claims)
+
+@doc "See `c:token_endpoint/0`."
+@spec token_endpoint() :: String.t()
+def token_endpoint, do: adapter().token_endpoint()

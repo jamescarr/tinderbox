@@ -1,0 +1,232 @@
+@moduledoc """
+The API connections of the current organization: OAuth2 client credentials that
+let a machine call the JSON:API as the organization.
+
+Everyone in the organization sees the list. Owners and admins create and revoke:
+creating registers a client at the authorization server
+(`<%= inspect(@provider) %>`) and shows its secret once, on this page, until it is dismissed;
+revoking deletes the client and cuts off its access tokens at the next request.
+
+Every change goes through the Ash actions with the signed-in user as the actor,
+so what the policies forbid surfaces as a flash message rather than being
+re-checked here.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+import <%= inspect(@web) %>.LiveHelpers
+
+require Ash.Query
+
+alias <%= inspect(@connections) %>
+alias <%= inspect(@connection) %>
+alias <%= inspect(@provider) %>
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok,
+   socket
+   |> assign(:page_title, "API connections")
+   |> assign(:manager?, manager?(socket.assigns.current_membership))
+   |> assign(:new_credentials, nil)
+   |> assign(:provider, Provider.name())
+   |> assign(:token_endpoint, Provider.token_endpoint())
+   |> assign(:audience, Connections.audience())
+   |> load()
+   |> assign_form()}
+end
+
+@impl true
+def handle_event("validate", %{"connection" => params}, socket) do
+  {:noreply, assign(socket, :form, AshPhoenix.Form.validate(socket.assigns.form, params))}
+end
+
+def handle_event("create", %{"connection" => params}, socket) do
+  case AshPhoenix.Form.submit(socket.assigns.form, params: params) do
+    {:ok, connection} ->
+      {:noreply,
+       socket
+       |> assign(:new_credentials, %{
+         client_id: connection.client_id,
+         client_secret: connection.__metadata__.client_secret
+       })
+       |> put_flash(:info, "Connection created")
+       |> load()
+       |> assign_form()}
+
+    {:error, form} ->
+      {:noreply, assign(socket, :form, form)}
+  end
+end
+
+def handle_event("revoke", %{"id" => id}, socket) do
+  user = socket.assigns.current_user
+
+  result =
+    with {:ok, connection} <- find(Connection, id, socket) do
+      Ash.update(connection, %{}, action: :revoke, actor: user)
+    end
+
+  {:noreply, result |> report(socket, "Connection revoked") |> load()}
+end
+
+def handle_event("dismiss", _params, socket) do
+  {:noreply, assign(socket, :new_credentials, nil)}
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  connections =
+    Connection
+    |> Ash.Query.filter(organization_id == ^organization.id)
+    |> Ash.Query.load(:created_by)
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!(actor: user)
+
+  assign(socket, :connections, connections)
+end
+
+defp assign_form(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  form =
+    Connection
+    |> AshPhoenix.Form.for_create(:create,
+      actor: user,
+      as: "connection",
+      params: %{"organization_id" => organization.id}
+    )
+    |> to_form()
+
+  assign(socket, :form, form)
+end
+
+# How to ask for a token with the credentials just created: Hydra's clients
+# authenticate with HTTP Basic, Auth0's with the form body.
+defp token_request("auth0", credentials, audience, token_endpoint) do
+  """
+  curl -d grant_type=client_credentials \\
+    -d client_id=#{credentials.client_id} -d client_secret=#{credentials.client_secret} \\
+    -d audience=#{audience} \\
+    #{token_endpoint}\
+  """
+end
+
+defp token_request(_basic, credentials, audience, token_endpoint) do
+  """
+  curl -u '#{credentials.client_id}:#{credentials.client_secret}' \\
+    -d grant_type=client_credentials -d audience=#{audience} \\
+    #{token_endpoint}\
+  """
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+    current_page={:connections}
+  >
+    <.page_header>
+      API connections
+      <:subtitle>
+        Client credentials that call the API for {@current_organization.name}
+      </:subtitle>
+    </.page_header>
+
+    <div class="space-y-6">
+      <div :if={@new_credentials} id="new-credentials">
+        <.alert kind="success" title="Copy the client secret now; it is not shown again">
+          <dl class="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
+            <dt class="font-medium">Client ID</dt>
+            <dd><code class="break-all">{@new_credentials.client_id}</code></dd>
+            <dt class="font-medium">Client secret</dt>
+            <dd><code class="break-all">{@new_credentials.client_secret}</code></dd>
+            <dt class="font-medium">Token endpoint</dt>
+            <dd><code class="break-all">{@token_endpoint}</code></dd>
+            <dt class="font-medium">Audience</dt>
+            <dd><code class="break-all">{@audience}</code></dd>
+          </dl>
+          <p class="mt-3">
+            Ask for an access token, then send it as <code>Authorization: Bearer …</code>
+            to the API:
+          </p>
+          <pre class="mt-1 overflow-x-auto rounded-box bg-base-200 p-3 text-xs"><code>{token_request(@provider, @new_credentials, @audience, @token_endpoint)}</code></pre>
+          <:actions>
+            <.button phx-click="dismiss">Done</.button>
+          </:actions>
+        </.alert>
+      </div>
+
+      <.card padded={@connections == []}>
+        <:title>Connections</:title>
+        <div :if={@connections != []} class="overflow-x-auto">
+          <table class="table" id="connections">
+            <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Client ID</th>
+                <th scope="col">Created by</th>
+                <th scope="col">Created</th>
+                <th scope="col">Status</th>
+                <th :if={@manager?} scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={connection <- @connections} id={"connection-#{connection.id}"}>
+                <td class="font-medium">{connection.name}</td>
+                <td><code class="text-xs">{connection.client_id}</code></td>
+                <td>{connection.created_by && to_string(connection.created_by.email)}</td>
+                <td>{format_datetime(connection.inserted_at)}</td>
+                <td>
+                  <.status_badge status={if connection.revoked_at, do: :revoked, else: :active} />
+                </td>
+                <td :if={@manager?} class="text-right">
+                  <.button
+                    :if={is_nil(connection.revoked_at)}
+                    class="btn btn-ghost btn-sm text-error"
+                    phx-click="revoke"
+                    phx-value-id={connection.id}
+                    data-confirm={"Revoke #{connection.name}? Its tokens stop working immediately."}
+                  >
+                    Revoke
+                  </.button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <.empty_state :if={@connections == []} icon="hero-key" title="No connections yet">
+          A connection lets a machine call the API as {@current_organization.name}.
+        </.empty_state>
+      </.card>
+
+      <.card :if={@manager?}>
+        <:title>New connection</:title>
+        <:description>
+          Machines use its client credentials to get access tokens for the API.
+        </:description>
+        <.form for={@form} id="connection-form" phx-change="validate" phx-submit="create">
+          <.input field={@form[:organization_id]} type="hidden" />
+          <.input field={@form[:name]} type="text" label="Name" placeholder="CI pipeline" required />
+          <div class="mt-2 flex justify-end">
+            <.button variant="primary" phx-disable-with="Creating...">Create</.button>
+          </div>
+        </.form>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end

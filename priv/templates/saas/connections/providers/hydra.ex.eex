@@ -1,0 +1,68 @@
+@moduledoc """
+`<%= inspect(@connections) %>.Provider` for Ory Hydra: the open source server in
+`docker-compose.yml` locally, or hosted Ory Network (the same admin API with a
+bearer token).
+
+Clients are created and deleted through Hydra's admin API. They use
+`client_secret_basic` and get JWT access tokens (`access_token_strategy: "jwt"`),
+which `<%= inspect(@connections) %>.Tokens` verifies against Hydra's JWKS. Hydra echoes the
+generated secret only in the create response.
+
+Config (`config <%= inspect(@app) %>, :connections`): `hydra_admin_url`, `hydra_admin_token`
+(`nil` for a local Hydra: no authorization header), `audience`, `issuer`.
+"""
+
+@behaviour <%= inspect(@provider) %>
+
+alias <%= inspect(@provider) %>
+
+@impl true
+def register_client(name, organization_id) do
+  config = Provider.config()
+
+  body = %{
+    client_name: name,
+    grant_types: ["client_credentials"],
+    response_types: [],
+    token_endpoint_auth_method: "client_secret_basic",
+    access_token_strategy: "jwt",
+    audience: [config[:audience]],
+    metadata: %{organization_id: organization_id}
+  }
+
+  case Req.post(config[:hydra_admin_url] <> "/admin/clients", json: body, headers: headers(config)) do
+    {:ok, %{status: 201, body: %{"client_id" => id, "client_secret" => secret}}} ->
+      {:ok, %{client_id: id, client_secret: secret}}
+
+    {:ok, %{status: status, body: body}} ->
+      {:error, {:hydra, status, body}}
+
+    {:error, reason} ->
+      {:error, reason}
+  end
+end
+
+@impl true
+def delete_client(client_id) do
+  config = Provider.config()
+  url = config[:hydra_admin_url] <> "/admin/clients/" <> client_id
+
+  case Req.delete(url, headers: headers(config)) do
+    {:ok, %{status: status}} when status in [204, 404] -> :ok
+    {:ok, %{status: status, body: body}} -> {:error, {:hydra, status, body}}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+@impl true
+def client_id(claims), do: claims["client_id"]
+
+@impl true
+def token_endpoint, do: String.trim_trailing(Provider.config()[:issuer], "/") <> "/oauth2/token"
+
+defp headers(config) do
+  case config[:hydra_admin_token] do
+    nil -> []
+    token -> [authorization: "Bearer " <> token]
+  end
+end

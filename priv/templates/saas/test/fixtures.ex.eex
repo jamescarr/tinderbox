@@ -5,6 +5,7 @@ Records for tests, written through the resources' own actions.
 alias <%= inspect(@accounts) %>.Membership
 alias <%= inspect(@accounts) %>.Organization
 alias <%= inspect(@user) %>
+alias <%= inspect(@connection) %>
 
 @password "password123!"
 
@@ -44,4 +45,15 @@ def membership_fixture(organization, user, role) do
     role: role
   })
   |> Ash.create!(authorize?: false)
+end
+
+@doc "An API connection of `organization` created by `user`, an owner or admin; the `fake` provider issues the client id."
+def connection_fixture(organization, user, attrs \\ %{}) do
+  Connection
+  |> Ash.Changeset.for_create(
+    :create,
+    Map.merge(%{name: "CI", organization_id: organization.id}, attrs),
+    actor: user
+  )
+  |> Ash.create!(actor: user)
 end

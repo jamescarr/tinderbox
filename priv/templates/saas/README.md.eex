@@ -22,6 +22,7 @@ mise tasks                   # everything else
 | Admin (users whose email is in `ADMIN_EMAILS`) | http://localhost:4000/admin |
 | Mailpit, every email the app sends | http://localhost:8025 |
 | Dex, the local SSO provider | user `admin@example.com`, password `password` |
+| Hydra, the local OAuth2 server behind API connections | tokens http://localhost:4444/oauth2/token, admin http://localhost:4445 |
 | Metrics | http://localhost:4000/metrics |
 
 Run bare `mix` commands through `mise exec -- mix …` (for example
@@ -47,10 +48,23 @@ Moving the app off 4000 also needs `http://localhost:4001/auth/user/sso/callback
 (your port) in `redirectURIs` in `docker/dex/config.yaml`, then `mise run down` and
 `mise run up`; Dex refuses a callback it does not list.
 
+API connections (the **API connections** page) are OAuth2 client credentials that
+let a machine call `/api` as an organization. An authorization server holds the
+clients and issues the access tokens, and `OAUTH_PROVIDER` picks it: `hydra`
+(the default; Ory Hydra in compose, `OAUTH_ISSUER` and `HYDRA_ADMIN_URL` point at
+it, plus `HYDRA_ADMIN_TOKEN` for hosted Ory Network) or `auth0` (`AUTH0_DOMAIN`,
+`AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET` of a Machine-to-Machine application
+allowed `create:clients`, `delete:clients` and `create:client_grants` on the
+Management API, and `OAUTH_ISSUER=https://<tenant>.auth0.com/`). `OAUTH_AUDIENCE`
+is what tokens must carry in `aud`: clients send it as `audience=` when they ask
+for a token (for Auth0 it is the identifier of the API you registered). The tests
+use an in-memory `fake` provider whatever `OAUTH_PROVIDER` says.
+
 Production (the release image, `mix phx.gen.release --docker`) refuses to start
 without `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET`. Also set
-`PHX_HOST`, `PHX_SERVER=true`, and the `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*` and
-`ADMIN_EMAILS` values of `.mise.toml`. Run migrations with the release's
+`PHX_HOST`, `PHX_SERVER=true`, and the `NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`,
+`OAUTH_*` and `ADMIN_EMAILS` values of `.mise.toml` (plus `HYDRA_*` or `AUTH0_*`
+for the provider you chose). Run migrations with the release's
 `bin/migrate`.
 
 With `SMTP_USERNAME` (and `SMTP_PASSWORD`) set, mail is authenticated and upgraded
@@ -69,6 +83,10 @@ IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
   (a plain change, so the policy sees the id), and
   `validate {<%= inspect(@accounts) %>.Validations.SameOrganization, fields: [other_id: Other]}`
   for any further ids it references.
+* A connection token's actor is a `<%= inspect(@connection) %>`, not a user: next to the
+  membership check, an organization-scoped read policy adds
+  `authorize_if expr(organization_id == ^actor(:organization_id))` (on the
+  organization itself, `id == …`) when connections should read the resource.
 * New organization pages mount `<%= inspect(@web) %>.LiveOrganization`
   (`:require_organization`, or `:require_manager` for owner/admin-only pages) and
   import `<%= inspect(@web) %>.LiveHelpers` (`find/4`, `report/3`, `manager?/1`,

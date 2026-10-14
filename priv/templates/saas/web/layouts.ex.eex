@@ -75,6 +75,13 @@ def app(assigns) do
       <.nav_item navigate={~p"/billing"} icon="hero-credit-card" active={@current_page == :billing}>
         Billing
       </.nav_item>
+      <.nav_item
+        navigate={~p"/connections"}
+        icon="hero-key"
+        active={@current_page == :connections}
+      >
+        API connections
+      </.nav_item>
       <.nav_section :if={@current_user.role == :admin} label="Platform">
         <.nav_item href={~p"/admin"} icon="hero-shield-check">Admin</.nav_item>
       </.nav_section>
