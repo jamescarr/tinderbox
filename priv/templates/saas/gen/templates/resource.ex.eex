@@ -18,8 +18,14 @@ postgres do
 
   references do
     reference :organization, on_delete: :delete
-<%= for relation <- @belongs_to do %>    reference <%= inspect(relation.name) %>, on_delete: <%= if relation.required?, do: ":delete", else: ":nilify" %>
+<%= for relation <- @belongs_to do %>    reference <%= inspect(relation.name) %>, on_delete: <%= if relation.required?, do: ":delete", else: ":nilify" %>, index?: true
 <% end %>  end
+
+  # Every page reads one organization's rows, newest first; Postgres does not index
+  # foreign keys by itself.
+  custom_indexes do
+    index [:organization_id, :inserted_at]
+  end
 end
 
 actions do

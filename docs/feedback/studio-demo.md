@@ -121,6 +121,13 @@ plans, `domain: "Core"`, the resources
   app name.
 * **Names**: a page without a title read "StudioDemo · Studio Demo" and the app shell
   said "StudioDemo"; they use the tagline and the concept's name now.
+* **Scale and repeatability of the generated CRUD** (after review, re-verified on a
+  fresh `studio_demo`: 63 → 71 tests, then a `Milestone` with a unique string, a
+  unique integer and two `belongs_to` → 75, prod compile clean): resources index
+  `[:organization_id, :inserted_at]` and every `belongs_to` column (the migration
+  creates the three indexes); the list page and the form's selects read at most 1000
+  rows; a unique attribute's fixture value is unique per call; and a test runs
+  `gen.concept` twice to prove its own rewrite keeps the marker.
 
 ## Rough edges hit
 
@@ -133,6 +140,11 @@ plans, `domain: "Core"`, the resources
 * **Two plans in a three-column pricing grid** leave a gap on wide screens.
 * **`paying` needs Stripe**: with no subscription the paying threshold stays unmet,
   as it should; the Stripe flow itself was not exercised here.
+* **`cloak 1.1.4 VULNERABLE!`**: `mix deps.get` reports EEF-CVE-2026-95105 (HIGH,
+  "Cloak AES-CTR cipher lacks ciphertext authentication"). The generated vault uses
+  `Cloak.Ciphers.AES.GCM`, which authenticates, not AES-CTR; still, every SaaS project
+  ships the package, so bump `cloak` (or `ash_cloak`'s requirement) once a fixed
+  release exists. Not addressed here.
 
 Not exercised: the Fly.io deployment (the run was kept local by choice: apps, a
 Managed Postgres cluster and a Tigris bucket are billable), so Managed Postgres

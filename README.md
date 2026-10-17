@@ -328,8 +328,10 @@ Ash packages the other stacks use, then adds:
   stay: `mix <app>.gen.resource <App>.Things.Thing name:string:required
   status:enum:a,b owner:belongs_to:User …` (an organization-scoped resource: owners
   and admins write, members read, platform admins bypass; `SameOrganization` on
-  references; a `<thing>.created` event; its fixture and migration), `mix
-  <app>.gen.live` (the same, plus list, show and form pages, routes, a navigation
+  references; a `<thing>.created` event; `[:organization_id, :inserted_at]` and every
+  `belongs_to` column indexed; its fixture and migration), `mix
+  <app>.gen.live` (the same, plus list, show and form pages that read at most 1000
+  rows, routes, a navigation
   entry and a test), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
   templates are copied into `priv/templates/<app>.gen/` for the project to edit; the
   shared code (`Mix.<App>.Gen`) has no Igniter in it and the tasks compile to a

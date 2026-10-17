@@ -334,13 +334,13 @@ if Code.ensure_loaded?(Igniter) do
     defp write_concept(igniter, concept) do
       assigns = [
         app: <%= inspect(@app) %>,
-        name: inspect(concept.name),
-        tagline: inspect(concept.tagline),
-        description: inspect(concept.description),
-        cta: inspect(concept.cta),
+        name: source(concept.name),
+        tagline: source(concept.tagline),
+        description: source(concept.description),
+        cta: source(concept.cta),
         value_props: source(concept.value_props),
         plans: source(concept.plans),
-        activation_event: inspect(concept.activation_event),
+        activation_event: source(concept.activation_event),
         thresholds:
           "%{" <>
             Enum.map_join(concept.thresholds, ", ", fn {key, value} ->

@@ -300,6 +300,15 @@ defmodule <%= @support_module %> do
   def sample_value(%{type: :belongs_to}, _kind), do: nil
   def sample_value(%{type: :map}, :form), do: nil
   def sample_value(%{type: :map}, :fixture), do: "%{}"
+
+  # A unique attribute's fixture value differs on every call, so a test can make two.
+  def sample_value(%{type: type, name: name, unique?: true}, :fixture)
+      when type in [:string, :text],
+      do: ~s|"Sample #{String.downcase(humanize(name))} \#{System.unique_integer([:positive])}"|
+
+  def sample_value(%{type: :integer, unique?: true}, :fixture),
+    do: "System.unique_integer([:positive])"
+
   def sample_value(%{type: type, name: name}, _kind) when type in [:string, :text],
     do: inspect("Sample " <> String.downcase(humanize(name)))
   def sample_value(%{type: :integer}, _kind), do: "1"

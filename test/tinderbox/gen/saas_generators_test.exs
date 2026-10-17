@@ -74,7 +74,8 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       for snippet <- [
             "belongs_to :organization, Test.Accounts.Organization, allow_nil?: false, public?: true",
             "reference :organization, on_delete: :delete",
-            "reference :owner, on_delete: :nilify",
+            "reference :owner, on_delete: :nilify, index?: true",
+            "index [:organization_id, :inserted_at]",
             "{Test.Accounts.Checks.ActorManagesOrganization, field: :organization_id}",
             "exists(organization.memberships, user_id == ^actor(:id))",
             "bypass actor_attribute_equals(:role, :admin)",
@@ -153,6 +154,12 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
         source(igniter, "lib/test/projects/project.ex"),
         "identity :unique_code, [:organization_id, :code]"
       )
+
+      # Two fixtures in one test must not collide on the identity.
+      assert_has(
+        source(igniter, "test/support/fixtures.ex"),
+        ~S|code: "Sample code #{System.unique_integer([:positive])}"|
+      )
     end
 
     test "refuses reserved names, unknown types and a module without a domain, before writing",
@@ -205,6 +212,7 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert_has(index, "sortable: [:name, :status, :budget, :inserted_at]")
       assert_has(index, ~s|id="new-project"|)
       assert_has(index, "display_name(project.owner)")
+      assert_has(index, "Ash.Query.limit(@limit)")
 
       form = source(igniter, "lib/test_web/live/project_form_live.ex")
       assert_has(form, "on_mount {TestWeb.LiveOrganization, :require_manager}")
@@ -356,6 +364,22 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
 
       assert source(igniter, "lib/test/concept.ex") == edited
       assert_has_warning(igniter, &(&1 =~ "was edited by hand"))
+    end
+
+    test "a concept it wrote is rewritten on the next run", %{files: files} do
+      first = gen(project(files, [{"concept.exs", @concept}]), Concept, [])
+
+      written =
+        first.rewrite
+        |> Rewrite.sources()
+        |> Map.new(&{&1.path, Rewrite.Source.get(&1, :content)})
+
+      edited = String.replace(@concept, "Projects without the spreadsheet", "Projects, finally")
+      second = gen(project(written, [{"concept.exs", edited}]), Concept, [])
+
+      assert_has(source(second, "lib/test/concept.ex"), ~s|def tagline, do: "Projects, finally"|)
+      assert second.warnings == []
+      refute Enum.any?(second.tasks, &match?({"ash.codegen", _}, &1))
     end
 
     test "a missing manifest says where the starter was", %{files: files} do

@@ -80,7 +80,8 @@ end
 @impl true
 def handle_info(_message, socket), do: {:noreply, socket}
 <%= if @belongs_to != [] do %>
-# The choices for each `belongs_to`, from the current organization.
+# The choices for each `belongs_to`, from the current organization: at most 1000
+# of them (a longer list wants a search box, not a select).
 defp assign_options(socket) do
   %{current_user: user, current_organization: organization} = socket.assigns
 
@@ -89,12 +90,14 @@ defp assign_options(socket) do
     <%= inspect(@accounts) %>.Membership
     |> Ash.Query.filter(organization_id == ^organization.id)
     |> Ash.Query.load(:user)
+    |> Ash.Query.limit(1000)
     |> Ash.read!(actor: user)
     |> Enum.map(&{to_string(&1.user.email), &1.user_id})<% relation.target == Module.concat(@accounts, "Organization") -> %>
     Enum.map(socket.assigns.organizations, &{&1.name, &1.id})<% true -> %>
     <%= inspect(relation.target) %>
     |> Ash.Query.filter(organization_id == ^organization.id)
     |> Ash.Query.sort(inserted_at: :desc)
+    |> Ash.Query.limit(1000)
     |> Ash.read!(actor: user)
     |> Enum.map(&{display_name(&1), &1.id})<% end %>
   )<% end %>
