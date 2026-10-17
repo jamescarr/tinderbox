@@ -72,6 +72,37 @@ defmodule Tinderbox.Gen.SaasTest do
           test/test_web/live/connections_live_test.exs
           test/test_web/api_connections_test.exs
           priv/repo/migrations/20250101000000_create_fun_with_flags_toggles.exs
+          lib/test/concept.ex
+          concept.exs
+          lib/test/analytics.ex
+          lib/test/analytics/event.ex
+          lib/test/analytics/funnel.ex
+          lib/test/analytics/changes/track.ex
+          lib/test/waitlist.ex
+          lib/test/waitlist/signup.ex
+          lib/test_web/plugs/visitor.ex
+          lib/test_web/waitlist_controller.ex
+          lib/test_web/admin/validation_live.ex
+          lib/test_web/admin/waitlist_live.ex
+          lib/test_web/admin/waitlist_controller.ex
+          test/test/analytics_test.exs
+          test/test_web/controllers/waitlist_controller_test.exs
+          test/test_web/live/admin/validation_live_test.exs
+          test/test_web/ui/components_test.exs
+          lib/mix/test_gen.ex
+          lib/mix/tasks/test.gen.resource.ex
+          lib/mix/tasks/test.gen.live.ex
+          lib/mix/tasks/test.gen.concept.ex
+          priv/templates/test.gen/resource.ex.eex
+          priv/templates/test.gen/index_live.ex.eex
+          priv/templates/test.gen/show_live.ex.eex
+          priv/templates/test.gen/form_live.ex.eex
+          priv/templates/test.gen/live_test.exs.eex
+          priv/templates/test.gen/fixture.ex.eex
+          priv/templates/test.gen/nav_item.heex.eex
+          priv/templates/test.gen/concept.ex.eex
+          fly.toml
+          fly/nats/fly.toml
         ) do
       assert_creates(igniter, path)
     end
@@ -94,6 +125,15 @@ defmodule Tinderbox.Gen.SaasTest do
              String.split(plain(user), "attribute :hashed_password", parts: 2)
 
     assert attribute |> String.split("end", parts: 2) |> hd() =~ "allow_nil? true"
+  end
+
+  test "the identity resource leaves its read action to the extension", %{igniter: igniter} do
+    identity = source(igniter, "lib/test/accounts/user_identity.ex")
+
+    # A `defaults [:read]` beside the one AshAuthentication.UserIdentity builds is a
+    # second `read`, which ash 3.36 refuses to compile.
+    refute_has(identity, "defaults [:read]")
+    assert_has(identity, "user_resource Test.Accounts.User")
   end
 
   test "the SSO strategy reads its settings from secrets backed by the runtime config",
@@ -354,6 +394,12 @@ defmodule Tinderbox.Gen.SaasTest do
              Enum.find_index(names, &(&1 == "ash.codegen"))
 
     assert_has_notice(igniter, &(&1 =~ "mise trust && mise run dev"))
+
+    assert_has_notice(
+      igniter,
+      &(&1 =~ "then edit concept.exs and run `mise exec -- mix test.gen.concept`")
+    )
+
     assert_has_notice(igniter, &(&1 =~ "Stripe: create two recurring Prices"))
   end
 
@@ -407,6 +453,124 @@ defmodule Tinderbox.Gen.SaasTest do
     assert_has(source(igniter, "lib/test/application.ex"), "FunWithFlags.Supervisor")
   end
 
+  describe "the concept" do
+    test "the starter concept.exs is already formatted and evaluates to a manifest", %{
+      igniter: igniter
+    } do
+      content = source(igniter, "concept.exs")
+
+      assert content |> Code.format_string!() |> IO.iodata_to_binary() ==
+               String.trim_trailing(content)
+
+      {manifest, _binding} = Code.eval_string(content)
+      assert %{name: "Test", cta: :waitlist, domain: "Core", resources: []} = manifest
+      assert manifest.thresholds.within_days == 30
+    end
+
+    test "Test.Concept starts neutral, and is marked as concept.exs's", %{igniter: igniter} do
+      concept = source(igniter, "lib/test/concept.ex")
+
+      assert_has(concept, "# generated-from: concept.exs")
+      assert_has(concept, ~s|def name, do: "Test"|)
+      assert_has(concept, "def cta, do: :register")
+      assert_has(concept, ~s|def activation_event, do: "organization.created"|)
+      assert_has(concept, "within_days: 30, visitors: nil")
+    end
+
+    test "the landing page and the browser tab are drawn from it", %{igniter: igniter} do
+      home = source(igniter, "lib/test_web/controllers/page_html/home.html.heex")
+
+      assert home =~ "{@concept.tagline}"
+      assert home =~ "@concept.cta == :waitlist"
+      assert home =~ ~s|id="waitlist-form"|
+      assert home =~ ~s|action={~p"/waitlist"}|
+      assert home =~ ~s|name="signup[source]"|
+      assert home =~ ~s|id="pricing"|
+
+      root = source(igniter, "lib/test_web/components/layouts/root.html.heex")
+      assert root =~ "<.live_title default={tab_default()} suffix={tab_suffix()} phx-no-format>"
+      refute root =~ "Phoenix Framework"
+
+      layouts = source(igniter, "lib/test_web/components/layouts.ex")
+      assert_has(layouts, ~s|defp tab_suffix, do: " · " <> Test.Concept.name()|)
+      assert_has(layouts, "defp tab_default, do: Test.Concept.tagline()")
+      assert_has(layouts, "{Test.Concept.name()}")
+      assert_has(source(igniter, "lib/test_web/admin/layouts.ex"), "{Test.Concept.name()} admin")
+
+      assert source(igniter, "test/test_web/controllers/page_controller_test.exs") =~
+               "Test.Concept.tagline()"
+    end
+  end
+
+  describe "validation" do
+    test "every visit gets a visitor id, the landing page counts it, the waitlist is routed",
+         %{igniter: igniter} do
+      router = source(igniter, "lib/test_web/router.ex")
+
+      assert_has(router, "plug TestWeb.Plugs.Visitor")
+      assert order(router, "pipeline :browser") < order(router, "plug TestWeb.Plugs.Visitor")
+      assert_has(router, ~s|post "/waitlist", WaitlistController, :create|)
+      assert_has(router, ~s|live "/validation", Admin.ValidationLive|)
+      assert_has(router, ~s|live "/waitlist", Admin.WaitlistLive|)
+      assert_has(router, ~s|get "/waitlist.csv", Admin.WaitlistController, :export|)
+
+      # The CSV is behind the admin-only plug pipeline, not the browser one.
+      [_before, csv_scope] = router |> plain() |> String.split("pipe_through :admin_tools get")
+      assert csv_scope =~ plain(~s|"/waitlist.csv"|)
+
+      page = source(igniter, "lib/test_web/controllers/page_controller.ex")
+      assert_has(page, ~s|Analytics.track(|)
+      assert_has(page, ~s|"landing.viewed"|)
+      assert_has(page, "render(conn, :home, concept: concept(), utm: utm, referrer: referrer")
+      assert_has(page, "cta: Concept.cta()")
+    end
+
+    test "analytics and the waitlist are registered domains", %{igniter: igniter} do
+      config = source(igniter, "config/config.exs")
+
+      assert_has(config, "Test.Analytics")
+      assert_has(config, "Test.Waitlist")
+    end
+
+    test "organizations, sign-ins and waitlist sign-ups are recorded", %{igniter: igniter} do
+      assert_has(
+        source(igniter, "lib/test/accounts/organization.ex"),
+        ~s|change {Test.Analytics.Changes.Track, event: "organization.created", organization: :self}|
+      )
+
+      assert_has(
+        source(igniter, "lib/test_web/mfa_controller.ex"),
+        ~s|Test.Analytics.track("user.signed_in"|
+      )
+
+      assert_has(
+        source(igniter, "lib/test/waitlist/signup.ex"),
+        ~s|change {Test.Analytics.Changes.Track, event: "waitlist.joined"}|
+      )
+    end
+
+    test "the admin section links the validation pages", %{igniter: igniter} do
+      admin = source(igniter, "lib/test_web/admin/layouts.ex")
+
+      assert_has(admin, ~s|validation: "Validation"|)
+      assert_has(admin, ~s|waitlist: "Waitlist"|)
+      assert admin =~ ~r/values: \[[^\]]*:validation,\s*:waitlist/
+      assert_has(admin, ~s|~p"/admin/validation"|)
+      assert_has(admin, ~s|~p"/admin/waitlist"|)
+
+      assert_has(source(igniter, "test/support/fixtures.ex"), "def admin_fixture(attrs")
+    end
+
+    test "the README explains what is counted and how to record more", %{igniter: igniter} do
+      readme = source(igniter, "README.md")
+
+      assert readme =~ "## Validation"
+      assert readme =~ "mix test.gen.concept"
+      assert readme =~ ~s|Test.Analytics.track("thing.done"|
+      assert readme =~ "/admin/waitlist.csv"
+    end
+  end
+
   test "generating twice leaves the files the installers wrote exactly as after the first run",
        %{igniter: igniter} do
     again = Saas.apply(igniter, [])
@@ -428,6 +592,11 @@ defmodule Tinderbox.Gen.SaasTest do
           config/config.exs
           mix.exs
           README.md
+          lib/test_web/components/layouts.ex
+          lib/test_web/components/layouts/root.html.heex
+          lib/test_web/controllers/page_controller.ex
+          concept.exs
+          fly.toml
         ) do
       assert source(again, path) == source(igniter, path), "#{path} changed on the second run"
     end

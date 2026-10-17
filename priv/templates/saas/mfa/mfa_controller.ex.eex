@@ -49,8 +49,13 @@ end
 @spec complete_sign_in(Plug.Conn.t(), struct(), String.t(), String.t()) :: Plug.Conn.t()
 def complete_sign_in(conn, user, return_to, message) do
   case sign_in(conn, user) do
-    {:ok, conn} -> conn |> put_flash(:info, message) |> redirect(to: return_to)
-    :error -> abort(conn, :sign_in_failed)
+    {:ok, conn} -><%= if @analytics? do %>
+      <%= inspect(@prefix) %>.Analytics.track("user.signed_in", %{user: user, anonymous_id: conn.assigns[:visitor_id]})
+<% end %>
+      conn |> put_flash(:info, message) |> redirect(to: return_to)
+
+    :error ->
+      abort(conn, :sign_in_failed)
   end
 end
 

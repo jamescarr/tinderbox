@@ -1,0 +1,33 @@
+@moduledoc """
+Gives every browser a random, long-lived visitor id (the `_<%= @app %>_visitor`
+cookie) and assigns it as `:visitor_id`, so analytics can count distinct
+visitors and connect a visit to the waitlist sign-up or registration that
+follows it. The id says nothing about the person; it is not shared with anyone.
+"""
+
+@behaviour Plug
+
+import Plug.Conn
+
+@cookie "_<%= @app %>_visitor"
+@max_age 60 * 60 * 24 * 365
+
+@impl Plug
+def init(opts), do: opts
+
+@impl Plug
+def call(conn, _opts) do
+  conn = fetch_cookies(conn)
+
+  case conn.cookies[@cookie] do
+    id when is_binary(id) and id != "" ->
+      assign(conn, :visitor_id, id)
+
+    _none ->
+      id = Ash.UUID.generate()
+
+      conn
+      |> put_resp_cookie(@cookie, id, max_age: @max_age, http_only: true, same_site: "Lax")
+      |> assign(:visitor_id, id)
+  end
+end

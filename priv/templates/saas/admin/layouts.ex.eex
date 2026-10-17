@@ -9,12 +9,16 @@ use <%= inspect(@web) %>, :html
   dashboard: "Dashboard",
   users: "Users",
   organizations: "Organizations",
-  subscriptions: "Subscriptions"
+  subscriptions: "Subscriptions",
+  validation: "Validation",
+  waitlist: "Waitlist"
 }
 
 attr :flash, :map, required: true
 attr :current_user, :any, required: true
-attr :current_page, :atom, required: true, values: [:dashboard, :users, :organizations, :subscriptions]
+attr :current_page, :atom,
+  required: true,
+  values: [:dashboard, :users, :organizations, :subscriptions, :validation, :waitlist]
 
 slot :inner_block, required: true
 
@@ -25,7 +29,8 @@ def admin(assigns) do
   <.app_shell id="admin-shell" width={:wide}>
     <:brand>
       <.link navigate={~p"/admin"} class="flex items-center gap-2 font-display text-lg font-semibold">
-        <.icon name="hero-shield-check" class="size-6 text-primary" /> <%= inspect(@prefix) %> admin
+        <.icon name="hero-shield-check" class="size-6 text-primary" />
+        {<%= inspect(@prefix) %>.Concept.name()} admin
       </.link>
     </:brand>
     <:nav>
@@ -48,6 +53,20 @@ def admin(assigns) do
         active={@current_page == :subscriptions}
       >
         Subscriptions
+      </.nav_item>
+      <.nav_item
+        navigate={~p"/admin/validation"}
+        icon="hero-chart-bar"
+        active={@current_page == :validation}
+      >
+        Validation
+      </.nav_item>
+      <.nav_item
+        navigate={~p"/admin/waitlist"}
+        icon="hero-queue-list"
+        active={@current_page == :waitlist}
+      >
+        Waitlist
       </.nav_item>
       <.nav_item href={~p"/admin/flags"} icon="hero-flag">Feature flags</.nav_item>
     </:nav>

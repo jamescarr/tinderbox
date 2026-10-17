@@ -10,7 +10,8 @@ defmodule Tinderbox.Gen.Ui do
       which `<App>Web.UI.Shell` reads at compile time,
     * the kit, written once and then owned by the project: `<App>Web.UI`
       (`use`d by `html_helpers/0` next to CoreComponents), `.Components`,
-      `.Shell`, `.DataTable`, `.ListState`, and its test,
+      `.Shell`, `.DataTable`, `.ListState`, and tests of `ListState` and of the
+      `format_number/2` and `humanize/1` helpers,
     * `<App>Web.UIGalleryLive` at `/dev/ui`, inside Phoenix's dev-only scope,
     * with `apply/2` only, `<App>Web.Layouts` wrapped in the app shell, when it
       is still Phoenix's demo layout.
@@ -87,7 +88,7 @@ defmodule Tinderbox.Gen.Ui do
     |> create_kit(assigns)
     |> import_kit(assigns)
     |> add_gallery_route(assigns)
-    |> create_list_state_test(assigns)
+    |> create_kit_tests(assigns)
     |> Igniter.add_notice(
       "Themepack #{pack.label} (#{pack.shell} shell) applied. Switch with " <>
         "`mix tinderbox.gen.ui --themepack <#{Enum.join(Themepack.names(), "|")}>`; " <>
@@ -264,18 +265,20 @@ defmodule Tinderbox.Gen.Ui do
     end)
   end
 
-  defp create_list_state_test(igniter, assigns) do
-    path = "test/#{assigns[:app]}_web/ui/list_state_test.exs"
+  defp create_kit_tests(igniter, assigns) do
+    Enum.reduce(~w(list_state components), igniter, fn name, igniter ->
+      path = "test/#{assigns[:app]}_web/ui/#{name}_test.exs"
 
-    if Igniter.exists?(igniter, path) do
-      igniter
-    else
-      Igniter.create_new_file(
-        igniter,
-        path,
-        Gen.render_template("ui/list_state_test.exs.eex", assigns)
-      )
-    end
+      if Igniter.exists?(igniter, path) do
+        igniter
+      else
+        Igniter.create_new_file(
+          igniter,
+          path,
+          Gen.render_template("ui/#{name}_test.exs.eex", assigns)
+        )
+      end
+    end)
   end
 
   # -- layout ----------------------------------------------------------------

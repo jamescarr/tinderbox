@@ -1,0 +1,402 @@
+defmodule <%= @support_module %> do
+  @moduledoc """
+  What `mix <%= @app %>.gen.resource`, `mix <%= @app %>.gen.live` and
+  `mix <%= @app %>.gen.concept` share: the attribute grammar, the names a resource
+  module gives its table, routes and pages, and sample values for fixtures and tests.
+
+  Plain Elixir without Igniter, so it compiles in every environment; the tasks
+  themselves run where Igniter is (dev and test). Their templates are in
+  `priv/templates/<%= @app %>.gen/`.
+  """
+
+  @app <%= inspect(@app) %>
+  @prefix <%= inspect(@prefix) %>
+  @web <%= inspect(@web) %>
+  @accounts <%= inspect(@accounts) %>
+  @user <%= inspect(@user) %>
+  @organization <%= inspect(Module.concat(@accounts, "Organization")) %>
+  @repo <%= inspect(@repo) %>
+
+  @scalar_types %{
+    "string" => {:string, :text},
+    "text" => {:string, :textarea},
+    "integer" => {:integer, :number},
+    "decimal" => {:decimal, :number},
+    "boolean" => {:boolean, :checkbox},
+    "date" => {:date, :date},
+    "datetime" => {:utc_datetime, :datetime},
+    "uuid" => {:uuid, :text},
+    "map" => {:map, :none}
+  }
+
+  @reserved ~w(id organization organization_id inserted_at updated_at)
+  @flags ~w(required unique)
+  @lower ~r/\A[a-z][a-z0-9_]*\z/
+  @module ~r/\A[A-Z][A-Za-z0-9]*(\.[A-Z][A-Za-z0-9]*)*\z/
+
+  @grammar """
+  An attribute is name:type[:required][:unique]. The types are string, text, integer,
+  decimal, boolean, date, datetime, uuid, map, enum:a,b,c (one of the atoms, never nil)
+  and belongs_to:Target (User, another resource of the same domain, or a full module
+  name). For example:
+
+      name:string:required status:enum:draft,active,archived budget:decimal owner:belongs_to:User
+  """
+
+  @typedoc """
+  One parsed attribute. `field` is the attribute the form and the fixture set
+  (`<name>_id` for a `belongs_to`); `options` are the `attribute` options of a
+  scalar; `input` is the form control.
+  """
+  @type attribute :: %{
+          name: atom(),
+          type: atom(),
+          ash_type: atom() | nil,
+          field: atom(),
+          options: keyword(),
+          required?: boolean(),
+          unique?: boolean(),
+          values: [atom()] | nil,
+          target: module() | nil,
+          input:
+            :text | :textarea | :number | :checkbox | :date | :datetime | :select | :relation | :none
+        }
+
+  @doc "The attribute grammar, for error messages."
+  @spec grammar() :: String.t()
+  def grammar, do: @grammar
+
+  @doc """
+  Parses `name:type[:required][:unique]` entries. A dotless `belongs_to` target is
+  `accounts`' `User` or `Organization`, else a resource of `domain`; a dotted one is
+  the module as written. Every entry is checked before this raises (`Mix.Error`),
+  listing each problem.
+  """
+  @spec parse_attributes!([String.t()], module(), module()) :: [attribute()]
+  def parse_attributes!(entries, domain, accounts) do
+    {parsed, errors} =
+      Enum.reduce(entries, {[], []}, fn entry, {parsed, errors} ->
+        case parse(entry, domain, accounts) do
+          {:ok, attribute} -> {[attribute | parsed], errors}
+          {:error, message} -> {parsed, [message | errors]}
+        end
+      end)
+
+    attributes = Enum.reverse(parsed)
+
+    case Enum.reverse(errors) ++ duplicates(attributes) do
+      [] ->
+        attributes
+
+      errors ->
+        Mix.raise(
+          "Invalid attributes:\n\n" <>
+            Enum.map_join(errors, "\n", &"  * #{&1}") <> "\n\n" <> @grammar
+        )
+    end
+  end
+
+  defp parse(entry, domain, accounts) do
+    with {:ok, name, type, rest} <- split(entry),
+         :ok <- check_name(entry, name),
+         {:ok, attribute, flags} <- type(entry, name, type, rest, domain, accounts),
+         {:ok, attribute} <- apply_flags(entry, attribute, flags) do
+      {:ok, finish(attribute)}
+    end
+  end
+
+  defp split(entry) do
+    case String.split(entry, ":") do
+      [name, type | rest] when name != "" and type != "" -> {:ok, name, type, rest}
+      _other -> {:error, "#{entry}: expected name:type"}
+    end
+  end
+
+  defp check_name(entry, name) do
+    cond do
+      not Regex.match?(@lower, name) -> {:error, "#{entry}: the name must be snake_case"}
+      name in @reserved -> {:error, "#{entry}: #{name} is reserved (#{Enum.join(@reserved, ", ")})"}
+      true -> :ok
+    end
+  end
+
+  defp type(entry, name, "enum", [values | flags], _domain, _accounts) do
+    values = String.split(values, ",", trim: true)
+
+    if values != [] and Enum.all?(values, &Regex.match?(@lower, &1)) do
+      values = Enum.map(values, &String.to_atom/1)
+      {:ok, base(name, :enum, :atom, :select, values: values), flags}
+    else
+      {:error, "#{entry}: enum values must be snake_case words, as in enum:draft,active"}
+    end
+  end
+
+  defp type(entry, name, "belongs_to", [target | flags], domain, accounts) do
+    if Regex.match?(@module, target) do
+      {:ok, base(name, :belongs_to, nil, :relation, target: target(target, domain, accounts)),
+       flags}
+    else
+      {:error, "#{entry}: the target must be a module name, as in belongs_to:Project"}
+    end
+  end
+
+  defp type(entry, name, type, flags, _domain, _accounts) do
+    case Map.fetch(@scalar_types, type) do
+      {:ok, {ash_type, input}} ->
+        {:ok, base(name, String.to_atom(type), ash_type, input, []), flags}
+
+      :error ->
+        {:error, "#{entry}: unknown type #{inspect(type)}"}
+    end
+  end
+
+  defp base(name, type, ash_type, input, extra) do
+    Map.merge(
+      %{
+        name: String.to_atom(name),
+        type: type,
+        ash_type: ash_type,
+        input: input,
+        required?: false,
+        unique?: false,
+        values: nil,
+        target: nil
+      },
+      Map.new(extra)
+    )
+  end
+
+  defp target(target, domain, accounts) do
+    cond do
+      String.contains?(target, ".") -> Module.concat([target])
+      target in ~w(User Organization) -> Module.concat(accounts, target)
+      true -> Module.concat(domain, target)
+    end
+  end
+
+  defp apply_flags(entry, attribute, flags) do
+    Enum.reduce_while(flags, {:ok, attribute}, fn
+      "required", {:ok, attribute} ->
+        {:cont, {:ok, %{attribute | required?: true}}}
+
+      "unique", {:ok, %{type: :map}} ->
+        {:halt, {:error, "#{entry}: a map cannot be unique"}}
+
+      "unique", {:ok, attribute} ->
+        {:cont, {:ok, %{attribute | unique?: true}}}
+
+      flag, _acc ->
+        {:halt, {:error, "#{entry}: unknown flag #{inspect(flag)} (#{Enum.join(@flags, ", ")})"}}
+    end)
+  end
+
+  defp finish(%{type: :belongs_to} = attribute) do
+    Map.merge(attribute, %{field: :"#{attribute.name}_id", options: []})
+  end
+
+  # Enums and booleans always have a value: a select and a checkbox cannot say "none".
+  defp finish(%{type: :enum, values: [first | _] = values} = attribute) do
+    options = [
+      allow_nil?: false,
+      default: first,
+      constraints: [one_of: values],
+      public?: true
+    ]
+
+    Map.merge(attribute, %{field: attribute.name, options: options})
+  end
+
+  defp finish(%{type: :boolean} = attribute) do
+    Map.merge(attribute, %{
+      field: attribute.name,
+      options: [allow_nil?: false, default: false, public?: true]
+    })
+  end
+
+  defp finish(attribute) do
+    options = if attribute.required?, do: [allow_nil?: false, public?: true], else: [public?: true]
+    Map.merge(attribute, %{field: attribute.name, options: options})
+  end
+
+  defp duplicates(attributes) do
+    attributes
+    |> Enum.flat_map(&Enum.uniq([&1.name, &1.field]))
+    |> Enum.frequencies()
+    |> Enum.filter(fn {_name, count} -> count > 1 end)
+    |> Enum.map(fn {name, _count} -> "#{name} is given more than once" end)
+  end
+
+  @doc """
+  The domain of `resource`: the module without its last segment. A resource needs
+  one (`MyApp.Projects.Project`, not `MyApp.Project`).
+  """
+  @spec domain!(module()) :: module()
+  def domain!(resource) do
+    case Module.split(resource) do
+      parts when length(parts) >= 3 ->
+        parts |> Enum.drop(-1) |> Module.concat()
+
+      _parts ->
+        Mix.raise(
+          "#{inspect(resource)} has no domain: name the resource <App>.<Domain>.<Name>, " <>
+            "as in <%= inspect(@prefix) %>.Projects.Project"
+        )
+    end
+  end
+
+  @doc """
+  The names a resource module gives everything else: `Project` (in any domain)
+  is the table and route `projects`, the assigns `project`/`projects`, the pages
+  `ProjectsLive`, `ProjectLive` and `ProjectFormLive`, "Project"/"Projects".
+  """
+  @spec names(module()) :: %{atom() => String.t()}
+  def names(resource) do
+    base = resource |> Module.split() |> List.last()
+    singular = singular_var(base)
+    plural = plural_var(base)
+
+    %{
+      alias: base,
+      singular: singular,
+      plural: plural,
+      human_singular: humanize(singular),
+      human_plural: humanize(plural),
+      table: plural,
+      route: String.replace(plural, "_", "-"),
+      index_live: Macro.camelize(plural) <> "Live",
+      show_live: base <> "Live",
+      form_live: base <> "FormLive"
+    }
+  end
+
+  @doc "`LineItem` → `line_item`."
+  @spec singular_var(String.t()) :: String.t()
+  def singular_var(name), do: Macro.underscore(name)
+
+  @doc "`LineItem` → `line_items`."
+  @spec plural_var(String.t()) :: String.t()
+  def plural_var(name), do: name |> singular_var() |> pluralize()
+
+  @doc "English plurals for names: `category` → `categories`, `status` → `statuses`, `project` → `projects`."
+  @spec pluralize(String.t()) :: String.t()
+  def pluralize(word) do
+    cond do
+      Regex.match?(~r/[^aeiou]y\z/, word) -> String.replace_suffix(word, "y", "ies")
+      Regex.match?(~r/(s|x|z|ch|sh)\z/, word) -> word <> "es"
+      true -> word <> "s"
+    end
+  end
+
+  @doc "`line_items` → `Line items`."
+  @spec humanize(atom() | String.t()) :: String.t()
+  def humanize(name), do: name |> to_string() |> String.replace("_", " ") |> String.capitalize()
+
+  @doc """
+  Elixir source for a sample value of `attribute`: as a fixture sets it, or as a
+  form submits it (`nil` for what a form does not show). `belongs_to` samples are
+  the templates' business: they need a record.
+  """
+  @spec sample_value(attribute(), :form | :fixture) :: String.t() | nil
+  def sample_value(%{type: :belongs_to}, _kind), do: nil
+  def sample_value(%{type: :map}, :form), do: nil
+  def sample_value(%{type: :map}, :fixture), do: "%{}"
+  def sample_value(%{type: type, name: name}, _kind) when type in [:string, :text],
+    do: inspect("Sample " <> String.downcase(humanize(name)))
+  def sample_value(%{type: :integer}, _kind), do: "1"
+  def sample_value(%{type: :decimal}, :form), do: inspect("10.00")
+  def sample_value(%{type: :decimal}, :fixture), do: ~s|Decimal.new("10.00")|
+  def sample_value(%{type: :boolean}, _kind), do: "true"
+  def sample_value(%{type: :date}, :form), do: "Date.to_iso8601(Date.utc_today())"
+  def sample_value(%{type: :date}, :fixture), do: "Date.utc_today()"
+
+  def sample_value(%{type: :datetime}, :form),
+    do: ~s|Calendar.strftime(DateTime.utc_now(), "%Y-%m-%dT%H:%M")|
+
+  def sample_value(%{type: :datetime}, :fixture),
+    do: "DateTime.truncate(DateTime.utc_now(), :second)"
+
+  def sample_value(%{type: :uuid}, :form), do: inspect("00000000-0000-4000-8000-000000000001")
+  def sample_value(%{type: :uuid}, :fixture), do: "Ash.UUID.generate()"
+  def sample_value(%{type: :enum, values: [first | _]}, :form), do: inspect(to_string(first))
+  def sample_value(%{type: :enum, values: [first | _]}, :fixture), do: inspect(first)
+
+  @doc """
+  Everything the templates in `priv/templates/<%= @app %>.gen/` are rendered with,
+  for `resource` with `attributes` (`parse_attributes!/3`). `opts` are the tasks'
+  options: `table`, `route`, `nav`, `icon`, `admin_bypass`.
+  """
+  @spec assigns(module(), [attribute()], keyword()) :: keyword()
+  def assigns(resource, attributes, opts) do
+    names = names(resource)
+    belongs_to = Enum.filter(attributes, &(&1.type == :belongs_to))
+    scalars = Enum.reject(attributes, &(&1.type == :belongs_to))
+    required = Enum.filter(belongs_to, & &1.required?)
+
+    [
+      app: @app,
+      prefix: @prefix,
+      web: @web,
+      accounts: @accounts,
+      user: @user,
+      repo: @repo,
+      gen: __MODULE__,
+      resource: resource,
+      domain: domain!(resource),
+      attributes: attributes,
+      scalars: scalars,
+      belongs_to: belongs_to,
+      unique: Enum.filter(attributes, & &1.unique?),
+      same_organization:
+        for(%{target: target, field: field} <- belongs_to, target not in [@user, @organization],
+          do: {field, target}
+        ),
+      admin_bypass?: Keyword.get(opts, :admin_bypass, true),
+      table: opts[:table] || names.table,
+      route: opts[:route] || names.route,
+      nav: opts[:nav] || names.human_plural,
+      icon: opts[:icon] || "hero-rectangle-stack",
+      search_fields: for(%{type: type, name: name} <- scalars, type in [:string, :text], do: name),
+      sortable: for(%{type: type, name: name} <- scalars, type != :map, do: name) ++ [:inserted_at],
+      fixture_values:
+        Enum.map(scalars, &{&1.name, sample_value(&1, :fixture)}) ++
+          for(%{target: target} = relation <- required, target in [@user, @organization],
+            do: {relation.field, if(target == @user, do: "user.id", else: "organization.id")}
+          ),
+      fixture_parents:
+        for(%{target: target} = relation <- required, target not in [@user, @organization],
+          do: {relation.field, "#{fixture_name(target)}(organization, user).id"}
+        ),
+      parents:
+        for(%{target: target} = relation <- required, target not in [@user, @organization],
+          do: {to_string(relation.name), "#{fixture_name(target)}(organization, owner)"}
+        ),
+      form_params: form_params(scalars, required),
+      test_organization?: Enum.any?(required, &(&1.target != @user)),
+      shown:
+        Enum.find_value(scalars, fn attribute ->
+          if attribute.type in [:string, :text], do: sample_value(attribute, :form)
+        end)
+    ] ++ Map.to_list(names)
+  end
+
+  defp fixture_name(resource), do: names(resource).singular <> "_fixture"
+
+  # What the generated test submits: a sample for every control, and the records a
+  # required `belongs_to` points at.
+  defp form_params(scalars, required) do
+    values =
+      for(attribute <- scalars, value = sample_value(attribute, :form), do: {attribute.name, value}) ++
+        for %{target: target} = relation <- required do
+          value =
+            cond do
+              target == @user -> "owner.id"
+              target == @organization -> "organization.id"
+              true -> "#{relation.name}.id"
+            end
+
+          {relation.field, value}
+        end
+
+    "%{" <> Enum.map_join(values, ", ", fn {key, value} -> "#{key}: #{value}" end) <> "}"
+  end
+end

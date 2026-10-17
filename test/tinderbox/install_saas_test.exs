@@ -81,6 +81,29 @@ defmodule Tinderbox.InstallSaasTest do
     assert source(igniter, "assets/css/app.css") =~ "/* tinderbox:themepack slate"
   end
 
+  test "deploys to Fly.io by default: the fly files, flyctl and `mise run deploy`", %{
+    igniter: igniter
+  } do
+    assert_creates(igniter, "fly.toml")
+    assert_creates(igniter, "fly/nats/fly.toml")
+    assert source(igniter, ".mise.toml") =~ "[tasks.deploy]"
+  end
+
+  test "--deploy none leaves Fly.io out of the files, mise and the README" do
+    igniter = install(["--stack", "saas", "--deploy", "none"])
+
+    refute_creates(igniter, "fly.toml")
+    refute_creates(igniter, "fly/nats/fly.toml")
+    refute source(igniter, ".mise.toml") =~ "flyctl"
+    refute source(igniter, "README.md") =~ "Deploying to Fly.io"
+  end
+
+  test "--deploy is ignored by the other stacks" do
+    igniter = install(["--stack", "ui", "--deploy", "fly"])
+
+    refute_creates(igniter, "fly.toml")
+  end
+
   test "--stack ui installs only the UI kit, without compose or mise" do
     igniter = install(["--stack", "ui", "--themepack", "harbor"])
 

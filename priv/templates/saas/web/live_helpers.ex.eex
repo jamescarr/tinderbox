@@ -1,11 +1,13 @@
 @moduledoc """
 What the organization-scoped LiveViews share: looking a row up as the signed-in
-user, turning an Ash result into a flash message, and whether the current
-membership manages the organization. `import <%= inspect(@web) %>.LiveHelpers` in
-a LiveView that mounts `<%= inspect(@web) %>.LiveOrganization`.
+user, turning an Ash result into a flash message, whether the current
+membership manages the organization, and showing a record's values. `import
+<%= inspect(@web) %>.LiveHelpers` in a LiveView that mounts `<%= inspect(@web) %>.LiveOrganization`.
 """
 
 import Phoenix.LiveView, only: [put_flash: 3]
+
+alias <%= inspect(@web) %>.UI.Components
 
 @doc """
 Gets `resource` by `id` with the signed-in user as the actor, so a forged id for
@@ -39,3 +41,38 @@ def error_message(%{errors: [_ | _] = errors}),
 def error_message(%Ash.Error.Forbidden.Policy{}), do: "You are not allowed to do that"
 def error_message(%{message: message}) when is_binary(message), do: message
 def error_message(error), do: Exception.message(error)
+
+@doc """
+Any attribute value as text for a page: a dash for `nil`, Yes/No for booleans,
+grouped decimals (`1,500.00`), `2026-05-01 14:30` for times, ISO dates, humanized
+atoms (`:public_equity` reads "Public equity") and inspected maps and lists.
+"""
+@spec format_value(term()) :: String.t()
+def format_value(nil), do: "—"
+def format_value(true), do: "Yes"
+def format_value(false), do: "No"
+def format_value(%Decimal{} = value), do: Components.format_number(value)
+def format_value(%DateTime{} = value), do: Components.format_datetime(value)
+def format_value(%NaiveDateTime{} = value), do: Components.format_datetime(value)
+def format_value(%Date{} = value), do: Date.to_iso8601(value)
+def format_value(value) when is_atom(value), do: Components.humanize(value)
+def format_value(value) when is_map(value) and not is_struct(value), do: inspect(value)
+def format_value(value) when is_list(value), do: inspect(value)
+def format_value(value), do: to_string(value)
+
+@doc """
+What to call a record in a label or a select: its `name`, `title` or `email`,
+else its id.
+"""
+@spec display_name(map() | nil) :: String.t()
+def display_name(nil), do: "—"
+
+def display_name(record) do
+  Enum.find_value([:name, :title, :email], to_string(record.id), fn field ->
+    case Map.get(record, field) do
+      nil -> nil
+      "" -> nil
+      value -> to_string(value)
+    end
+  end)
+end

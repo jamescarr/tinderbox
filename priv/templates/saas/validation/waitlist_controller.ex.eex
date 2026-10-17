@@ -1,0 +1,34 @@
+@moduledoc """
+`POST /waitlist`, the landing page's form: adds the address to
+`<%= inspect(@prefix) %>.Waitlist` with the visit's campaign parameters, and goes back to the
+landing page with a flash saying how it went. Joining twice is not an error.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+alias <%= inspect(@prefix) %>.Waitlist.Signup
+
+def create(conn, %{"signup" => params}) when is_map(params) do
+  params =
+    params
+    |> Map.take(~w(email source medium campaign referrer))
+    |> Map.put("anonymous_id", conn.assigns[:visitor_id])
+
+  case Ash.create(Signup, params, action: :join) do
+    {:ok, signup} ->
+      conn
+      |> put_flash(:info, "You're on the list. We'll write to #{signup.email}.")
+      |> redirect(to: ~p"/")
+
+    {:error, _error} ->
+      conn
+      |> put_flash(:error, "That email address doesn't look right.")
+      |> redirect(to: ~p"/")
+  end
+end
+
+def create(conn, _params) do
+  conn
+  |> put_flash(:error, "That email address doesn't look right.")
+  |> redirect(to: ~p"/")
+end

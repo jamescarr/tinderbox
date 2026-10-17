@@ -1,0 +1,14 @@
+@doc """
+A <%= String.downcase(@human_singular) %> of `organization`, created by `user` (an owner or admin);
+`attrs` override the sample values.
+"""
+def <%= @singular %>_fixture(organization, user, attrs \\ %{}) do
+  params =
+    %{<%= Enum.map_join([{"organization_id", "organization.id"} | @fixture_values], ", ", fn {key, value} -> "#{key}: #{value}" end) %>}
+    |> Map.merge(attrs)<%= for {field, call} <- @fixture_parents do %>
+    |> Map.put_new_lazy(<%= inspect(field) %>, fn -> <%= call %> end)<% end %>
+
+  <%= inspect(@resource) %>
+  |> Ash.Changeset.for_create(:create, params, actor: user)
+  |> Ash.create!(actor: user)
+end

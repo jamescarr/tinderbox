@@ -1,0 +1,71 @@
+@moduledoc """
+First-party product analytics: named events in this application's database,
+read back by `<%= inspect(@prefix) %>.Analytics.Funnel` for `/admin/validation`.
+
+This module is both the Ash domain holding `<%= inspect(@prefix) %>.Analytics.Event` and the
+facade the rest of the application records through:
+
+    <%= inspect(@prefix) %>.Analytics.track("report.exported", %{user: user, organization: organization})
+
+or, from an Ash action, after its transaction commits:
+
+    change {<%= inspect(@prefix) %>.Analytics.Changes.Track, event: "report.exported"}
+
+Recorded without being asked: `landing.viewed` (`<%= inspect(@web) %>.PageController`),
+`waitlist.joined`, `user.signed_in` (`<%= inspect(@web) %>.MfaController`),
+`organization.created`, and `<thing>.created` for every resource
+`mix <%= @app %>.gen.resource` generates.
+
+Recording never fails the caller: an event that cannot be stored is logged.
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>
+
+require Logger
+
+alias <%= inspect(@prefix) %>.Analytics.Event
+
+resources do
+  resource Event
+end
+
+@typedoc """
+Who the event is about, every key optional: `:user` (a user struct), `:organization`
+(a struct) or `:organization_id`, and `:anonymous_id` (the visitor cookie,
+`<%= inspect(@web) %>.Plugs.Visitor`).
+"""
+@type subject :: %{
+        optional(:user) => struct() | nil,
+        optional(:organization) => struct() | nil,
+        optional(:organization_id) => Ecto.UUID.t() | nil,
+        optional(:anonymous_id) => String.t() | nil
+      }
+
+@doc """
+Records the event `name` about `subject`, with `properties` (a map stored as
+JSON). Always returns `:ok`.
+"""
+@spec track(String.t(), subject(), map()) :: :ok
+def track(name, subject, properties \\ %{}) when is_binary(name) and is_map(subject) do
+  attrs = %{
+    name: name,
+    user_id: id(subject[:user]),
+    organization_id: subject[:organization_id] || id(subject[:organization]),
+    anonymous_id: subject[:anonymous_id],
+    properties: properties
+  }
+
+  case Ash.create(Event, attrs, action: :record, authorize?: false) do
+    {:ok, _event} -> :ok
+    {:error, error} -> Logger.warning("analytics #{name} failed: #{inspect(error)}")
+  end
+
+  :ok
+rescue
+  error ->
+    Logger.warning("analytics #{name} failed: " <> Exception.message(error))
+    :ok
+end
+
+defp id(%{id: id}), do: id
+defp id(_none), do: nil

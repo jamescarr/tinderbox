@@ -112,7 +112,7 @@ defmodule Tinderbox.Gen.SaasMfaTest do
 
     admin = source(igniter, "lib/test_web/admin/layouts.ex")
     assert_has(admin, ~s|security: "Security"|)
-    assert_has(admin, ":security]")
+    assert admin =~ ~r/values: \[[^\]]*:security/
     assert_has(admin, ~s|~p"/admin/security"|)
     assert order(admin, ~s|~p"/admin/security"|) < order(admin, ~s|~p"/admin/flags"|)
 

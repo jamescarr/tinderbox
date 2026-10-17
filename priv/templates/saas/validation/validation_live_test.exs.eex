@@ -1,0 +1,31 @@
+defmodule <%= inspect(@web) %>.Admin.ValidationLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  test "an admin sees the funnel and the verdict", %{conn: conn} do
+    event_fixture("landing.viewed", %{anonymous_id: "visitor-a"})
+
+    {:ok, view, _html} = live(sign_in(conn, admin_fixture()), ~p"/admin/validation")
+
+    assert has_element?(view, "#funnel", "Visitors")
+    assert has_element?(view, "#funnel", "Paying")
+    assert has_element?(view, "#verdict")
+    assert has_element?(view, "#funnel-weeks")
+  end
+
+  test "an admin sees the waitlist", %{conn: conn} do
+    signup_fixture(%{email: "lead@example.com"})
+
+    {:ok, view, _html} = live(sign_in(conn, admin_fixture()), ~p"/admin/waitlist")
+
+    assert has_element?(view, "#waitlist", "lead@example.com")
+  end
+
+  test "anyone else is sent back to the dashboard", %{conn: conn} do
+    assert {:error, {:redirect, %{to: "/dashboard"}}} =
+             live(sign_in(conn, user_fixture()), ~p"/admin/validation")
+  end
+end

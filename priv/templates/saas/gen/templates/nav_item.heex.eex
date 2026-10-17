@@ -1,0 +1,3 @@
+<.nav_item navigate={~p"/<%= @route %>"} icon=<%= inspect(@icon) %> active={@current_page == :<%= @plural %>}>
+  <%= @nav %>
+</.nav_item>

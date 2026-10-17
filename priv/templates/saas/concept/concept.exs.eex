@@ -1,0 +1,71 @@
+# What this business is, for `mix <%= @app %>.gen.concept`: the landing page's copy and
+# pricing, the domain to generate, the event that counts as activation, and the
+# thresholds /admin/validation judges the funnel against. Edit it, then run
+#
+#     mise exec -- mix <%= @app %>.gen.concept
+#
+# The task rewrites lib/<%= @app %>/concept.ex and generates every resource below that
+# does not exist yet; running it again leaves existing resources alone.
+%{
+  # The landing page's headline and the browser tab's suffix.
+  name: <%= inspect(inspect(@prefix)) %>,
+  # One sentence under the name.
+  tagline: "Replace this with the one sentence that sells it.",
+  # A paragraph under the tagline; "" for none.
+  description: "",
+  # :waitlist collects emails on the landing page; :register sends visitors to sign up.
+  cta: :waitlist,
+  # Up to six cards under the headline. `icon` is a Heroicon name (hero-…).
+  value_props: [
+    %{
+      title: "The outcome",
+      body: "What a customer gets that they cannot get today.",
+      icon: "hero-sparkles"
+    }
+  ],
+  # The pricing section; [] hides it. Prices are display text.
+  plans: [
+    %{
+      key: "starter",
+      name: "Starter",
+      price: "$29/mo",
+      description: "For a small team trying it out.",
+      features: ["Up to 5 teammates", "Email support"]
+    },
+    %{
+      key: "pro",
+      name: "Pro",
+      price: "$99/mo",
+      description: "For a team that runs on it.",
+      features: ["Unlimited teammates", "Priority support"]
+    }
+  ],
+  # The Ash domain the resources go in: <%= inspect(@prefix) %>.Core.
+  domain: "Core",
+  # Organization-scoped resources, generated in order: list a belongs_to target
+  # before the resource that references it. `attributes` follows
+  # `mix <%= @app %>.gen.resource`: name:type[:required][:unique], with the types string,
+  # text, integer, decimal, boolean, date, datetime, uuid, map, enum:a,b,c and
+  # belongs_to:Target. With `nav` the resource also gets pages and a sidebar entry.
+  resources: [
+    # %{
+    #   name: "Project",
+    #   attributes: "name:string:required status:enum:draft,active,archived budget:decimal",
+    #   nav: "Projects",
+    #   icon: "hero-folder"
+    # }
+  ],
+  # The event that counts an organization as activated; nil means the first
+  # resource's "<name>.created" ("organization.created" without resources).
+  activation_event: nil,
+  # What /admin/validation expects within `within_days` of the first visit; nil
+  # for no threshold.
+  thresholds: %{
+    within_days: 30,
+    visitors: 500,
+    waitlist: 50,
+    registered: 25,
+    activated: 10,
+    paying: 3
+  }
+}

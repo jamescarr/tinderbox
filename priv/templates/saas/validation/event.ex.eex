@@ -1,0 +1,57 @@
+@moduledoc """
+One analytics event: a name, who it was about, and when.
+
+The user, organization and visitor are plain ids rather than relationships:
+events outlive the rows they describe, and a funnel still counts a deleted
+organization's sign-up. Recorded through `<%= inspect(@prefix) %>.Analytics.track/3`; only
+platform admins read them.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@prefix) %>.Analytics,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer]
+
+postgres do
+  table "analytics_events"
+  repo <%= inspect(@repo) %>
+
+  custom_indexes do
+    index [:name, :occurred_at]
+    index [:organization_id]
+  end
+end
+
+actions do
+  defaults [:read]
+
+  create :record do
+    accept [:name, :anonymous_id, :user_id, :organization_id, :properties, :occurred_at]
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  policy always() do
+    forbid_if always()
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :name, :string, allow_nil?: false, public?: true
+  attribute :anonymous_id, :string, public?: true
+  attribute :user_id, :uuid, public?: true
+  attribute :organization_id, :uuid, public?: true
+  attribute :properties, :map, default: %{}, public?: true
+
+  attribute :occurred_at, :utc_datetime_usec,
+    allow_nil?: false,
+    default: &DateTime.utc_now/0,
+    public?: true
+end

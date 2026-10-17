@@ -75,6 +75,119 @@ with verified STARTTLS. Behind PgBouncer set `DATABASE_POOLER=pgbouncer`. On an
 IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
 `force_ssl`, so a platform's plain-HTTP health check is not redirected.
 
+## Validation
+
+The application measures whether anyone wants it, in its own database.
+
+`/` is the landing page, drawn from `<%= inspect(@prefix) %>.Concept`: the name, tagline and
+description, the value propositions, the pricing, and either a waitlist form
+(`cta: :waitlist`) or links to sign in and register (`cta: :register`). Write the
+concept in `concept.exs` and run `mise exec -- mix <%= @app %>.gen.concept`; it rewrites
+`lib/<%= @app %>/concept.ex` (and generates the resources the manifest lists).
+
+`/admin/validation` holds the funnel to the manifest's `thresholds`:
+
+| Metric | Counted as |
+|---|---|
+| Visitors | distinct visitors (`<%= inspect(@web) %>.Plugs.Visitor`'s cookie) with a `landing.viewed` event |
+| Waitlist | addresses on the waitlist |
+| Registered | users |
+| Organizations | organizations |
+| Activated | distinct organizations with an `activation_event` event (`concept.exs`; the first resource's `<name>.created` by default) |
+| Paying | active or trialing subscriptions |
+| Active (7 d) | distinct users who signed in in the last seven days |
+
+Each threshold is a minimum count (`nil` for none) to reach within `within_days`
+of the first visit. The verdict is *on track* when every threshold is met, *too
+early* while one is not and the days have not run out, and *below* after that.
+The page also shows the conversion between the steps and the last eight weeks.
+
+`/admin/waitlist` lists the addresses with the `utm_source`, `utm_medium` and
+`utm_campaign` of the visit and its referrer; `/admin/waitlist.csv` downloads them.
+
+To record a product event, call
+`<%= inspect(@prefix) %>.Analytics.track("thing.done", %{user: user, organization: organization})`,
+or put `change {<%= inspect(@prefix) %>.Analytics.Changes.Track, event: "thing.done"}` on the
+action (after commit; `require_atomic? false` on an update). Recorded already:
+`landing.viewed`, `waitlist.joined`, `user.signed_in`, `organization.created`, and
+`<thing>.created` for every generated resource.
+
+<%= if Tinderbox.Gen.Saas.Deploy.target(@opts) == "fly" do %>## Deploying to Fly.io
+
+`fly.toml` is the app, `fly/nats/fly.toml` its NATS server (a second Fly app, on
+the private network only). Once, from the project directory (flyctl comes with
+`mise install`):
+
+1. Sign in and create both apps:
+
+   ```bash
+   flyctl auth login
+   flyctl apps create <%= @app_dash %>
+   flyctl apps create <%= @app_dash %>-nats
+   ```
+
+2. NATS, on a volume:
+
+   ```bash
+   flyctl volumes create nats_data --app <%= @app_dash %>-nats --region iad --size 1 --yes
+   flyctl deploy --config fly/nats/fly.toml --app <%= @app_dash %>-nats
+   ```
+
+3. Postgres (Managed Postgres, PgBouncer in front, which `DATABASE_POOLER=pgbouncer`
+   in `fly.toml` is for):
+
+   ```bash
+   flyctl mpg create --name <%= @app_dash %>-db --region iad --plan Basic
+   flyctl mpg list                                   # the cluster's id
+   flyctl mpg attach <cluster-id> --app <%= @app_dash %>   # sets DATABASE_URL
+   ```
+
+   In the cluster's dashboard (Connect → Pooler settings) set the pool mode to
+   **Transaction**, and copy the *direct* connection string into
+   `flyctl secrets set --app <%= @app_dash %> DIRECT_DATABASE_URL=…`: migrations run
+   over it (`release_command` in `fly.toml`).
+
+4. Storage (Tigris), named like `S3_BUCKET` in `fly.toml` (bucket names are
+   global: if it is taken, pick another and change `S3_BUCKET`):
+
+   ```bash
+   flyctl storage create --name <%= @app_dash %>-storage --app <%= @app_dash %> --yes
+   ```
+
+   It sets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, which
+   `config/runtime.exs` reads.
+
+5. Secrets:
+
+   ```bash
+   flyctl secrets set --app <%= @app_dash %> \
+     SECRET_KEY_BASE="$(mise exec -- mix phx.gen.secret)" \
+     TOKEN_SIGNING_SECRET="$(mise exec -- mix phx.gen.secret)" \
+     CLOAK_KEY="$(openssl rand -base64 32)" \
+     SMTP_PASSWORD=<Resend API key> ADMIN_EMAILS=<you@example.com> \
+     SSO_BASE_URL=<issuer> SSO_CLIENT_ID=<id> SSO_CLIENT_SECRET=<secret> \
+     STRIPE_SECRET_KEY=<sk_live_…> STRIPE_WEBHOOK_SECRET=<whsec_…> \
+     STRIPE_PRICE_STARTER=<price_…> STRIPE_PRICE_PRO=<price_…>
+   ```
+
+   Register `https://<%= @app_dash %>.fly.dev/auth/user/sso/callback` with the SSO
+   issuer, point a Stripe webhook at `https://<%= @app_dash %>.fly.dev/webhooks/stripe`,
+   and verify `MAIL_FROM`'s domain with Resend (or change `SMTP_*` in `fly.toml`).
+
+Then, and for every release:
+
+```bash
+mise run deploy                              # flyctl deploy: build, bin/migrate, roll out
+flyctl logs --app <%= @app_dash %>
+curl https://<%= @app_dash %>.fly.dev/health
+```
+
+API connections need an authorization server in production: `OAUTH_PROVIDER=auth0`
+with the `AUTH0_*` secrets, or hosted Ory with `OAUTH_ISSUER`, `HYDRA_ADMIN_URL` and
+`HYDRA_ADMIN_TOKEN`. Until then the API connections page says the provider cannot
+be reached; everything else works.
+
+<% end %>
 ## Conventions
 
 * Every organization-scoped resource has an `organization_id` attribute, and its
@@ -125,11 +238,23 @@ IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
 * `<%= inspect(@prefix) %>.Storage` has `put/2`, `get/1`, `delete/1` and `presign/2`
   (S3 only; GCS answers `{:error, :not_supported}`). Prefix keys with the
   organization id.
-* Add an Ash domain with
-  `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things --queues things:5`: it
-  creates the domain (`mix ash.gen.domain`), registers it in `ash_domains` and adds
-  its Oban queues in `config/config.exs`. Register by hand otherwise: AshOban only
-  sees the triggers of registered domains.
+* Grow the domain with the project's own generators (run them through
+  `mise exec -- mix …`):
+
+  | Task | Adds |
+  |---|---|
+  | `mix <%= @app %>.gen.concept [concept.exs]` | applies the manifest: rewrites `<%= inspect(@prefix) %>.Concept`, generates the `resources` that are new, one migration |
+  | `mix <%= @app %>.gen.live <%= inspect(@prefix) %>.Things.Thing name:string:required … [--nav Things] [--icon hero-…] [--route things]` | list, show and form pages, routes, a navigation entry and a test (and the resource, when new) |
+  | `mix <%= @app %>.gen.resource <%= inspect(@prefix) %>.Things.Thing name:string:required … [--no-admin-bypass] [--table things]` | an organization-scoped resource, its fixture and migration (`--no-codegen` skips it) |
+  | `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things [--queues things:5]` | a domain, registered in `ash_domains` (AshOban only sees the triggers of registered domains), with its Oban queues |
+
+  Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,
+  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `enum:a,b,c` and
+  `belongs_to:Target` (`User`, another resource of the domain, or a full module name).
+  Generated resources are written by the organization's owners and admins and read
+  by its members; platform admins do anything unless `--no-admin-bypass`. The files
+  they are rendered from are in `priv/templates/<%= @app %>.gen/` and are this
+  project's to edit.
 * In tests, `<%= inspect(@prefix) %>.Fixtures` creates users, organizations and
   memberships, and `<%= inspect(@web) %>.LiveTestHelpers.sign_in/2` signs a user into
   a conn for `live/2` (see `test/<%= @app %>_web/live/members_live_test.exs`).

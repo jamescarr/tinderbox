@@ -1,0 +1,24 @@
+# NATS JetStream for <%= @app_dash %>, reachable only on Fly's private network at
+# <%= @app_dash %>-nats.internal:4222: no services, so nothing is public. Streams live
+# on the nats_data volume.
+#
+#   flyctl apps create <%= @app_dash %>-nats
+#   flyctl volumes create nats_data --app <%= @app_dash %>-nats --region iad --size 1 --yes
+#   flyctl deploy --config fly/nats/fly.toml --app <%= @app_dash %>-nats
+app = "<%= @app_dash %>-nats"
+primary_region = "iad"
+
+[build]
+  image = "nats:2.11-alpine"
+
+# `--addr ::` listens on IPv6, which is all Fly's private network has.
+[processes]
+  app = "nats-server --jetstream --store_dir /data --addr :: --http_port 8222"
+
+[[mounts]]
+  source = "nats_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

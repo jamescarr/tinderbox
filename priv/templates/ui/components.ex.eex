@@ -14,6 +14,9 @@ import <%= inspect(@web) %>.CoreComponents, only: [icon: 1]
 
 alias Phoenix.LiveView.JS
 
+# `format_number/2` formats decimals when the project has Decimal (Ecto brings it).
+@compile {:no_warn_undefined, Decimal}
+
 # -- page structure ----------------------------------------------------------
 
 @doc """
@@ -252,12 +255,10 @@ red when they ended badly. `:past_due` reads "Past due".
 attr :status, :any, required: true, doc: "an atom or a string"
 
 def status_badge(assigns) do
-  status = to_string(assigns.status)
-
   assigns =
     assign(assigns,
-      color: status_color(status),
-      label: status |> String.replace("_", " ") |> String.capitalize()
+      color: status_color(to_string(assigns.status)),
+      label: humanize(assigns.status)
     )
 
   ~H"""
@@ -591,6 +592,88 @@ defp ago(amount, unit), do: "#{amount} #{unit} ago"
 @spec format_datetime(DateTime.t() | NaiveDateTime.t() | nil) :: String.t()
 def format_datetime(nil), do: "—"
 def format_datetime(time), do: Calendar.strftime(time, "%Y-%m-%d %H:%M")
+
+@doc """
+An atom or a string for people: underscores become spaces and the first letter
+is capitalized, so `:public_equity` reads "Public equity".
+"""
+@spec humanize(atom() | String.t()) :: String.t()
+def humanize(value) when is_atom(value) or is_binary(value) do
+  value |> to_string() |> String.replace("_", " ") |> String.capitalize()
+end
+
+@doc """
+A number for people, with thousands grouped by commas: `1,234,567.80`.
+
+  * `precision:` - decimal places; 2 for decimals and floats, 0 for integers,
+  * `compact: true` - one decimal and a suffix from a thousand up: `1.2K`,
+    `3.4M`, `1.1B` (below a thousand the number is written as usual).
+
+## Examples
+
+    format_number(Decimal.new("1234567.8"))       #=> "1,234,567.80"
+    format_number(112_400_000, compact: true)     #=> "112.4M"
+    format_number(0.25 * 100, precision: 1)       #=> "25.0"
+"""
+@spec format_number(Decimal.t() | number() | nil, keyword()) :: String.t()
+def format_number(number, opts \\ [])
+
+def format_number(nil, _opts), do: "—"
+
+# A struct guard rather than `%Decimal{}`: a project without Ecto has no
+# Decimal, and the kit has to compile there too.
+def format_number(number, opts) when is_struct(number, Decimal) do
+  if opts[:compact] do
+    number |> Decimal.to_float() |> format_number(opts)
+  else
+    number
+    |> Decimal.round(Keyword.get(opts, :precision, 2))
+    |> Decimal.to_string(:normal)
+    |> group_thousands()
+  end
+end
+
+def format_number(number, opts) when is_number(number) do
+  precision = Keyword.get(opts, :precision, if(is_integer(number), do: 0, else: 2))
+
+  cond do
+    opts[:compact] && abs(number) >= 1_000 ->
+      compact(number)
+
+    is_integer(number) and precision == 0 ->
+      group_thousands(Integer.to_string(number))
+
+    true ->
+      group_thousands(:erlang.float_to_binary(number * 1.0, decimals: precision))
+  end
+end
+
+defp compact(number) do
+  {value, suffix} =
+    cond do
+      abs(number) >= 1_000_000_000 -> {number / 1_000_000_000, "B"}
+      abs(number) >= 1_000_000 -> {number / 1_000_000, "M"}
+      true -> {number / 1_000, "K"}
+    end
+
+  :erlang.float_to_binary(value * 1.0, decimals: 1) <> suffix
+end
+
+defp group_thousands(digits) do
+  {sign, digits} =
+    case digits do
+      "-" <> rest -> {"-", rest}
+      rest -> {"", rest}
+    end
+
+  {integer, fraction} =
+    case String.split(digits, ".", parts: 2) do
+      [integer, fraction] -> {integer, "." <> fraction}
+      [integer] -> {integer, ""}
+    end
+
+  sign <> Regex.replace(~r/\B(?=(\d{3})+(?!\d))/, integer, ",") <> fraction
+end
 
 # -- overlays ------------------------------------------------------------------
 

@@ -146,6 +146,26 @@ defmodule Tinderbox.Gen.MiseTest do
     end
   end
 
+  test "saas deploys to Fly.io by default: flyctl and a deploy task" do
+    toml = content(mise(stack: "saas", broker: :nats))
+
+    assert toml =~ ~s("github:superfly/flyctl" = { version = "latest", exe = "flyctl" })
+    assert task(toml, "deploy") =~ ~s(run = "flyctl deploy")
+  end
+
+  test "--deploy none, and the other stacks, have no flyctl or deploy task" do
+    for opts <- [
+          [stack: "saas", broker: :nats, deploy: "none"],
+          [stack: "api", deploy: "fly"],
+          [stack: "worker"]
+        ] do
+      toml = content(mise(opts))
+
+      refute toml =~ "flyctl", inspect(opts)
+      refute toml =~ "[tasks.deploy]", inspect(opts)
+    end
+  end
+
   test "the worker runs with --no-halt and gets a health task on HEALTH_PORT" do
     toml = content(mise(stack: "worker", broker: :sqs))
 

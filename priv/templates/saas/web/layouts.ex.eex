@@ -45,7 +45,7 @@ def app(assigns) do
   >
     <:brand>
       <.link navigate={~p"/"} class="flex items-center gap-2 font-display text-lg font-semibold">
-        <.icon name="hero-fire" class="size-6 text-primary" /> <%= inspect(@prefix) %>
+        <.icon name="hero-fire" class="size-6 text-primary" /> {<%= inspect(@prefix) %>.Concept.name()}
       </.link>
     </:brand>
 
@@ -142,6 +142,11 @@ end
 
 # The UI kit gallery is mounted with the dev routes only, so it is linked only then.
 defp dev_routes?, do: Application.get_env(:<%= @app %>, :dev_routes, false)
+
+# The browser tab (`<.live_title>` in root.html.heex): `<page> · <name>`, and the
+# tagline on a page without a title.
+defp tab_default, do: <%= inspect(@prefix) %>.Concept.tagline()
+defp tab_suffix, do: " · " <> <%= inspect(@prefix) %>.Concept.name()
 
 @doc """
 Shows the flash group with standard titles and content.

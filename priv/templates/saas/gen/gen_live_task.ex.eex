@@ -1,0 +1,247 @@
+if Code.ensure_loaded?(Igniter) do
+  defmodule <%= @live_task %> do
+    @shortdoc "Adds organization-scoped pages (list, show, form) for a resource, creating it if new"
+    @moduledoc """
+    Adds the pages of an organization-scoped resource, and the resource itself when
+    it does not exist yet (through `mix <%= @app %>.gen.resource`, with the same
+    arguments):
+
+        mix <%= @app %>.gen.live <%= inspect(@prefix) %>.Projects.Project name:string:required \\
+          status:enum:draft,active,archived budget:decimal --nav Projects --icon hero-folder
+
+    * `/projects` — the organization's rows in a searchable, sortable table
+      (`<%= inspect(@web) %>.ProjectsLive`),
+    * `/projects/:id` — one row, with Edit and Delete for owners and admins
+      (`<%= inspect(@web) %>.ProjectLive`),
+    * `/projects/new` and `/projects/:id/edit` — the form, for owners and admins only
+      (`<%= inspect(@web) %>.ProjectFormLive`),
+    * the routes, inside `ash_authentication_live_session :authenticated_routes`,
+    * a navigation entry in `<%= inspect(@web) %>.Layouts.app/1` (`--nav` is its label,
+      the plural by default; `--icon` a Heroicon, `hero-rectangle-stack` by default),
+    * `test/<%= @app %>_web/live/projects_live_test.exs`.
+
+    `--route` changes the path (`projects` by default). `--no-admin-bypass`,
+    `--no-codegen` and `--table` are passed on to `mix <%= @app %>.gen.resource`. For an
+    existing resource the pages are made from the attributes given, and the resource
+    is left alone. Pages, routes and the navigation entry that exist already are kept,
+    so running it again changes nothing.
+
+    The pages are rendered from `priv/templates/<%= @app %>.gen/`; edit those to change
+    what every new page looks like.
+    """
+
+    use Igniter.Mix.Task
+
+    alias <%= @support_module %>, as: Gen
+    alias <%= @resource_task %>, as: ResourceTask
+    alias Igniter.Code.Common
+    alias Igniter.Code.Function
+
+    @router <%= inspect(@router) %>
+    @layouts <%= inspect(Module.concat(@web, "Layouts")) %>
+    @nav_anchor "<.nav_section :if={@current_user.role == :admin}"
+
+    @impl Igniter.Mix.Task
+    def info(_argv, _composing_task) do
+      %Igniter.Mix.Task.Info{
+        group: :<%= @app %>,
+        example:
+          "mix <%= @app %>.gen.live <%= inspect(@prefix) %>.Projects.Project name:string:required --nav Projects",
+        positional: [:resource, attributes: [rest: true, optional: true]],
+        schema: [
+          route: :string,
+          nav: :string,
+          icon: :string,
+          admin_bypass: :boolean,
+          codegen: :boolean,
+          table: :string
+        ],
+        defaults: [admin_bypass: true, codegen: true]
+      }
+    end
+
+    @impl Igniter.Mix.Task
+    def igniter(igniter) do
+      %{resource: resource_arg, attributes: entries} = igniter.args.positional
+      options = igniter.args.options
+      resource = Igniter.Project.Module.parse(resource_arg)
+      domain = Gen.domain!(resource)
+      attributes = Gen.parse_attributes!(entries, domain, <%= inspect(@accounts) %>)
+      assigns = Gen.assigns(resource, attributes, options)
+
+      {exists?, igniter} = Igniter.Project.Module.module_exists(igniter, resource)
+
+      igniter =
+        if exists? do
+          igniter
+          |> ResourceTask.add_fixture(assigns)
+          |> Igniter.add_notice(
+            "#{inspect(resource)} exists, so it was left alone; what was missing of its " <>
+              "pages, routes and navigation entry was made from the attributes given."
+          )
+        else
+          Igniter.compose_task(
+            igniter,
+            <%= @resource_task %>,
+            [resource_arg | entries] ++ resource_flags(options)
+          )
+        end
+
+      igniter
+      |> create_page(assigns[:index_live], "index_live.ex.eex", assigns)
+      |> create_page(assigns[:show_live], "show_live.ex.eex", assigns)
+      |> create_page(assigns[:form_live], "form_live.ex.eex", assigns)
+      |> add_routes(assigns)
+      |> add_nav_item(assigns)
+      |> create_test(assigns)
+    end
+
+    defp resource_flags(options) do
+      Enum.concat([
+        if(options[:admin_bypass] == false, do: ["--no-admin-bypass"], else: []),
+        if(options[:codegen] == false, do: ["--no-codegen"], else: []),
+        if(options[:table], do: ["--table", options[:table]], else: [])
+      ])
+    end
+
+    defp create_page(igniter, name, template, assigns) do
+      module = Module.concat(assigns[:web], name)
+
+      case Igniter.Project.Module.module_exists(igniter, module) do
+        {true, igniter} ->
+          igniter
+
+        {false, igniter} ->
+          {igniter, body} = ResourceTask.render(igniter, template, assigns)
+          path = "lib/#{assigns[:app]}_web/live/#{Macro.underscore(name)}.ex"
+          Igniter.Project.Module.create_module(igniter, module, body, path: path)
+      end
+    end
+
+    defp create_test(igniter, assigns) do
+      path = "test/#{assigns[:app]}_web/live/#{assigns[:plural]}_live_test.exs"
+
+      if Igniter.exists?(igniter, path) do
+        igniter
+      else
+        {igniter, content} = ResourceTask.render(igniter, "live_test.exs.eex", assigns)
+        Igniter.create_new_file(igniter, path, content)
+      end
+    end
+
+    # -- routes ------------------------------------------------------------------
+
+    # Inside the session the other signed-in pages share, `new` before `:id`.
+    defp add_routes(igniter, assigns) do
+      route = assigns[:route]
+
+      code = """
+      live "/#{route}", #{assigns[:index_live]}
+      live "/#{route}/new", #{assigns[:form_live]}, :new
+      live "/#{route}/:id", #{assigns[:show_live]}
+      live "/#{route}/:id/edit", #{assigns[:form_live]}, :edit
+      """
+
+      case Igniter.Project.Module.find_module(igniter, @router) do
+        {:ok, {igniter, source, _zipper}} ->
+          content = Rewrite.Source.get(source, :content)
+
+          if flatten(content) =~ flatten(~s(live "/#{route}", #{assigns[:index_live]})) do
+            igniter
+          else
+            Igniter.Project.Module.find_and_update_module!(igniter, @router, fn zipper ->
+              with {:ok, zipper} <-
+                     Common.move_to(zipper, fn candidate ->
+                       Function.function_call?(
+                         candidate,
+                         :ash_authentication_live_session,
+                         [1, 2, 3, 4]
+                       ) and Function.argument_equals?(candidate, 0, :authenticated_routes)
+                     end),
+                   {:ok, zipper} <- Common.move_to_do_block(zipper) do
+                {:ok, Common.add_code(zipper, code)}
+              else
+                _ ->
+                  {:warning,
+                   "Could not find `ash_authentication_live_session :authenticated_routes` in " <>
+                     "#{inspect(@router)}. Add these routes inside it by hand:\n\n" <> code}
+              end
+            end)
+          end
+
+        {:error, igniter} ->
+          Igniter.add_warning(igniter, "#{inspect(@router)} is missing; add these routes:\n\n" <> code)
+      end
+    end
+
+    # Parentheses and whitespace do not matter: `live("/x", Y)` is `live "/x", Y`.
+    defp flatten(code), do: code |> String.replace(["(", ")"], " ") |> String.replace(~r/\s+/, " ")
+
+    # -- navigation ----------------------------------------------------------------
+
+    # Before the admin-only "Platform" section of the sidebar, with that line's indentation.
+    defp add_nav_item(igniter, assigns) do
+      case Igniter.Project.Module.find_module(igniter, @layouts) do
+        {:ok, {igniter, source, _zipper}} ->
+          content = Rewrite.Source.get(source, :content)
+
+          if content =~ ~s(~p"/#{assigns[:route]}") do
+            igniter
+          else
+            {igniter, item} = ResourceTask.render(igniter, "nav_item.heex.eex", assigns)
+
+            case insert_before(content, @nav_anchor, item) do
+              nil ->
+                Igniter.add_warning(
+                  igniter,
+                  "Could not find `#{@nav_anchor}` in #{inspect(@layouts)}; add this to the " <>
+                    ":nav slot of app/1 by hand:\n\n" <> item
+                )
+
+              new ->
+                Igniter.update_elixir_file(igniter, source.path, fn _zipper ->
+                  {:ok, new |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
+                end)
+            end
+          end
+
+        {:error, igniter} ->
+          Igniter.add_warning(igniter, "#{inspect(@layouts)} is missing; link the pages by hand.")
+      end
+    end
+
+    defp insert_before(content, anchor, block) do
+      lines = String.split(content, "\n")
+
+      case Enum.find_index(lines, &String.contains?(&1, anchor)) do
+        nil ->
+          nil
+
+        index ->
+          [indent] = Regex.run(~r/^\s*/, Enum.at(lines, index))
+
+          indented =
+            block
+            |> String.trim_trailing()
+            |> String.split("\n")
+            |> Enum.map(&(indent <> &1))
+
+          lines |> List.insert_at(index, indented) |> List.flatten() |> Enum.join("\n")
+      end
+    end
+  end
+else
+  defmodule <%= @live_task %> do
+    @shortdoc "Adds organization-scoped pages (list, show, form) for a resource, creating it if new"
+    @moduledoc false
+
+    use Mix.Task
+
+    @impl Mix.Task
+    def run(_argv) do
+      Mix.raise(
+        "mix <%= @app %>.gen.live needs igniter, a :dev/:test dependency. Run it in dev or test."
+      )
+    end
+  end
+end

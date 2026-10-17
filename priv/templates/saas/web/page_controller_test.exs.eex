@@ -6,4 +6,13 @@ defmodule <%= inspect(@web) %>.PageControllerTest do
 
     assert html_response(conn, 200) =~ "Sign in"
   end
+
+  test "GET / says what the concept is", %{conn: conn} do
+    tagline =
+      <%= inspect(@prefix) %>.Concept.tagline()
+      |> Phoenix.HTML.html_escape()
+      |> Phoenix.HTML.safe_to_string()
+
+    assert conn |> get(~p"/") |> html_response(200) =~ tagline
+  end
 end

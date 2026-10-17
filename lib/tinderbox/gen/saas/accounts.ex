@@ -111,6 +111,7 @@ defmodule Tinderbox.Gen.Saas.Accounts do
 
     igniter
     |> AshAuthentication.Igniter.ensure_user_identity_resource(user, assigns[:user_identity])
+    |> drop_default_read(assigns[:user_identity])
     |> Ash.Domain.Igniter.add_resource_reference(assigns[:accounts], assigns[:user_identity])
     |> Ash.Resource.Igniter.add_new_action(
       user,
@@ -136,6 +137,17 @@ defmodule Tinderbox.Gen.Saas.Accounts do
       Gen.render_template("saas/accounts/runtime_config.exs.eex", assigns),
       Gen.runtime_configures?(assigns[:app], [:sso_client_id])
     )
+  end
+
+  # The identity extension builds the resource's primary read action itself. Since
+  # ash 3.36 the `actions do defaults [:read] end` ash_authentication's installer
+  # writes next to it is a second `read`, and the resource no longer compiles
+  # ("Multiple actions (2) with the name `read` defined").
+  defp drop_default_read(igniter, user_identity) do
+    Edits.remove_call(igniter, user_identity, :actions, [1], fn candidate ->
+      candidate.node |> Sourceror.to_string() |> String.replace(~r/[\s()]+/, "") ==
+        "actionsdodefaults[:read]end"
+    end)
   end
 
   defp add_sso_secrets(igniter, secrets, user) do

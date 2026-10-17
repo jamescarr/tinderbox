@@ -1,0 +1,53 @@
+@moduledoc """
+The landing page, drawn from `<%= inspect(@prefix) %>.Concept`. Every view is a
+`landing.viewed` event with the visit's campaign parameters and referrer, which
+the waitlist form carries on to the sign-up.
+
+The concept reaches the template as the `@concept` assign rather than as calls:
+the compiler knows what `<%= inspect(@prefix) %>.Concept.cta/0` returns, and would warn that
+the template's comparison with the other call to action is always false.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+alias <%= inspect(@prefix) %>.Analytics
+alias <%= inspect(@prefix) %>.Concept
+
+def home(conn, _params) do
+  utm = %{
+    source: conn.params["utm_source"],
+    medium: conn.params["utm_medium"],
+    campaign: conn.params["utm_campaign"]
+  }
+
+  referrer = conn |> get_req_header("referer") |> List.first()
+
+  Analytics.track(
+    "landing.viewed",
+    %{anonymous_id: conn.assigns[:visitor_id], user: conn.assigns[:current_user]},
+    %{
+      "referrer" => referrer,
+      "utm_source" => utm.source,
+      "utm_medium" => utm.medium,
+      "utm_campaign" => utm.campaign
+    }
+  )
+
+  render(conn, :home,
+    concept: concept(),
+    utm: utm,
+    referrer: referrer,
+    page_title: Concept.tagline()
+  )
+end
+
+defp concept do
+  %{
+    name: Concept.name(),
+    tagline: Concept.tagline(),
+    description: Concept.description(),
+    cta: Concept.cta(),
+    value_props: Concept.value_props(),
+    plans: Concept.plans()
+  }
+end

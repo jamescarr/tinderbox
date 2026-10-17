@@ -1,0 +1,28 @@
+defmodule <%= inspect(@web) %>.UI.ComponentsTest do
+  use ExUnit.Case, async: true
+
+  import <%= inspect(@web) %>.UI.Components, only: [format_number: 1, format_number: 2, humanize: 1]
+
+  # Decimal comes with Ecto; a project without it has nothing to format.
+  @compile {:no_warn_undefined, Decimal}
+
+  if Code.ensure_loaded?(Decimal) do
+    test "a decimal gets two places and grouped thousands" do
+      assert format_number(Decimal.new("1234567.8")) == "1,234,567.80"
+      assert format_number(Decimal.new("-0.5")) == "-0.50"
+    end
+  end
+
+  test "integers stay whole, floats get two places, and both can be compact" do
+    assert format_number(1_500) == "1,500"
+    assert format_number(25.0, precision: 1) == "25.0"
+    assert format_number(999, compact: true) == "999"
+    assert format_number(112_400_000, compact: true) == "112.4M"
+    assert format_number(nil) == "—"
+  end
+
+  test "humanize reads atoms and strings as words" do
+    assert humanize(:public_equity) == "Public equity"
+    assert humanize("past_due") == "Past due"
+  end
+end

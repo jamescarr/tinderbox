@@ -5,10 +5,12 @@ defmodule Tinderbox.Gen.Mise do
 
   * `[tools]` — Elixir and Erlang, pinned to the toolchain running the generator
     (see `Tinderbox.Toolchain`), plus CMake for the Kafka worker, whose `brod`
-    dependency builds a NIF from source.
+    dependency builds a NIF from source, the Stripe CLI for the SaaS stack, and
+    flyctl when it deploys to Fly.io (`deploy: "fly"`, its default).
   * `[env]` — the same values as `.env.example`; both come from `Tinderbox.Env`.
-  * `[tasks.*]` — `up`, `down`, `setup`, `dev`, `test`, `check`, and `health` for
-    the worker. They are inline tables rather than `.mise/tasks/*` files because a
+  * `[tasks.*]` — `up`, `down`, `setup`, `dev`, `test`, `check`, `health` for
+    the worker, `stripe` and `deploy` (Fly.io) for the SaaS stack. They are
+    inline tables rather than `.mise/tasks/*` files because a
     file task has to be executable, which the files an igniter writes are not,
     and mise does not list a non-executable file task until it is first run.
 
@@ -57,6 +59,7 @@ defmodule Tinderbox.Gen.Mise do
       compose?: compose?,
       worker?: worker?,
       saas?: saas?,
+      fly?: saas? and Tinderbox.Gen.Saas.Deploy.target(opts) == "fly",
       serve: serve,
       env: Env.toml(env),
       dev_summary: dev_summary(compose?, serve),

@@ -1,0 +1,460 @@
+if Code.ensure_loaded?(Igniter) do
+  defmodule <%= @concept_task %> do
+    @shortdoc "Applies concept.exs: the landing page's copy and pricing, the domain, the validation thresholds"
+    @moduledoc """
+    Reads `concept.exs` (or the path given) and applies it:
+
+        mix <%= @app %>.gen.concept
+
+    * rewrites `lib/<%= @app %>/concept.ex` (`<%= inspect(@prefix) %>.Concept`), which the landing
+      page, the browser tab and `/admin/validation` read: the name, tagline,
+      description, call to action, value propositions, plans, activation event and
+      thresholds. A `<%= inspect(@prefix) %>.Concept` without the `# generated-from: concept.exs`
+      marker was edited by hand and is left alone, with a warning,
+    * generates each of `resources`, in order, that does not exist yet in
+      `<%= inspect(@prefix) %>.<domain>`: with `nav`, its pages and navigation entry too
+      (`mix <%= @app %>.gen.live`), else the resource alone (`mix <%= @app %>.gen.resource`),
+    * one migration for all of them, `add_<domain>`.
+
+    The manifest is checked as a whole first, and every problem is reported at once.
+    Running it again rewrites the concept and generates only the resources that are new.
+    """
+
+    use Igniter.Mix.Task
+
+    alias <%= @support_module %>, as: Gen
+    alias <%= @resource_task %>, as: ResourceTask
+
+    @prefix <%= inspect(@prefix) %>
+    @concept_path "lib/<%= @app %>/concept.ex"
+    @marker "# generated-from: concept.exs"
+
+    @keys ~w(name tagline description cta value_props plans domain resources activation_event thresholds)a
+    @value_prop_keys ~w(title body icon)a
+    @plan_keys ~w(key name price description features)a
+    @resource_keys ~w(name attributes nav icon)a
+    @metrics ~w(visitors waitlist registered activated paying)a
+    @threshold_keys [:within_days | @metrics]
+    @camel ~r/\A[A-Z][A-Za-z0-9]*\z/
+
+    @impl Igniter.Mix.Task
+    def info(_argv, _composing_task) do
+      %Igniter.Mix.Task.Info{
+        group: :<%= @app %>,
+        example: "mix <%= @app %>.gen.concept",
+        positional: [path: [optional: true]]
+      }
+    end
+
+    @impl Igniter.Mix.Task
+    def igniter(igniter) do
+      path = igniter.args.positional[:path] || "concept.exs"
+      {igniter, manifest} = read!(igniter, path)
+      concept = validate!(manifest, path)
+
+      igniter
+      |> write_concept(concept)
+      |> generate_resources(concept)
+    end
+
+    # -- reading -------------------------------------------------------------------
+
+    defp read!(igniter, path) do
+      unless Igniter.exists?(igniter, path) do
+        Mix.raise(
+          "#{path} not found; mix tinderbox wrote a starter concept.exs at the project root."
+        )
+      end
+
+      igniter = Igniter.include_existing_file(igniter, path)
+      content = igniter.rewrite |> Rewrite.source!(path) |> Rewrite.Source.get(:content)
+
+      case Code.eval_string(content, [], file: path) do
+        {manifest, _binding} when is_map(manifest) ->
+          {igniter, manifest}
+
+        {other, _binding} ->
+          Mix.raise("#{path} must evaluate to a map, and evaluates to #{inspect(other)}.")
+      end
+    rescue
+      error in [SyntaxError, TokenMissingError, CompileError, MismatchedDelimiterError] ->
+        Mix.raise("#{path} is not valid Elixir: " <> Exception.message(error))
+    end
+
+    # -- checking ------------------------------------------------------------------
+
+    defp validate!(manifest, path) do
+      resources = List.wrap(manifest[:resources])
+
+      problems =
+        Enum.concat([
+          unknown_keys(manifest, @keys, nil),
+          string(manifest, :name, true),
+          string(manifest, :tagline, true),
+          string(manifest, :description, false),
+          cta(manifest[:cta]),
+          value_props(manifest[:value_props]),
+          plans(manifest[:plans]),
+          domain(manifest[:domain]),
+          resources(manifest[:resources]),
+          activation_event(manifest[:activation_event]),
+          thresholds(manifest[:thresholds])
+        ])
+
+      problems = if problems == [], do: attribute_problems(manifest, resources), else: problems
+
+      if problems != [] do
+        Mix.raise(
+          "#{path} has problems:\n\n" <> Enum.map_join(problems, "\n", &"  * #{&1}")
+        )
+      end
+
+      normalize(manifest, resources)
+    end
+
+    defp unknown_keys(map, keys, at) when is_map(map) do
+      for key <- Map.keys(map), key not in keys do
+        "Unknown key #{path(at, key)} (expected #{Enum.join(keys, ", ")})"
+      end
+    end
+
+    defp unknown_keys(_value, _keys, _at), do: []
+
+    defp path(nil, key), do: to_string(key)
+    defp path(at, key), do: "#{at}.#{key}"
+
+    defp string(map, key, required?) do
+      case Map.get(map, key) do
+        nil when required? -> ["#{key} is required: a non-empty string"]
+        nil -> []
+        "" when required? -> ["#{key} is required: a non-empty string"]
+        value when is_binary(value) -> []
+        value -> ["#{key} must be a string, not #{inspect(value)}"]
+      end
+    end
+
+    defp cta(nil), do: []
+    defp cta(cta) when cta in [:waitlist, :register], do: []
+    defp cta(cta), do: ["cta must be :waitlist or :register, not #{inspect(cta)}"]
+
+    defp value_props(nil), do: []
+
+    defp value_props(props) when is_list(props) and length(props) <= 6 do
+      props
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {prop, index} ->
+        entry(prop, "value_props[#{index}]", @value_prop_keys, [:title, :body], [:icon])
+      end)
+    end
+
+    defp value_props(_props), do: ["value_props must be a list of at most six maps"]
+
+    defp plans(nil), do: []
+
+    defp plans(plans) when is_list(plans) do
+      plans
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {plan, index} ->
+        at = "plans[#{index}]"
+        features = if is_map(plan), do: plan[:features]
+
+        features_problems =
+          if features == nil or (is_list(features) and Enum.all?(features, &is_binary/1)),
+            do: [],
+            else: ["#{at}.features must be a list of strings"]
+
+        entry(plan, at, @plan_keys, [:key, :name, :price], [:description]) ++ features_problems
+      end)
+    end
+
+    defp plans(_plans), do: ["plans must be a list of maps"]
+
+    # A map with `required` and `optional` string values and nothing else.
+    defp entry(map, at, keys, required, optional) when is_map(map) do
+      missing =
+        for key <- required, not (is_binary(map[key]) and map[key] != "") do
+          "#{at}.#{key} is required: a non-empty string"
+        end
+
+      not_strings =
+        for key <- optional, map[key] != nil, not is_binary(map[key]) do
+          "#{at}.#{key} must be a string"
+        end
+
+      Enum.concat([unknown_keys(map, keys, at), missing, not_strings])
+    end
+
+    defp entry(_value, at, _keys, _required, _optional), do: ["#{at} must be a map"]
+
+    defp domain(nil), do: []
+
+    defp domain(domain) when is_binary(domain) do
+      if Regex.match?(@camel, domain),
+        do: [],
+        else: ["domain must be one CamelCase name, as in \"Core\", not #{inspect(domain)}"]
+    end
+
+    defp domain(domain), do: ["domain must be a string, not #{inspect(domain)}"]
+
+    defp resources(nil), do: []
+
+    defp resources(resources) when is_list(resources) do
+      resources
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {resource, index} ->
+        at = "resources[#{index}]"
+        name = if is_map(resource), do: resource[:name]
+
+        name_problems =
+          if is_binary(name) and not Regex.match?(@camel, name),
+            do: ["#{at}.name must be one CamelCase name, as in \"Project\""],
+            else: []
+
+        entry(resource, at, @resource_keys, [:name], [:attributes, :nav, :icon]) ++ name_problems
+      end)
+    end
+
+    defp resources(_resources), do: ["resources must be a list of maps"]
+
+    defp activation_event(nil), do: []
+    defp activation_event(event) when is_binary(event) and event != "", do: []
+    defp activation_event(event), do: ["activation_event must be a string, not #{inspect(event)}"]
+
+    defp thresholds(nil), do: []
+
+    defp thresholds(thresholds) when is_map(thresholds) do
+      days =
+        case thresholds[:within_days] do
+          nil -> []
+          days when is_integer(days) and days > 0 -> []
+          days -> ["thresholds.within_days must be a positive integer, not #{inspect(days)}"]
+        end
+
+      metrics =
+        for metric <- @metrics,
+            value = thresholds[metric],
+            not (is_integer(value) and value >= 0) do
+          "thresholds.#{metric} must be a non-negative integer or nil, not #{inspect(value)}"
+        end
+
+      Enum.concat([unknown_keys(thresholds, @threshold_keys, "thresholds"), days, metrics])
+    end
+
+    defp thresholds(_thresholds), do: ["thresholds must be a map"]
+
+    # The attributes parse, and a `belongs_to` to another resource of the manifest
+    # comes after it: that resource has to exist when this one is generated.
+    defp attribute_problems(manifest, resources) do
+      domain = Module.concat(@prefix, manifest[:domain] || "Core")
+      names = Enum.map(resources, & &1.name)
+
+      resources
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {resource, index} ->
+        entries = String.split(resource[:attributes] || "")
+
+        try do
+          entries
+          |> Gen.parse_attributes!(domain, <%= inspect(@accounts) %>)
+          |> Enum.flat_map(fn
+            %{type: :belongs_to, target: target} ->
+              target_name = target |> Module.split() |> List.last()
+              order_problem(target_name, target, domain, names, index, resource.name)
+
+            _attribute ->
+              []
+          end)
+        rescue
+          error in Mix.Error ->
+            ["resources[#{index}] (#{resource.name}): " <> first_paragraph(error.message)]
+        end
+      end)
+    end
+
+    defp order_problem(target_name, target, domain, names, index, name) do
+      position = Enum.find_index(names, &(&1 == target_name))
+
+      # A resource may point at itself (a tree); one that comes later does not exist yet.
+      if target == Module.concat(domain, target_name) and position != nil and position > index do
+        ["#{name} belongs to #{target_name}: list #{target_name} before #{name} in resources"]
+      else
+        []
+      end
+    end
+
+    defp first_paragraph(message), do: message |> String.split("\n\n") |> Enum.take(2) |> Enum.join(" ")
+
+    # -- defaults --------------------------------------------------------------------
+
+    defp normalize(manifest, resources) do
+      resources =
+        Enum.map(resources, fn resource ->
+          %{
+            name: resource.name,
+            attributes: String.split(resource[:attributes] || ""),
+            nav: resource[:nav],
+            icon: resource[:icon] || "hero-rectangle-stack"
+          }
+        end)
+
+      %{
+        name: manifest.name,
+        tagline: manifest.tagline,
+        description: manifest[:description] || "",
+        cta: manifest[:cta] || :waitlist,
+        value_props:
+          Enum.map(manifest[:value_props] || [], fn prop ->
+            %{title: prop.title, body: prop.body, icon: prop[:icon] || "hero-sparkles"}
+          end),
+        plans:
+          Enum.map(manifest[:plans] || [], fn plan ->
+            %{
+              key: plan.key,
+              name: plan.name,
+              price: plan.price,
+              description: plan[:description] || "",
+              features: plan[:features] || []
+            }
+          end),
+        domain: manifest[:domain] || "Core",
+        resources: resources,
+        activation_event: manifest[:activation_event] || default_activation_event(resources),
+        thresholds:
+          Enum.map(@threshold_keys, fn key ->
+            {key, Map.get(manifest[:thresholds] || %{}, key, if(key == :within_days, do: 30))}
+          end)
+      }
+    end
+
+    defp default_activation_event([]), do: "organization.created"
+    defp default_activation_event([first | _]), do: Gen.singular_var(first.name) <> ".created"
+
+    # -- the concept module ------------------------------------------------------------
+
+    defp write_concept(igniter, concept) do
+      assigns = [
+        app: <%= inspect(@app) %>,
+        name: inspect(concept.name),
+        tagline: inspect(concept.tagline),
+        description: inspect(concept.description),
+        cta: inspect(concept.cta),
+        value_props: source(concept.value_props),
+        plans: source(concept.plans),
+        activation_event: inspect(concept.activation_event),
+        thresholds:
+          "%{" <>
+            Enum.map_join(concept.thresholds, ", ", fn {key, value} ->
+              "#{key}: #{inspect(value)}"
+            end) <> "}"
+      ]
+
+      {igniter, body} = ResourceTask.render(igniter, "concept.ex.eex", assigns)
+      source = "defmodule #{inspect(Module.concat(@prefix, "Concept"))} do\n#{body}\nend\n"
+
+      cond do
+        not Igniter.exists?(igniter, @concept_path) ->
+          Igniter.create_new_file(igniter, @concept_path, source)
+
+        concept_generated?(igniter) ->
+          Igniter.update_elixir_file(igniter, @concept_path, fn _zipper ->
+            {:ok, source |> Sourceror.parse_string!() |> Sourceror.Zipper.zip()}
+          end)
+
+        true ->
+          Igniter.add_warning(
+            igniter,
+            "#{inspect(Module.concat(@prefix, "Concept"))} was edited by hand (#{@concept_path} " <>
+              "has no `#{@marker}` line), so it was not rewritten."
+          )
+      end
+    end
+
+    defp concept_generated?(igniter) do
+      igniter
+      |> Igniter.include_existing_file(@concept_path)
+      |> Map.fetch!(:rewrite)
+      |> Rewrite.source!(@concept_path)
+      |> Rewrite.Source.get(:content)
+      |> String.contains?(@marker)
+    end
+
+    defp source(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
+
+    # -- resources ---------------------------------------------------------------------
+
+    defp generate_resources(igniter, concept) do
+      domain = Module.concat(@prefix, concept.domain)
+
+      {igniter, generated} =
+        Enum.reduce(concept.resources, {igniter, []}, fn resource, {igniter, generated} ->
+          module = Module.concat(domain, resource.name)
+
+          case Igniter.Project.Module.module_exists(igniter, module) do
+            {true, igniter} ->
+              {Igniter.add_notice(igniter, "#{inspect(module)} exists, so it was skipped."),
+               generated}
+
+            {false, igniter} ->
+              {generate(igniter, module, resource), [resource | generated]}
+          end
+        end)
+
+      generated = Enum.reverse(generated)
+
+      igniter
+      |> codegen(generated, concept.domain)
+      |> Igniter.add_notice(next_steps(concept))
+    end
+
+    defp generate(igniter, module, %{nav: nil} = resource) do
+      Igniter.compose_task(
+        igniter,
+        <%= @resource_task %>,
+        [inspect(module) | resource.attributes] ++ ["--no-codegen"]
+      )
+    end
+
+    defp generate(igniter, module, resource) do
+      Igniter.compose_task(
+        igniter,
+        <%= @live_task %>,
+        [inspect(module) | resource.attributes] ++
+          ["--nav", resource.nav, "--icon", resource.icon, "--no-codegen"]
+      )
+    end
+
+    defp codegen(igniter, [], _domain), do: igniter
+
+    defp codegen(igniter, _generated, domain) do
+      name = "add_" <> Macro.underscore(domain)
+
+      igniter
+      |> Ash.Igniter.codegen(name)
+      |> Igniter.add_task("format", ["priv/repo/migrations/*#{name}.exs"])
+    end
+
+    defp next_steps(concept) do
+      first_page =
+        case Enum.find(concept.resources, & &1.nav) do
+          nil -> ""
+          resource -> ", /#{Gen.names(Module.concat(@prefix, resource.name)).route} its first page"
+        end
+
+      "Next: mise run dev — / shows the concept#{first_page}, /admin/validation the funnel."
+    end
+  end
+else
+  defmodule <%= @concept_task %> do
+    @shortdoc "Applies concept.exs: the landing page's copy and pricing, the domain, the validation thresholds"
+    @moduledoc false
+
+    use Mix.Task
+
+    @impl Mix.Task
+    def run(_argv) do
+      Mix.raise(
+        "mix <%= @app %>.gen.concept needs igniter, a :dev/:test dependency. Run it in dev or test."
+      )
+    end
+  end
+end

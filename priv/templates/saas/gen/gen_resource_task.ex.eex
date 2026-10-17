@@ -1,0 +1,154 @@
+if Code.ensure_loaded?(Igniter) do
+  defmodule <%= @resource_task %> do
+    @shortdoc "Adds an organization-scoped Ash resource, its domain if new, and its migration"
+    @moduledoc """
+    Adds an organization-scoped Ash resource the way this application writes them:
+
+        mix <%= @app %>.gen.resource <%= inspect(@prefix) %>.Projects.Project name:string:required \\
+          status:enum:draft,active,archived budget:decimal owner:belongs_to:User
+
+    * `belongs_to :organization` (required, deleted with the organization) and one
+      attribute or `belongs_to` per entry: `name:type[:required][:unique]`, with the
+      types string, text, integer, decimal, boolean, date, datetime, uuid, map,
+      `enum:a,b,c` and `belongs_to:Target` (`User`, another resource of the domain, or
+      a full module name). `unique` is unique within the organization,
+    * policies: members of the organization read, its owners and admins create,
+      update and destroy (`<%= inspect(@accounts) %>.Checks.ActorManagesOrganization`), platform
+      admins do anything (`--no-admin-bypass` leaves that out),
+    * a `<name>.created` analytics event on create, and
+      `<%= inspect(@accounts) %>.Validations.SameOrganization` for every `belongs_to` to
+      another organization-scoped resource,
+    * the domain, through `mix <%= @app %>.gen.domain`, when it does not exist yet,
+    * `<name>_fixture/3` in `<%= inspect(@prefix) %>.Fixtures`,
+    * the migration, `mix ash.codegen add_<table>` (`--no-codegen` skips it; `--table`
+      names the table).
+
+    The resource is rendered from `priv/templates/<%= @app %>.gen/resource.ex.eex`: edit
+    it to change what every new resource looks like. `mix <%= @app %>.gen.live` adds the
+    pages too.
+    """
+
+    use Igniter.Mix.Task
+
+    alias <%= @support_module %>, as: Gen
+    alias Sourceror.Zipper
+
+    @templates "priv/templates/<%= @app %>.gen"
+    @fixtures <%= inspect(Module.concat(@prefix, "Fixtures")) %>
+
+    @impl Igniter.Mix.Task
+    def info(_argv, _composing_task) do
+      %Igniter.Mix.Task.Info{
+        group: :<%= @app %>,
+        example:
+          "mix <%= @app %>.gen.resource <%= inspect(@prefix) %>.Projects.Project name:string:required budget:decimal",
+        positional: [:resource, attributes: [rest: true, optional: true]],
+        schema: [admin_bypass: :boolean, codegen: :boolean, table: :string],
+        defaults: [admin_bypass: true, codegen: true]
+      }
+    end
+
+    @impl Igniter.Mix.Task
+    def igniter(igniter) do
+      %{resource: resource, attributes: entries} = igniter.args.positional
+      options = igniter.args.options
+      resource = Igniter.Project.Module.parse(resource)
+      domain = Gen.domain!(resource)
+      attributes = Gen.parse_attributes!(entries, domain, <%= inspect(@accounts) %>)
+      assigns = Gen.assigns(resource, attributes, options)
+
+      {exists?, igniter} = Igniter.Project.Module.module_exists(igniter, resource)
+
+      if exists? do
+        Mix.raise("#{inspect(resource)} already exists. Edit it, or give the new resource another name.")
+      end
+
+      {domain?, igniter} = Igniter.Project.Module.module_exists(igniter, domain)
+
+      igniter =
+        if domain?,
+          do: igniter,
+          else: Igniter.compose_task(igniter, <%= @domain_task %>, [inspect(domain)])
+
+      {igniter, body} = render(igniter, "resource.ex.eex", assigns)
+
+      igniter
+      |> Igniter.Project.Module.create_module(resource, body)
+      |> Ash.Domain.Igniter.add_resource_reference(domain, resource)
+      |> add_fixture(assigns)
+      |> codegen(options[:codegen], "add_#{assigns[:table]}")
+    end
+
+    @doc """
+    Renders `name` from `priv/templates/<%= @app %>.gen/` with `assigns`. The template is
+    read through the igniter, so a template changed in the same run is the one used.
+    """
+    @spec render(Igniter.t(), String.t(), keyword()) :: {Igniter.t(), String.t()}
+    def render(igniter, name, assigns) do
+      path = Path.join(@templates, name)
+
+      unless Igniter.exists?(igniter, path) do
+        Mix.raise("#{path} is missing: the <%= @app %>.gen tasks render their files from it.")
+      end
+
+      igniter = Igniter.include_existing_file(igniter, path)
+      content = igniter.rewrite |> Rewrite.source!(path) |> Rewrite.Source.get(:content)
+
+      {igniter, EEx.eval_string(content, assigns: assigns)}
+    end
+
+    @doc """
+    Appends `<name>_fixture/3` to `<%= inspect(Module.concat(@prefix, "Fixtures")) %>` unless it has one.
+    """
+    @spec add_fixture(Igniter.t(), keyword()) :: Igniter.t()
+    def add_fixture(igniter, assigns) do
+      case Igniter.Project.Module.find_module(igniter, @fixtures) do
+        {:ok, {igniter, source, _zipper}} ->
+          if Rewrite.Source.get(source, :content) =~ "def #{assigns[:singular]}_fixture(" do
+            igniter
+          else
+            {igniter, code} = render(igniter, "fixture.ex.eex", assigns)
+
+            Igniter.Project.Module.find_and_update_module!(igniter, @fixtures, fn body ->
+              {:ok, body |> last_statement() |> Igniter.Code.Common.add_code(code, placement: :after)}
+            end)
+          end
+
+        {:error, igniter} ->
+          Igniter.add_warning(
+            igniter,
+            "#{inspect(@fixtures)} is missing, so #{assigns[:singular]}_fixture/3 was not added."
+          )
+      end
+    end
+
+    defp last_statement(%Zipper{node: {:__block__, _meta, [_ | _]}} = body),
+      do: body |> Zipper.down() |> Zipper.rightmost()
+
+    defp last_statement(body), do: body
+
+    defp codegen(igniter, false, _name), do: igniter
+
+    defp codegen(igniter, _codegen?, name) do
+      igniter
+      |> Ash.Igniter.codegen(name)
+      # Ash's formatting of a new migration is not what `mix format` leaves, and CI
+      # checks formatting.
+      |> Igniter.add_task("format", ["priv/repo/migrations/*#{name}.exs"])
+    end
+  end
+else
+  defmodule <%= @resource_task %> do
+    @shortdoc "Adds an organization-scoped Ash resource, its domain if new, and its migration"
+    @moduledoc false
+
+    use Mix.Task
+
+    @impl Mix.Task
+    def run(_argv) do
+      Mix.raise(
+        "mix <%= @app %>.gen.resource needs igniter, a :dev/:test dependency. Run it in dev or test."
+      )
+    end
+  end
+end

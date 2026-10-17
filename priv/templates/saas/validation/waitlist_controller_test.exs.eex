@@ -1,0 +1,55 @@
+defmodule <%= inspect(@web) %>.WaitlistControllerTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@prefix) %>.Waitlist.Signup
+
+  describe "POST /waitlist" do
+    test "an address joins once, keeping where it first came from", %{conn: conn} do
+      params = %{"signup" => %{"email" => "lead@example.com", "source" => "newsletter"}}
+
+      conn = post(conn, ~p"/waitlist", params)
+
+      assert redirected_to(conn) == "/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "You're on the list"
+
+      post(build_conn(), ~p"/waitlist", %{"signup" => %{"email" => "lead@example.com"}})
+
+      assert [signup] = signups()
+      assert to_string(signup.email) == "lead@example.com"
+      assert signup.source == "newsletter"
+      assert signup.anonymous_id
+    end
+
+    test "something that is not an email address is refused", %{conn: conn} do
+      conn = post(conn, ~p"/waitlist", %{"signup" => %{"email" => "nope"}})
+
+      assert redirected_to(conn) == "/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "doesn't look right"
+      assert signups() == []
+    end
+  end
+
+  describe "GET /admin/waitlist.csv" do
+    test "an admin downloads every address, quoted where it has to be", %{conn: conn} do
+      signup_fixture(%{email: "lead@example.com", campaign: "launch, day 1", source: "=cmd"})
+
+      conn = get(sign_in(conn, admin_fixture()), ~p"/admin/waitlist.csv")
+
+      assert [header, row, ""] = conn |> response(200) |> String.split("\r\n")
+      assert header == "email,source,medium,campaign,referrer,joined_at"
+      assert row =~ ~s(lead@example.com,'=cmd,,"launch, day 1",,)
+      assert response_content_type(conn, :csv) =~ "text/csv"
+    end
+
+    test "anyone else gets a 404", %{conn: conn} do
+      conn = get(sign_in(conn, user_fixture()), ~p"/admin/waitlist.csv")
+
+      assert response(conn, 404)
+    end
+  end
+
+  defp signups, do: Ash.read!(Signup, authorize?: false)
+end

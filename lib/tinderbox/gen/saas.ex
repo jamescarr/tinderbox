@@ -20,14 +20,18 @@ defmodule Tinderbox.Gen.Saas do
   | `Tinderbox.Gen.Storage` | object storage wiring both stacks share |
   | `#{inspect(__MODULE__)}.Accounts` | sign-in strategies, roles, organizations, memberships, invitations |
   | `#{inspect(__MODULE__)}.Web` | layout, landing page, LiveViews, routes |
+  | `#{inspect(__MODULE__)}.Concept` | `<App>.Concept` (the landing page's copy and pricing, the activation event, the thresholds) and the starter `concept.exs` |
   | `#{inspect(__MODULE__)}.Billing` | Stripe plans, subscriptions, webhooks, AshOban sync |
   | `#{inspect(__MODULE__)}.Notifications` | notification facade, Local adapter, inbox, preferences, email |
   | `#{inspect(__MODULE__)}.Events` | JetStream publisher, stream bootstrap, consumer, Ash notifier |
   | `#{inspect(__MODULE__)}.Api` | AshJsonApi mount for the accounts domain |
   | `#{inspect(__MODULE__)}.Connections` | OAuth2 client credentials per organization: provider behaviour (Hydra, Auth0), token verification, the API plug |
   | `#{inspect(__MODULE__)}.Admin` | `/admin` (UI kit) and `/admin/flags` (FunWithFlags) |
+  | `#{inspect(__MODULE__)}.Validation` | first-party analytics, the waitlist, `/admin/validation` (the funnel against the thresholds) and `/admin/waitlist` |
   | `#{inspect(__MODULE__)}.Mfa` | two-factor authentication (TOTP, or the SSO provider's MFA), `/settings/security`, `/admin/security` |
   | `#{inspect(__MODULE__)}.Ops` | health, PromEx, OpenTelemetry, mail, release, CI |
+  | `#{inspect(__MODULE__)}.Generators` | the project's own generators: `mix <app>.gen.domain`, `.gen.resource`, `.gen.live`, `.gen.concept` |
+  | `#{inspect(__MODULE__)}.Deploy` | Fly.io (`--deploy fly`, the default): `fly.toml`, the NATS app, `mise run deploy` |
 
   Edits to files the Phoenix and Ash installers created are guarded so that
   re-running the generator leaves them alone (see
@@ -40,12 +44,16 @@ defmodule Tinderbox.Gen.Saas do
   alias Tinderbox.Gen.Saas.Admin
   alias Tinderbox.Gen.Saas.Api
   alias Tinderbox.Gen.Saas.Billing
+  alias Tinderbox.Gen.Saas.Concept
   alias Tinderbox.Gen.Saas.Connections
+  alias Tinderbox.Gen.Saas.Deploy
   alias Tinderbox.Gen.Saas.Events
   alias Tinderbox.Gen.Saas.Flags
+  alias Tinderbox.Gen.Saas.Generators
   alias Tinderbox.Gen.Saas.Mfa
   alias Tinderbox.Gen.Saas.Notifications
   alias Tinderbox.Gen.Saas.Ops
+  alias Tinderbox.Gen.Saas.Validation
   alias Tinderbox.Gen.Saas.Web
   alias Tinderbox.Gen.Storage
 
@@ -86,6 +94,7 @@ defmodule Tinderbox.Gen.Saas do
     |> Tinderbox.Gen.Ui.install_kit(assigns[:opts])
     |> Accounts.apply(assigns)
     |> Web.apply(assigns)
+    |> Concept.apply(assigns)
     |> Billing.apply(assigns)
     |> Notifications.apply(assigns)
     |> Events.apply(assigns)
@@ -93,15 +102,18 @@ defmodule Tinderbox.Gen.Saas do
     |> Connections.apply(assigns)
     |> Flags.apply(assigns)
     |> Admin.apply(assigns)
+    |> Validation.apply(assigns)
     |> Mfa.apply(assigns)
     |> Ops.apply(assigns)
+    |> Generators.apply(assigns)
+    |> Deploy.apply(assigns)
     # One migration for everything above, named after what was generated.
     |> Ash.Igniter.codegen("add_saas_resources")
     # Ash formats the migration once, and a second pass changes it again
     # (`references(…), null: false`): `mix format --check-formatted`, which CI
     # runs, would fail on the fresh file. Only that migration is touched.
     |> Igniter.add_task("format", ["priv/repo/migrations/*add_saas_resources.exs"])
-    |> Igniter.add_notice(Gen.next_steps(:saas, assigns[:opts]))
+    |> Igniter.add_notice(Gen.next_steps(:saas, assigns[:opts], assigns[:app]))
   end
 
   @doc """
