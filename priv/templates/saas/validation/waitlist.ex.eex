@@ -1,0 +1,13 @@
+@moduledoc """
+The landing page's waitlist: who left an email address, and where they came
+from (the `utm_*` parameters and the referrer of their first visit).
+
+Anyone can join (`<%= inspect(@web) %>.WaitlistController`); only platform admins read the
+list, at `/admin/waitlist` and as CSV at `/admin/waitlist.csv`.
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>
+
+resources do
+  resource <%= inspect(@prefix) %>.Waitlist.Signup
+end

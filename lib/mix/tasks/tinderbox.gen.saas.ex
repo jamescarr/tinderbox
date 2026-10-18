@@ -17,7 +17,13 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
   * a themepack UI kit (`--themepack ember|slate|harbor`, see `mix tinderbox.gen.ui`),
     an admin section at `/admin`, FunWithFlags at `/admin/flags`,
   * AshJsonApi + OpenAPI, NATS JetStream events, Oban, Swoosh + Mailpit,
-    `/health`, OpenTelemetry, PromEx, a release Dockerfile and GitHub Actions CI.
+    `/health`, OpenTelemetry, PromEx, a release Dockerfile and GitHub Actions CI,
+  * a landing page drawn from `concept.exs`, with a waitlist, first-party analytics
+    and the validation funnel at `/admin/validation`,
+  * the project's own generators: `mix <app>.gen.concept`, `.gen.resource`,
+    `.gen.live` and `.gen.domain`,
+  * Fly.io deployment files and a runbook (`--deploy fly`, the default; `--deploy
+    none` leaves them out).
 
   The Ash packages are fetched and their installers are run by igniter, so this
   task must be run through `mix igniter.install`/`mix igniter.new`:
@@ -41,9 +47,10 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
         compose: :boolean,
         mise: :boolean,
         auth_strategy: :csv,
-        themepack: :string
+        themepack: :string,
+        deploy: :string
       ],
-      defaults: [compose: true, mise: true],
+      defaults: [compose: true, mise: true, deploy: "fly"],
       composes: [
         "ash.install",
         "ash_postgres.install",

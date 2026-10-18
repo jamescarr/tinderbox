@@ -1,0 +1,91 @@
+@moduledoc """
+Admin: everyone on the waitlist, newest first, with where they came from;
+searchable, sortable, and exported as CSV at `/admin/waitlist.csv`.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@prefix) %>.Waitlist.Signup
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@impl true
+def mount(_params, _session, socket) do
+  state =
+    ListState.new(
+      search_fields: [:email, :source, :campaign],
+      sortable: [:email, :source, :inserted_at],
+      sort_by: :inserted_at,
+      sort_dir: :desc,
+      page_size: 50
+    )
+
+  rows =
+    Signup
+    |> Ash.read!(actor: socket.assigns.current_user)
+    |> Enum.map(fn signup ->
+      %{
+        id: signup.id,
+        email: to_string(signup.email),
+        source: signup.source,
+        medium: signup.medium,
+        campaign: signup.campaign,
+        referrer: signup.referrer,
+        inserted_at: signup.inserted_at
+      }
+    end)
+
+  {:ok,
+   socket
+   |> assign(page_title: "Waitlist", all_rows: rows)
+   |> run(state)}
+end
+
+@impl true
+def handle_event("table", params, socket) do
+  {:noreply, run(socket, ListState.update(socket.assigns.table, params))}
+end
+
+defp run(socket, state) do
+  {rows, state} = ListState.run(socket.assigns.all_rows, state)
+  assign(socket, rows: rows, table: state)
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:waitlist}>
+    <.data_table
+      id="waitlist"
+      rows={@rows}
+      state={@table}
+      searchable
+      search_placeholder="Search by email, source or campaign…"
+      row_id={&"signup-#{&1.id}"}
+    >
+      <:col :let={row} label="Email" field={:email} sortable>
+        <span class="font-medium">{row.email}</span>
+      </:col>
+      <:col :let={row} label="Source" field={:source} sortable>{row.source || "—"}</:col>
+      <:col :let={row} label="Medium">{row.medium || "—"}</:col>
+      <:col :let={row} label="Campaign">{row.campaign || "—"}</:col>
+      <:col :let={row} label="Referrer" class="max-w-xs truncate">{row.referrer || "—"}</:col>
+      <:col :let={row} label="Joined" field={:inserted_at} sortable>
+        {relative_time(row.inserted_at)}
+      </:col>
+      <:toolbar>
+        <.link href={~p"/admin/waitlist.csv"} class="btn btn-sm">
+          <.icon name="hero-arrow-down-tray" class="size-4" /> Export CSV
+        </.link>
+      </:toolbar>
+      <:empty>
+        <.empty_state icon="hero-queue-list" title="Nobody yet">
+          Addresses left on the landing page's waitlist form show up here.
+        </.empty_state>
+      </:empty>
+    </.data_table>
+  </AdminLayouts.admin>
+  """
+end

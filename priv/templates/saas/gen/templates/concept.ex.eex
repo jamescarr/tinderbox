@@ -1,0 +1,50 @@
+@moduledoc """
+The business this application tests, as `mix <%= @app %>.gen.concept` last read it
+from `concept.exs`: the landing page's copy and pricing, the event that counts as
+activation, and the thresholds `/admin/validation` judges the funnel against.
+
+Edit `concept.exs` and run `mix <%= @app %>.gen.concept` again rather than editing
+this module: the task rewrites it while the marker below is in place, and leaves
+it alone once the marker is gone.
+"""
+
+# generated-from: concept.exs
+
+@doc "The product's name: the landing page's headline and the browser tab's suffix."
+@spec name() :: String.t()
+def name, do: <%= @name %>
+
+@doc "One sentence under the name on the landing page."
+@spec tagline() :: String.t()
+def tagline, do: <%= @tagline %>
+
+@doc "A paragraph under the tagline; empty for none."
+@spec description() :: String.t()
+def description, do: <%= @description %>
+
+@doc "What the landing page asks a visitor to do: join the waitlist, or register."
+@spec cta() :: :waitlist | :register
+def cta, do: <%= @cta %>
+
+@doc "The landing page's cards, each `%{title:, body:, icon:}`."
+@spec value_props() :: [%{title: String.t(), body: String.t(), icon: String.t()}]
+def value_props, do: <%= @value_props %>
+
+@doc """
+The landing page's pricing (no section when empty), each
+`%{key:, name:, price:, description:, features:}`.
+"""
+@spec plans() :: [map()]
+def plans, do: <%= @plans %>
+
+@doc "The event that counts an organization (or a user without one) as activated."
+@spec activation_event() :: String.t()
+def activation_event, do: <%= @activation_event %>
+
+@doc """
+What `/admin/validation` holds the funnel to, `within_days` after the first
+visit: `visitors`, `waitlist`, `registered`, `activated` and `paying` are
+minimum counts, `nil` for no threshold.
+"""
+@spec thresholds() :: %{atom() => non_neg_integer() | nil}
+def thresholds, do: <%= @thresholds %>

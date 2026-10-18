@@ -1,0 +1,91 @@
+defmodule <%= inspect(@prefix) %>.AnalyticsTest do
+  use <%= inspect(@prefix) %>.DataCase, async: false
+
+  import ExUnit.CaptureLog
+  import <%= inspect(@prefix) %>.Fixtures
+
+  alias <%= inspect(@prefix) %>.Analytics
+  alias <%= inspect(@prefix) %>.Analytics.Event
+  alias <%= inspect(@prefix) %>.Analytics.Funnel
+
+  @no_thresholds %{
+    within_days: 30,
+    visitors: nil,
+    waitlist: nil,
+    registered: nil,
+    activated: nil,
+    paying: nil
+  }
+
+  test "track/3 records who and what" do
+    owner = user_fixture()
+    organization = organization_fixture(owner)
+
+    assert :ok =
+             Analytics.track(
+               "report.exported",
+               %{user: owner, organization: organization, anonymous_id: "visitor-1"},
+               %{"format" => "csv"}
+             )
+
+    assert [event] = events("report.exported")
+    assert event.user_id == owner.id
+    assert event.organization_id == organization.id
+    assert event.anonymous_id == "visitor-1"
+    assert event.properties == %{"format" => "csv"}
+  end
+
+  test "an event that cannot be stored is logged, not raised" do
+    assert capture_log(fn -> assert :ok = Analytics.track("", %{}) end) =~ "failed"
+  end
+
+  test "creating an organization records organization.created for it" do
+    organization = user_fixture() |> organization_fixture()
+
+    assert [event] = events("organization.created")
+    assert event.organization_id == organization.id
+  end
+
+  test "the funnel counts each step once" do
+    event_fixture("landing.viewed", %{anonymous_id: "visitor-a"})
+    event_fixture("landing.viewed", %{anonymous_id: "visitor-a"})
+    event_fixture("landing.viewed", %{anonymous_id: "visitor-b"})
+    signup_fixture()
+    user_fixture() |> organization_fixture()
+
+    funnel =
+      Funnel.summary(activation_event: "organization.created", thresholds: @no_thresholds)
+
+    assert funnel.visitors == 2
+    assert funnel.waitlist == 1
+    assert funnel.registered == 1
+    assert funnel.organizations == 1
+    assert funnel.activated == 1
+    assert funnel.paying == 0
+    assert funnel.rates.visit_to_waitlist == 0.5
+    assert funnel.rates.activated_to_paying == 0.0
+    assert funnel.verdict == :no_thresholds
+    assert length(funnel.weeks) == 8
+    assert List.last(funnel.weeks).visitors == 2
+  end
+
+  test "the verdict holds the counts to the thresholds, then to the deadline" do
+    event_fixture("landing.viewed", %{anonymous_id: "visitor-a"})
+    met = %{@no_thresholds | visitors: 1}
+    unmet = %{@no_thresholds | visitors: 2}
+
+    assert %{verdict: :on_track, checks: %{visitors: :met, paying: :none}} =
+             Funnel.summary(thresholds: met)
+
+    assert %{verdict: :too_early, checks: %{visitors: :unmet}} =
+             Funnel.summary(thresholds: unmet)
+
+    assert %{verdict: :below} = Funnel.summary(thresholds: %{unmet | within_days: 0})
+  end
+
+  defp events(name) do
+    Event
+    |> Ash.read!(authorize?: false)
+    |> Enum.filter(&(&1.name == name))
+  end
+end

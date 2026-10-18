@@ -1,0 +1,51 @@
+@moduledoc """
+`GET /admin/waitlist.csv`: the waitlist as CSV (RFC 4180), oldest first. Behind
+the `:admin_tools` pipeline, so anyone but a platform admin gets a 404.
+
+A value that a spreadsheet would read as a formula (it starts with `=`, `+`, `-`,
+`@`, a tab or a carriage return) is prefixed with `'`: the fields come from a
+public form and its URL.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+alias <%= inspect(@prefix) %>.Waitlist.Signup
+
+@header ~w(email source medium campaign referrer joined_at)
+
+def export(conn, _params) do
+  signups =
+    Signup
+    |> Ash.Query.sort(inserted_at: :asc)
+    |> Ash.read!(actor: conn.assigns.current_user)
+
+  rows =
+    Enum.map(signups, fn signup ->
+      [
+        to_string(signup.email),
+        signup.source,
+        signup.medium,
+        signup.campaign,
+        signup.referrer,
+        DateTime.to_iso8601(signup.inserted_at)
+      ]
+    end)
+
+  csv = [@header | rows] |> Enum.map(&line/1) |> IO.iodata_to_binary()
+
+  send_download(conn, {:binary, csv}, filename: "waitlist.csv", content_type: "text/csv")
+end
+
+defp line(fields), do: [Enum.map_intersperse(fields, ",", &field/1), "\r\n"]
+
+defp field(nil), do: ""
+
+defp field(value) do
+  value = if String.starts_with?(value, ["=", "+", "-", "@", "\t", "\r"]), do: "'" <> value, else: value
+
+  if String.contains?(value, [",", "\"", "\n", "\r"]) do
+    ~s(") <> String.replace(value, ~s("), ~s("")) <> ~s(")
+  else
+    value
+  end
+end

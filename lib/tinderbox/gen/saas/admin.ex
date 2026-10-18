@@ -11,10 +11,13 @@ defmodule Tinderbox.Gen.Saas.Admin do
   | `/admin/organizations` | every organization, with member count and plan |
   | `/admin/organizations/:id` | one organization: members, subscription, invitations |
   | `/admin/subscriptions` | every subscription synced from Stripe |
+  | `/admin/validation` | the funnel against the concept's thresholds (`<App>.Analytics.Funnel`) |
+  | `/admin/waitlist` | everyone on the landing page's waitlist; CSV at `/admin/waitlist.csv` |
 
   The list pages are the kit's `<.data_table>` over an in-memory list, searched,
   sorted and paged by `<App>Web.UI.ListState`. The feature flag dashboard at
-  `/admin/flags` is `Tinderbox.Gen.Saas.Flags`.
+  `/admin/flags` is `Tinderbox.Gen.Saas.Flags`; what the validation pages read
+  (and the CSV export) is `Tinderbox.Gen.Saas.Validation`.
 
   Admin pages are ordinary `use <App>Web, :live_view` LiveViews rendered in
   `<App>Web.Admin.Layouts`, the same app shell as the rest of the app with the
@@ -24,7 +27,8 @@ defmodule Tinderbox.Gen.Saas.Admin do
   alias Tinderbox.Gen
   alias Tinderbox.Gen.Saas.Edits
 
-  @live_views ~w(DashboardLive UsersLive OrganizationsLive OrganizationLive SubscriptionsLive)
+  @live_views ~w(DashboardLive UsersLive OrganizationsLive OrganizationLive SubscriptionsLive
+                 ValidationLive WaitlistLive)
 
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
@@ -64,6 +68,8 @@ defmodule Tinderbox.Gen.Saas.Admin do
           live "/organizations", Admin.OrganizationsLive
           live "/organizations/:id", Admin.OrganizationLive
           live "/subscriptions", Admin.SubscriptionsLive
+          live "/validation", Admin.ValidationLive
+          live "/waitlist", Admin.WaitlistLive
         end
         """,
         arg2: assigns[:web],

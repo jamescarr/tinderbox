@@ -6,6 +6,8 @@ alias <%= inspect(@accounts) %>.Membership
 alias <%= inspect(@accounts) %>.Organization
 alias <%= inspect(@user) %>
 alias <%= inspect(@connection) %>
+alias <%= inspect(@prefix) %>.Analytics.Event
+alias <%= inspect(@prefix) %>.Waitlist.Signup
 
 @password "password123!"
 
@@ -26,6 +28,33 @@ def user_fixture(attrs \\ %{}) do
 
   User
   |> Ash.Changeset.for_create(:register_with_password, params, authorize?: false)
+  |> Ash.create!(authorize?: false)
+end
+
+@doc "A platform admin (`role: :admin`); `attrs` as for `user_fixture/1`."
+def admin_fixture(attrs \\ %{}) do
+  attrs
+  |> user_fixture()
+  |> Ash.update!(%{role: :admin}, action: :set_role, authorize?: false)
+end
+
+@doc "An address on the waitlist; `attrs` override the email and add a source, campaign…"
+def signup_fixture(attrs \\ %{}) do
+  Signup
+  |> Ash.Changeset.for_create(
+    :join,
+    Map.merge(%{email: "lead#{System.unique_integer([:positive])}@example.com"}, attrs)
+  )
+  |> Ash.create!()
+end
+
+@doc """
+An analytics event `name`; `attrs` set `anonymous_id`, `user_id`, `organization_id`,
+`properties` or `occurred_at` (a past visit, say).
+"""
+def event_fixture(name, attrs \\ %{}) do
+  Event
+  |> Ash.Changeset.for_create(:record, Map.put(attrs, :name, name), authorize?: false)
   |> Ash.create!(authorize?: false)
 end
 

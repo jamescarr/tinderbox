@@ -1,0 +1,255 @@
+@moduledoc """
+The numbers behind `/admin/validation`: how many people got how far, week by
+week, against the thresholds in `<%= inspect(@prefix) %>.Concept.thresholds/0`.
+
+| Metric | Counted as |
+|---|---|
+| visitors | distinct visitor ids of `landing.viewed` events |
+| waitlist | rows of `<%= inspect(@prefix) %>.Waitlist.Signup` |
+| registered | users |
+| organizations | organizations |
+| activated | distinct organizations (or users, for an event without one) of `<%= inspect(@prefix) %>.Concept.activation_event/0` events |
+| paying | subscriptions that are active or trialing |
+| active (7 d) | distinct users who signed in during the last seven days |
+
+Plain reads straight from the repo, without policies: the callers are admin
+pages and tests.
+"""
+
+import Ecto.Query
+
+alias <%= inspect(@accounts) %>.Organization
+alias <%= inspect(@user) %>
+alias <%= inspect(@prefix) %>.Analytics.Event
+alias <%= inspect(@prefix) %>.Billing.Subscription
+alias <%= inspect(@prefix) %>.Concept
+alias <%= inspect(@prefix) %>.Repo
+alias <%= inspect(@prefix) %>.Waitlist.Signup
+
+@metrics [:visitors, :waitlist, :registered, :activated, :paying]
+@paying ~w(active trialing)
+@weeks 8
+
+@typedoc "`:met`/`:unmet` against the metric's threshold, `:none` without one."
+@type check :: :met | :unmet | :none
+
+@type verdict :: :on_track | :too_early | :below | :no_thresholds
+
+@type summary :: %{
+        since: DateTime.t() | nil,
+        days_elapsed: non_neg_integer(),
+        activation_event: String.t(),
+        visitors: non_neg_integer(),
+        waitlist: non_neg_integer(),
+        registered: non_neg_integer(),
+        organizations: non_neg_integer(),
+        activated: non_neg_integer(),
+        paying: non_neg_integer(),
+        active_7d: non_neg_integer(),
+        rates: %{atom() => float()},
+        weeks: [map()],
+        thresholds: map(),
+        checks: %{atom() => check()},
+        verdict: verdict()
+      }
+
+# Query fragments; macros, so they are defined before the queries that use them.
+
+# The Monday a timestamp's week starts on.
+defmacrop week(timestamp) do
+  quote do: fragment("date_trunc('week', ?)::date", unquote(timestamp))
+end
+
+# Distinct organizations, or users for events without an organization.
+defmacrop activated_count(event) do
+  quote do
+    fragment(
+      "count(DISTINCT coalesce(?, ?))",
+      unquote(event).organization_id,
+      unquote(event).user_id
+    )
+  end
+end
+
+# `:atom` attributes are text columns, so the status is compared as text.
+defmacrop paying?(subscription) do
+  quote do
+    fragment("?::text = ANY(?)", unquote(subscription).status, type(^@paying, {:array, :string}))
+  end
+end
+
+@doc """
+Everything the dashboard shows. `days_elapsed` counts whole days since the
+first event or registration (`since`), so the first day is 0. `rates` are
+fractions, 0.0 when nobody reached the earlier step; one can exceed 1.0 when
+people skip the earlier step (a registration from a direct link). `weeks` are
+the last #{@weeks} weeks (Monday first), oldest first.
+
+The verdict is `:no_thresholds` when no metric has one, `:on_track` when every
+metric with a threshold meets it, `:too_early` when one does not but
+`within_days` have not passed yet, and `:below` after that.
+
+`activation_event:` and `thresholds:` replace the concept's, for tests and for
+trying a different bar.
+"""
+@spec summary(keyword()) :: summary()
+def summary(opts \\ []) do
+  activation_event = Keyword.get_lazy(opts, :activation_event, &Concept.activation_event/0)
+  thresholds = Keyword.get_lazy(opts, :thresholds, &Concept.thresholds/0)
+  since = since()
+  days_elapsed = if since, do: Date.diff(Date.utc_today(), DateTime.to_date(since)), else: 0
+
+  counts = %{
+    visitors: visitors(),
+    waitlist: Repo.aggregate(Signup, :count),
+    registered: Repo.aggregate(User, :count),
+    organizations: Repo.aggregate(Organization, :count),
+    activated: activated(activation_event),
+    paying: paying(),
+    active_7d: active_7d()
+  }
+
+  checks = Map.new(@metrics, &{&1, check(counts[&1], thresholds[&1])})
+
+  Map.merge(counts, %{
+    since: since,
+    days_elapsed: days_elapsed,
+    activation_event: activation_event,
+    rates: rates(counts),
+    weeks: weeks(activation_event),
+    thresholds: thresholds,
+    checks: checks,
+    verdict: verdict(checks, days_elapsed, thresholds[:within_days] || 30)
+  })
+end
+
+# -- totals ----------------------------------------------------------------------
+
+defp visitors do
+  Repo.one(
+    from e in Event,
+      where: e.name == "landing.viewed",
+      select: count(e.anonymous_id, :distinct)
+  )
+end
+
+defp activated(event) do
+  Repo.one(from e in Event, where: e.name == ^event, select: activated_count(e))
+end
+
+defp paying do
+  Repo.one(from s in Subscription, where: paying?(s), select: count(s.id))
+end
+
+defp active_7d do
+  week_ago = DateTime.add(DateTime.utc_now(), -7, :day)
+
+  Repo.one(
+    from e in Event,
+      where: e.name == "user.signed_in" and e.occurred_at >= ^week_ago,
+      select: count(e.user_id, :distinct)
+  )
+end
+
+defp since do
+  first_event = Repo.one(from e in Event, select: min(e.occurred_at))
+  first_user = Repo.one(from u in User, select: min(field(u, ^user_timestamp())))
+
+  [first_event, first_user]
+  |> Enum.reject(&is_nil/1)
+  |> Enum.map(&to_datetime/1)
+  |> Enum.min(DateTime, fn -> nil end)
+end
+
+# The user resource's create timestamp: `created_at` when Ash added it, else `inserted_at`.
+defp user_timestamp do
+  if Ash.Resource.Info.attribute(User, :created_at), do: :created_at, else: :inserted_at
+end
+
+defp to_datetime(%DateTime{} = time), do: time
+defp to_datetime(%NaiveDateTime{} = time), do: DateTime.from_naive!(time, "Etc/UTC")
+
+# -- rates and verdict -------------------------------------------------------------
+
+defp rates(counts) do
+  %{
+    visit_to_waitlist: rate(counts.waitlist, counts.visitors),
+    visit_to_registered: rate(counts.registered, counts.visitors),
+    registered_to_activated: rate(counts.activated, counts.registered),
+    activated_to_paying: rate(counts.paying, counts.activated)
+  }
+end
+
+defp rate(_part, 0), do: 0.0
+defp rate(part, whole), do: part / whole
+
+defp check(_count, nil), do: :none
+defp check(count, threshold) when count >= threshold, do: :met
+defp check(_count, _threshold), do: :unmet
+
+defp verdict(checks, days_elapsed, within_days) do
+  checked = checks |> Map.values() |> Enum.reject(&(&1 == :none))
+
+  cond do
+    checked == [] -> :no_thresholds
+    Enum.all?(checked, &(&1 == :met)) -> :on_track
+    days_elapsed < within_days -> :too_early
+    true -> :below
+  end
+end
+
+# -- by week -----------------------------------------------------------------------
+
+defp weeks(activation_event) do
+  first = Date.add(Date.beginning_of_week(Date.utc_today(), :monday), -7 * (@weeks - 1))
+  start = DateTime.new!(first, ~T[00:00:00], "Etc/UTC")
+  stamp = user_timestamp()
+
+  by_week = %{
+    visitors:
+      weekly(
+        from e in Event,
+          where: e.name == "landing.viewed" and e.occurred_at >= ^start,
+          group_by: week(e.occurred_at),
+          select: {week(e.occurred_at), count(e.anonymous_id, :distinct)}
+      ),
+    waitlist:
+      weekly(
+        from s in Signup,
+          where: s.inserted_at >= ^start,
+          group_by: week(s.inserted_at),
+          select: {week(s.inserted_at), count(s.id)}
+      ),
+    registered:
+      weekly(
+        from u in User,
+          where: field(u, ^stamp) >= ^start,
+          group_by: week(field(u, ^stamp)),
+          select: {week(field(u, ^stamp)), count(u.id)}
+      ),
+    activated:
+      weekly(
+        from e in Event,
+          where: e.name == ^activation_event and e.occurred_at >= ^start,
+          group_by: week(e.occurred_at),
+          select: {week(e.occurred_at), activated_count(e)}
+      ),
+    paying:
+      weekly(
+        from s in Subscription,
+          where: s.inserted_at >= ^start and paying?(s),
+          group_by: week(s.inserted_at),
+          select: {week(s.inserted_at), count(s.id)}
+      )
+  }
+
+  for offset <- 0..(@weeks - 1) do
+    week = Date.add(first, 7 * offset)
+
+    @metrics
+    |> Map.new(&{&1, Map.get(by_week[&1], week, 0)})
+    |> Map.put(:week, week)
+  end
+end
+
+defp weekly(query), do: query |> Repo.all() |> Map.new()

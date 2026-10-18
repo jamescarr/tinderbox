@@ -1,0 +1,144 @@
+@moduledoc """
+Admin: is the concept working? The funnel from `<%= inspect(@prefix) %>.Analytics.Funnel` (visitors,
+waitlist, registrations, organizations, activations, paying customers) against
+the thresholds in `concept.exs`, the conversion between the steps, and the
+last eight weeks.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+alias <%= inspect(@prefix) %>.Analytics.Funnel
+alias <%= inspect(@web) %>.Admin.Layouts, as: AdminLayouts
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveAdmin, :require_admin}
+
+@labels [
+  visitors: "Visitors",
+  waitlist: "Waitlist",
+  registered: "Registered",
+  activated: "Activated",
+  paying: "Paying"
+]
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok, assign(socket, page_title: "Validation", funnel: Funnel.summary())}
+end
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <AdminLayouts.admin flash={@flash} current_user={@current_user} current_page={:validation}>
+    <div class="space-y-6">
+      <div id="verdict">
+        <.alert kind={verdict_kind(@funnel.verdict)} title={verdict_title(@funnel)}>
+          {verdict_detail(@funnel)}
+        </.alert>
+      </div>
+
+      <div id="funnel">
+        <.stat_grid>
+          <:stat label="Visitors" value={@funnel.visitors} hint={hint(@funnel, :visitors)} />
+          <:stat label="Waitlist" value={@funnel.waitlist} hint={hint(@funnel, :waitlist)} />
+          <:stat label="Registered" value={@funnel.registered} hint={hint(@funnel, :registered)} />
+          <:stat label="Organizations" value={@funnel.organizations} hint="no threshold" />
+          <:stat
+            label="Activated"
+            value={@funnel.activated}
+            hint={"#{@funnel.activation_event} · #{hint(@funnel, :activated)}"}
+          />
+          <:stat label="Paying" value={@funnel.paying} hint={hint(@funnel, :paying)} />
+          <:stat label="Active (7 d)" value={@funnel.active_7d} hint="signed in this week" />
+        </.stat_grid>
+      </div>
+
+      <.card>
+        <:title>Conversion</:title>
+        <.description_list>
+          <:item label="Visitor → waitlist">{percent(@funnel.rates.visit_to_waitlist)}</:item>
+          <:item label="Visitor → registered">{percent(@funnel.rates.visit_to_registered)}</:item>
+          <:item label="Registered → activated">
+            {percent(@funnel.rates.registered_to_activated)}
+          </:item>
+          <:item label="Activated → paying">{percent(@funnel.rates.activated_to_paying)}</:item>
+        </.description_list>
+      </.card>
+
+      <.card padded={false}>
+        <:title>By week</:title>
+        <div class="overflow-x-auto">
+          <table class="table" id="funnel-weeks">
+            <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+              <tr>
+                <th scope="col">Week of</th>
+                <th :for={{_metric, label} <- labels()} scope="col" class="text-right">{label}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={week <- @funnel.weeks}>
+                <td>{Calendar.strftime(week.week, "%b %-d, %Y")}</td>
+                <td :for={{metric, _label} <- labels()} class="text-right tabular-nums">
+                  {Map.fetch!(week, metric)}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </.card>
+    </div>
+  </AdminLayouts.admin>
+  """
+end
+
+defp labels, do: @labels
+
+defp hint(funnel, metric) do
+  case {funnel.checks[metric], funnel.thresholds[metric]} do
+    {:met, threshold} -> "✓ ≥ #{threshold}"
+    {:unmet, threshold} -> "#{threshold} needed"
+    {:none, _threshold} -> "no threshold"
+  end
+end
+
+defp percent(rate), do: format_number(rate * 100, precision: 1) <> "%"
+
+defp verdict_kind(:on_track), do: "success"
+defp verdict_kind(:below), do: "warning"
+defp verdict_kind(_too_early_or_none), do: "info"
+
+defp verdict_title(%{verdict: :on_track}), do: "On track: every threshold is met"
+
+defp verdict_title(%{verdict: :too_early} = funnel) do
+  {met, checked} = tally(funnel)
+
+  "Day #{funnel.days_elapsed + 1} of #{within_days(funnel)}: " <>
+    "#{met} of #{checked} thresholds met"
+end
+
+defp verdict_title(%{verdict: :below} = funnel),
+  do: "Below threshold after #{within_days(funnel)} days"
+
+defp verdict_title(%{verdict: :no_thresholds}),
+  do: "No thresholds yet: set `thresholds` in concept.exs and run `mix <%= @app %>.gen.concept`"
+
+defp verdict_detail(%{verdict: verdict} = funnel) when verdict in [:too_early, :below] do
+  unmet =
+    for {metric, label} <- @labels, funnel.checks[metric] == :unmet do
+      "#{label} #{Map.fetch!(funnel, metric)} of #{funnel.thresholds[metric]}"
+    end
+
+  "Short: " <> Enum.join(unmet, ", ") <> "."
+end
+
+defp verdict_detail(%{since: nil}), do: "Nothing recorded yet."
+
+defp verdict_detail(funnel),
+  do: "Counting since #{Calendar.strftime(funnel.since, "%b %-d, %Y")}."
+
+defp tally(funnel) do
+  checked = funnel.checks |> Map.values() |> Enum.reject(&(&1 == :none))
+  {Enum.count(checked, &(&1 == :met)), length(checked)}
+end
+
+defp within_days(funnel), do: funnel.thresholds[:within_days] || 30

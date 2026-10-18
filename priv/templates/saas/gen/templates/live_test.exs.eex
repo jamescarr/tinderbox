@@ -1,0 +1,74 @@
+defmodule <%= inspect(@web) %>.<%= @index_live %>Test do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  setup do
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  test "an owner adds a <%= String.downcase(@human_singular) %> and lands on it", %{
+    conn: conn,
+    owner: owner<%= if @test_organization? do %>,
+    organization: organization<% end %>
+  } do
+<%= for {var, call} <- @parents do %>    <%= var %> = <%= call %>
+<% end %>    conn = sign_in(conn, owner)
+
+    {:ok, index, _html} = live(conn, ~p"/<%= @route %>")
+    assert has_element?(index, "#new-<%= @singular %>")
+
+    {:ok, new_view, _html} = live(conn, ~p"/<%= @route %>/new")
+
+    {:ok, show, html} =
+      new_view
+      |> form("#<%= @singular %>-form", <%= @singular %>: <%= @form_params %>)
+      |> render_submit()
+      |> follow_redirect(conn)
+
+    assert html =~ "<%= @human_singular %> saved"<%= if @shown do %>
+    assert html =~ <%= @shown %><% end %>
+    assert has_element?(show, "#edit-<%= @singular %>")
+  end
+
+  test "an owner deletes one from the list", %{conn: conn, owner: owner, organization: organization} do
+    <%= @singular %> = <%= @singular %>_fixture(organization, owner)
+
+    {:ok, index, _html} = live(sign_in(conn, owner), ~p"/<%= @route %>")
+
+    index
+    |> element("#<%= @singular %>-#{<%= @singular %>.id} button", "Delete")
+    |> render_click()
+
+    refute has_element?(index, "#<%= @singular %>-#{<%= @singular %>.id}")
+  end
+
+  test "a member reads the list but cannot add", %{conn: conn, organization: organization} do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+    conn = sign_in(conn, member)
+
+    {:ok, index, _html} = live(conn, ~p"/<%= @route %>")
+    refute has_element?(index, "#new-<%= @singular %>")
+
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/<%= @route %>/new")
+  end
+
+  test "another organization's <%= String.downcase(@human_singular) %> is not found", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    <%= @singular %> = <%= @singular %>_fixture(organization, owner)
+    stranger = user_fixture()
+    organization_fixture(stranger, %{name: "Elsewhere"})
+
+    assert {:error, {:live_redirect, %{to: "/<%= @route %>", flash: flash}}} =
+             live(sign_in(conn, stranger), ~p"/<%= @route %>/#{<%= @singular %>.id}")
+
+    assert flash["error"] =~ "not found"
+  end
+end

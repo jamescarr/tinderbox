@@ -45,6 +45,7 @@ actions do
 
     change <%= inspect(@accounts) %>.Changes.SetSlug
     change <%= inspect(@accounts) %>.Changes.AddOwnerMembership
+    change {<%= inspect(@prefix) %>.Analytics.Changes.Track, event: "organization.created", organization: :self}
   end
 
   update :rename do

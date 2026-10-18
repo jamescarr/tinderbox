@@ -39,6 +39,8 @@ defmodule Mix.Tasks.Tinderbox.Install do
   * `--no-compose` skips `docker-compose.yml` / `.env.example`.
   * `--no-mise` skips `.mise.toml` (toolchain pins, environment, dev-loop tasks).
   * `--no-demo` skips the API stack's demo domain and resource (ignored by saas).
+  * `--deploy fly|none` (default `fly`): the SaaS stack's Fly.io files, runbook and
+    `mise run deploy`; the other stacks ignore it.
 
   The `ui` stack generates neither `docker-compose.yml` nor `.mise.toml`: it
   only adds the UI kit to the Phoenix project.
@@ -69,9 +71,10 @@ defmodule Mix.Tasks.Tinderbox.Install do
         compose: :boolean,
         mise: :boolean,
         demo: :boolean,
-        themepack: :string
+        themepack: :string,
+        deploy: :string
       ],
-      defaults: [broker: "sqs", compose: true, mise: true, demo: true],
+      defaults: [broker: "sqs", compose: true, mise: true, demo: true, deploy: "fly"],
       required: [:stack],
       # Keep the template out of the generated app's runtime dependencies.
       only: [:dev, :test],
@@ -123,7 +126,7 @@ defmodule Mix.Tasks.Tinderbox.Install do
       Igniter.compose_task(
         igniter,
         "tinderbox.gen.mise",
-        ["--stack", opts[:stack], "--broker", broker] ++
+        ["--stack", opts[:stack], "--broker", broker, "--deploy", opts[:deploy] || "fly"] ++
           if(opts[:compose], do: [], else: ["--no-compose"])
       )
     else

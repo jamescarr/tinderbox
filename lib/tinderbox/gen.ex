@@ -209,10 +209,11 @@ defmodule Tinderbox.Gen do
   @doc """
   The "what now?" notice a stack generator prints, matching the tooling that was
   generated: mise (`--no-mise` skips it), docker compose (`--no-compose` skips
-  it), or neither.
+  it), or neither. For the SaaS stack, `app` adds the step after that: writing
+  `concept.exs` and applying it with `mix <app>.gen.concept`.
   """
-  @spec next_steps(:api | :worker | :saas, Keyword.t()) :: String.t()
-  def next_steps(stack, opts) do
+  @spec next_steps(:api | :worker | :saas, Keyword.t(), atom() | nil) :: String.t()
+  def next_steps(stack, opts, app \\ nil) do
     serve = if stack == :worker, do: "mix run --no-halt", else: "mix phx.server"
     health = if stack == :worker, do: " (health: `mise run health`)", else: ""
 
@@ -220,18 +221,25 @@ defmodule Tinderbox.Gen do
       Keyword.get(opts, :mise, true) ->
         "Next: mise trust && mise run dev   # #{steps(opts)}, then #{serve}#{health}" <>
           saas_tail(stack, opts, "run `mise run stripe`") <>
+          concept_tail(stack, app, "mise exec -- ") <>
           "; `mise tasks` lists the rest"
 
       Keyword.get(opts, :compose, true) ->
         "Next: docker compose up -d --wait && cp .env.example .env && . ./.env && " <>
           "mix ash.setup && #{serve}" <>
           if(stack == :worker, do: "   (health: curl localhost:4001/health)", else: "") <>
-          saas_tail(stack, opts, nil)
+          saas_tail(stack, opts, nil) <>
+          concept_tail(stack, app, "")
 
       true ->
         "Next: mix ash.setup && #{serve}"
     end
   end
+
+  defp concept_tail(:saas, app, runner) when not is_nil(app),
+    do: "; then edit concept.exs and run `#{runner}mix #{app}.gen.concept`"
+
+  defp concept_tail(_stack, _app, _runner), do: ""
 
   # What to do once the SaaS app is up. The local SSO provider and the mail sink
   # are compose services, so there is nothing to say without compose.

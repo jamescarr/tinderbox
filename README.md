@@ -19,7 +19,12 @@ dev-loop tasks.
    email), Stripe subscriptions, an admin area, a JSON:API with OpenAPI docs and
    OAuth2 client-credentials connections for machines, JetStream domain events,
    feature flags, health, metrics and tracing, a release
-   `Dockerfile` and a CI workflow — every page built on the themepack UI kit.
+   `Dockerfile` and a CI workflow — every page built on the themepack UI kit. On top
+   of that, what a venture studio needs to launch a business and judge it: a landing
+   page and waitlist drawn from `concept.exs`, first-party analytics and a validation
+   funnel at `/admin/validation`, the project's own generators
+   (`mix <app>.gen.concept`, `.gen.live`, `.gen.resource`, `.gen.domain`) and a Fly.io
+   deployment.
 
 Separately, **`mix tinderbox.gen.ui`** adds that UI kit to any Phoenix LiveView
 project (`--stack ui` on install): a themeable component library, an app shell
@@ -105,6 +110,7 @@ mix phx.server                     # or: mix run --no-halt
 | `--no-compose` | both | compose generated | skip `docker-compose.yml` / `.env.example` |
 | `--no-mise` | both | mise generated | skip `.mise.toml` |
 | `--no-demo` | api | demo generated | skip the demo `Catalog` domain + `Catalog.Item` resource |
+| `--deploy fly\|none` | saas | `fly` | `fly.toml`, `fly/nats/fly.toml`, the README's Fly.io runbook, flyctl and `mise run deploy`; `none` leaves them out |
 | `--no-db` | `tinderbox.gen.compose`, `tinderbox.gen.mise` | Postgres service | skip the Postgres service and `DATABASE_URL` |
 
 The individual tasks (`tinderbox.gen.api`, `.worker`, `.saas`, `.compose`, `.mise`) can
@@ -296,9 +302,46 @@ Ash packages the other stacks use, then adds:
   on its next request. A connection has no scopes: it reads what the read policies
   allow it, and `<App>.Accounts.Organization` lets it read its own organization.
 * **Admin** — `/admin` (the UI kit, in the app shell): dashboard, users, organizations (and one
-  organization), subscriptions, and the FunWithFlags dashboard at `/admin/flags`.
-  Only `:admin` users get in: anyone else is sent to the dashboard, the flag
-  dashboard answers `404`, and an anonymous visitor goes to sign-in.
+  organization), subscriptions, validation, the waitlist, and the FunWithFlags
+  dashboard at `/admin/flags`. Only `:admin` users get in: anyone else is sent to the
+  dashboard, the flag dashboard and the waitlist CSV answer `404`, and an anonymous
+  visitor goes to sign-in.
+* **The concept** — `concept.exs` at the project root is the business on one page:
+  name, tagline, description, call to action (`:waitlist` or `:register`), value
+  propositions, plans, the Ash domain and its resources, the activation event and the
+  validation thresholds. `mix <app>.gen.concept` checks it (every problem reported at
+  once), rewrites `<App>.Concept` from it, and generates the resources that are new
+  (with `nav`, their pages too) with one migration. The landing page, the app shell's
+  brand and the browser tab are drawn from `<App>.Concept`; until the task runs it
+  says what the stack does.
+* **Validation** — first-party analytics in Postgres: `<App>.Analytics.track/3` and
+  `change {<App>.Analytics.Changes.Track, event: …}` record named events (a landing
+  view with its `utm_*` and referrer, a waitlist sign-up, a sign-in, an organization,
+  every generated resource's `<name>.created`); a visitor cookie
+  (`<App>Web.Plugs.Visitor`) counts distinct visitors; the landing page's waitlist
+  (`POST /waitlist`, one row per address) is listed at `/admin/waitlist` and exported
+  at `/admin/waitlist.csv`. `/admin/validation` (`<App>.Analytics.Funnel`) shows
+  visitors → waitlist → registered → organizations → activated → paying, the
+  conversion between them, the last eight weeks, and a verdict against the
+  thresholds: on track, too early (day N of `within_days`), or below.
+* **The project's generators** — `tinderbox` leaves the project, so its generators
+  stay: `mix <app>.gen.resource <App>.Things.Thing name:string:required
+  status:enum:a,b owner:belongs_to:User …` (an organization-scoped resource: owners
+  and admins write, members read, platform admins bypass; `SameOrganization` on
+  references; a `<thing>.created` event; `[:organization_id, :inserted_at]` and every
+  `belongs_to` column indexed; its fixture and migration), `mix
+  <app>.gen.live` (the same, plus list, show and form pages that read at most 1000
+  rows, routes, a navigation
+  entry and a test), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
+  templates are copied into `priv/templates/<app>.gen/` for the project to edit; the
+  shared code (`Mix.<App>.Gen`) has no Igniter in it and the tasks compile to a
+  `Mix.raise` in production.
+* **Fly.io** (`--deploy fly`, the default) — `fly.toml` (the release image,
+  `bin/migrate` as the release command over `DIRECT_DATABASE_URL` when set, the
+  IPv6/PgBouncer/Tigris/Resend environment the runtime config reads, an always-on
+  machine checked at `/health`), `fly/nats/fly.toml` (JetStream on a volume, on the
+  private network only), flyctl in `.mise.toml`, `mise run deploy`, and a one-time
+  runbook in the project README (apps, NATS volume, Managed Postgres, Tigris, secrets).
 * **Feature flags** — FunWithFlags stored through `<App>.Repo`, cache busting over
   `<App>.PubSub`; users are actors and organizations are groups
   (`<App>.FeatureFlags`). Both packages are `runtime: false` dependencies and a
@@ -320,16 +363,18 @@ Ash packages the other stacks use, then adds:
   managers after the transaction commits; a failure is logged, never undoes the
   change);
   `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
-  shared by the organization pages); a `:require_manager` hook in
+  `format_value/1`, `display_name/1`, shared by the organization pages); the kit's
+  `humanize/1` and `format_number/2` (grouped thousands, `compact: true` for
+  `112.4M`); a `:require_manager` hook in
   `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
   for pages made of tables and `current_page` to highlight its navigation entry;
   `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
   the application's own metrics; `<App>.Fixtures` and
   `<App>Web.LiveTestHelpers.sign_in/2` in `test/support`, used by
-  `test/<app>_web/live/members_live_test.exs`; `mix <app>.gen.domain`, which runs
-  `ash.gen.domain`, registers the domain in `ash_domains` and adds its `--queues` to
-  the Oban config; and a `README.md` in place of Phoenix's (running it,
-  configuration, and these conventions), written once.
+  `test/<app>_web/live/members_live_test.exs`, with `admin_fixture/1`,
+  `signup_fixture/1` and `event_fixture/2` beside them; and a `README.md` in place of
+  Phoenix's (running it, configuration, validation, deploying, and these
+  conventions), written once.
 
 In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
@@ -643,7 +688,8 @@ Beyond that, generated projects were run end to end against the emulators:
   in `mix ash.codegen` (`Multiple actions (2) with the name read` on
   `Accounts.UserIdentity`, which the AshAuthentication installer helper creates; `main`
   fails the same way), so that run pinned `{:ash, "== 3.35.0"}` and ran the three
-  tasks the generator had queued by hand. Compose came up
+  tasks the generator had queued by hand (the generator has since removed that
+  `defaults [:read]`; see the studio_demo run below). Compose came up
   with `hydra` healthy and `hydra-db` / `hydra-migrate` exited 0, discovery answering
   `jwks_uri` `http://localhost:4444/.well-known/jwks.json`. Under `mise run dev`, in a
   browser: **API connections** in the sidebar, creating `CI` showed the client id,
@@ -681,6 +727,22 @@ Beyond that, generated projects were run end to end against the emulators:
   `delete` `:ok`. `InheritOrganization`, `SameOrganization` and `NotifyManagers` are
   exercised by trust_manage's suite, which runs the same module bodies. No connection
   to a real SMTP relay, PgBouncer or Fly network was made.
+* **saas concept → validated scaffold (`studio_demo`)** — generated from this branch
+  with a fresh resolution (ash 3.36.1: the generator now drops the identity
+  resource's `defaults [:read]`, so `ash.codegen` runs without a pin): 63 tests on the
+  untouched scaffold. With a `concept.exs` of two resources (`Project` with an enum
+  and a decimal, `Task` belonging to it), `mix studio_demo.gen.concept` wrote the
+  concept, the domain, both resources, six pages, eight routes, two sidebar entries,
+  fixtures, tests and one `add_core` migration in 7 s; `mise run check` passed 71
+  tests and `MIX_ENV=prod mix compile --force --warnings-as-errors` was clean.
+  Re-running either task changed nothing; a resource with one attribute of every
+  type passed its generated tests too. In a browser: the landing page from the
+  concept (tab `<tagline> · Studio Demo`), a waitlist sign-up carrying `utm_*`, an
+  owner creating `Alpha` (`Active`, `1,500.00`) and a task under it, a member who could
+  read but not add (and got `404` from the CSV), and `/admin/validation` reading
+  "Day 1 of 30: 3 of 5 thresholds met". `docker build .` passed; in the image, fly.toml's
+  release command migrated and the release answered `/health`. The Fly deployment
+  itself was not run. Details: `docs/feedback/studio-demo.md`.
 
 Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
 runs were made on never gated `.mise.toml` (a config with templates and hooks was

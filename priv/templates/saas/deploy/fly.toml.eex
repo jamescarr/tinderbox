@@ -1,0 +1,63 @@
+# <%= @app_dash %> on Fly.io. The one-time setup (apps, NATS, Postgres, storage,
+# secrets) is in the README, "Deploying to Fly.io"; after that, `mise run deploy`.
+#
+# Secrets (flyctl secrets set), not here: DATABASE_URL (flyctl mpg attach),
+# DIRECT_DATABASE_URL, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (flyctl storage
+# create), SECRET_KEY_BASE, TOKEN_SIGNING_SECRET, CLOAK_KEY, SMTP_PASSWORD,
+# ADMIN_EMAILS, SSO_BASE_URL, SSO_CLIENT_ID, SSO_CLIENT_SECRET and the STRIPE_* keys.
+app = "<%= @app_dash %>"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+
+[build]
+
+# Migrations take a lock PgBouncer's transaction mode cannot hold, so they use the
+# direct connection when DIRECT_DATABASE_URL is set.
+[deploy]
+  release_command = "/bin/sh -c 'DATABASE_URL=${DIRECT_DATABASE_URL:-$DATABASE_URL} exec /app/bin/migrate'"
+
+[env]
+  PHX_HOST = "<%= @app_dash %>.fly.dev"
+  PHX_SERVER = "true"
+  PORT = "8080"
+  # Fly's private network (Postgres, NATS, other nodes) is IPv6-only.
+  ECTO_IPV6 = "true"
+  ERL_AFLAGS = "-proto_dist inet6_tcp"
+  DNS_CLUSTER_QUERY = "<%= @app_dash %>.internal"
+  # Managed Postgres sits behind PgBouncer: unnamed prepared statements, Oban's PG notifier.
+  DATABASE_POOLER = "pgbouncer"
+  NATS_HOST = "<%= @app_dash %>-nats.internal"
+  NATS_PORT = "4222"
+  NATS_INET6 = "true"
+  STORAGE_BACKEND = "s3"
+  S3_BUCKET = "<%= @app_dash %>-storage"
+  AWS_ENDPOINT_URL = "https://fly.storage.tigris.dev"
+  AWS_REGION = "auto"
+  SMTP_HOST = "smtp.resend.com"
+  SMTP_PORT = "587"
+  SMTP_USERNAME = "resend"
+  MAIL_FROM = "noreply@<%= @app_dash %>.fly.dev"
+  SSO_REDIRECT_URI = "https://<%= @app_dash %>.fly.dev/auth"
+  OAUTH_AUDIENCE = "https://<%= @app_dash %>.fly.dev/api"
+  MFA_REQUIRED = "false"
+  MFA_SSO = "local"
+  OTEL_SERVICE_NAME = "<%= @app %>"
+
+# Oban's cron and the NATS consumer need a running node: never stop the machine.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

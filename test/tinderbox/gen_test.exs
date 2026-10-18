@@ -43,7 +43,7 @@ defmodule Tinderbox.GenTest do
     end
   end
 
-  describe "next_steps/2" do
+  describe "next_steps/3" do
     test "points at mise by default, and names what it runs" do
       assert Gen.next_steps(:api, []) =~ "mise trust && mise run dev"
       assert Gen.next_steps(:api, []) =~ "mix phx.server"
@@ -62,6 +62,14 @@ defmodule Tinderbox.GenTest do
     test "does not promise services when compose was skipped" do
       assert Gen.next_steps(:api, compose: false) =~ "sets up the database"
       refute Gen.next_steps(:api, compose: false) =~ "starts the services"
+    end
+
+    test "the SaaS stack's next step after the services is the concept" do
+      assert Gen.next_steps(:saas, [], :acme) =~
+               "then edit concept.exs and run `mise exec -- mix acme.gen.concept`; `mise tasks`"
+
+      assert Gen.next_steps(:saas, [mise: false], :acme) =~ "run `mix acme.gen.concept`"
+      refute Gen.next_steps(:api, [], :acme) =~ "concept"
     end
   end
 

@@ -1,0 +1,66 @@
+@moduledoc """
+Records an analytics event when the action succeeds:
+
+    change {<%= inspect(@prefix) %>.Analytics.Changes.Track, event: "project.created"}
+
+The actor is the event's user, the record's `organization_id` its organization
+(`organization: :self` on the organization resource itself, whose own id it
+is), and the record's id goes in the properties.
+
+On an update action set `require_atomic? false`: the change only adds a hook, but it
+does not implement `atomic/3`, so Ash refuses it in an atomic update.
+
+This runs after the transaction, not in it: an event is about something that
+happened, and a rolled-back action did not. A failure is logged and never undoes
+the change.
+"""
+
+use Ash.Resource.Change
+
+require Logger
+
+alias <%= inspect(@prefix) %>.Analytics
+
+@impl true
+def init(opts) do
+  case {opts[:event], Keyword.get(opts, :organization, :organization_id)} do
+    {event, organization} when is_binary(event) and organization in [:organization_id, :self] ->
+      {:ok, Keyword.put(opts, :organization, organization)}
+
+    _invalid ->
+      {:error, ~s|expected `event: "thing.done"` and optionally `organization: :self`|}
+  end
+end
+
+@impl true
+def change(changeset, opts, context) do
+  event = Keyword.fetch!(opts, :event)
+  organization = Keyword.fetch!(opts, :organization)
+
+  Ash.Changeset.after_transaction(changeset, fn
+    _changeset, {:ok, record} = result ->
+      track(event, record, organization, context.actor)
+      result
+
+    _changeset, error ->
+      error
+  end)
+end
+
+defp track(event, record, organization, actor) do
+  organization_id =
+    case organization do
+      :self -> record.id
+      :organization_id -> Map.get(record, :organization_id)
+    end
+
+  Analytics.track(event, %{user: user(actor), organization_id: organization_id}, %{
+    "id" => record.id
+  })
+rescue
+  error -> Logger.warning("analytics #{event} failed: " <> Exception.message(error))
+end
+
+# An API connection can be the actor too; only a user is an event's user.
+defp user(actor) when is_struct(actor, <%= inspect(@user) %>), do: actor
+defp user(_actor), do: nil

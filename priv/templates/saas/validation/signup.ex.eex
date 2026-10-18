@@ -1,0 +1,65 @@
+@moduledoc """
+One email address on the waitlist. Joining twice keeps the first row (and its
+source): `:join` is an upsert on the email that changes nothing.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@prefix) %>.Waitlist,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer]
+
+postgres do
+  table "waitlist_signups"
+  repo <%= inspect(@repo) %>
+end
+
+actions do
+  defaults [:read]
+
+  create :join do
+    accept [:email, :anonymous_id, :source, :medium, :campaign, :referrer]
+
+    upsert? true
+    upsert_identity :unique_email
+    upsert_fields []
+
+    change {<%= inspect(@prefix) %>.Analytics.Changes.Track, event: "waitlist.joined"}
+  end
+end
+
+policies do
+  bypass actor_attribute_equals(:role, :admin) do
+    authorize_if always()
+  end
+
+  policy action(:join) do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    forbid_if always()
+  end
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :email, :ci_string do
+    allow_nil? false
+    public? true
+    constraints match: ~r/^[^\s@]+@[^\s@]+$/
+  end
+
+  attribute :anonymous_id, :string, public?: true
+  attribute :source, :string, public?: true
+  attribute :medium, :string, public?: true
+  attribute :campaign, :string, public?: true
+  attribute :referrer, :string, public?: true
+
+  create_timestamp :inserted_at
+end
+
+identities do
+  identity :unique_email, [:email]
+end

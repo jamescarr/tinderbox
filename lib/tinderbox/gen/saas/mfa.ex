@@ -54,13 +54,19 @@ defmodule Tinderbox.Gen.Saas.Mfa do
   def apply(igniter, assigns) do
     accounts = assigns[:accounts]
 
+    # A sign-in is an analytics event where there is analytics: in a newly generated
+    # project, not in one `mix tinderbox.gen.mfa` brings up to date.
+    {analytics?, igniter} =
+      Igniter.Project.Module.module_exists(igniter, Module.concat(assigns[:prefix], "Analytics"))
+
     assigns =
       Keyword.merge(assigns,
         vault: Module.concat(assigns[:prefix], "Vault"),
         mfa: Module.concat(accounts, "MFA"),
         mfa_factor: Module.concat(accounts, "MfaFactor"),
         record_sso_assurance: Module.concat([accounts, Changes, RecordSsoAssurance]),
-        auth_controller: Module.concat(assigns[:web], "AuthController")
+        auth_controller: Module.concat(assigns[:web], "AuthController"),
+        analytics?: analytics?
       )
 
     igniter
@@ -325,12 +331,7 @@ defmodule Tinderbox.Gen.Saas.Mfa do
              ~s(subscriptions: "Subscriptions"),
              ~s(subscriptions: "Subscriptions",\nsecurity: "Security")
            ),
-         {:ok, content} <-
-           replace_once(
-             content,
-             ":organizations, :subscriptions]",
-             ":organizations, :subscriptions, :security]"
-           ),
+         {:ok, content} <- add_page_value(content, ":security"),
          new when is_binary(new) <-
            insert_line(content, ~s(<.nav_item href={~p"/admin/flags"}), @admin_nav_entry, :before) do
       {:ok, new}
@@ -343,6 +344,18 @@ defmodule Tinderbox.Gen.Saas.Mfa do
          "Could not add the Two-factor page to #{inspect(admin_layouts)}: add :security to " <>
            "@titles and to current_page's values, and a nav_item for " <>
            ~s(~p"/admin/security".)}
+    end
+  end
+
+  # `current_page`'s `values:` list, which other pages (validation, waitlist) may
+  # extend after `:subscriptions`; the formatter may have broken it over lines.
+  @page_values ~r/(values: \[[^\]]*?:subscriptions)/
+
+  defp add_page_value(content, value) do
+    if Regex.match?(@page_values, content) do
+      {:ok, Regex.replace(@page_values, content, "\\1, #{value}", global: false)}
+    else
+      :error
     end
   end
 
