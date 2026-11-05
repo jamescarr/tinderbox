@@ -130,7 +130,7 @@ def render(assigns) do
           field={@form[<%= inspect(attribute.field) %>]}
           type="select"
           label=<%= inspect(@gen.humanize(attribute.name)) %>
-          options={Enum.map(<%= inspect(attribute.values) %>, &{humanize(&1), &1})}
+          options={enum_options(<%= inspect(attribute.values) %>)}
         /><% :relation -> %><.input
           field={@form[<%= inspect(attribute.field) %>]}
           type="select"

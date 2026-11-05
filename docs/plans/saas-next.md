@@ -33,7 +33,7 @@ Checklist for `/plan-loop`. Each bullet is one PR against `main`. The sections u
 
 - [ ] `LiveHelpers.report/3` takes the socket first, like `put_flash`
 - [ ] `gen.live` seeds required date and datetime fields on the new-record form
-- [ ] UI kit `enum_options/2` and `gen.live` selects use it
+- [x] UI kit `enum_options/2` and `gen.live` selects use it
 - [ ] UI kit `bar_list` component, and the modal doc shows the server-opened pattern
 - [ ] Landing pricing grid fits the number of plans
 - [ ] Activity feed: versions of organization-scoped resources on `/activity`, and `gen.resource` tracks versions
