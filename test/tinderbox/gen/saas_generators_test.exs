@@ -218,7 +218,7 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert_has(form, "on_mount {TestWeb.LiveOrganization, :require_manager}")
       assert_has(form, ~s|id="project-form"|)
       assert_has(form, ~s|step="0.01"|)
-      assert_has(form, "options={Enum.map([:draft, :active], &{humanize(&1), &1})}")
+      assert_has(form, "options={enum_options([:draft, :active])}")
       assert_has(form, "options={@owner_options}")
       assert_has(form, ~s|prompt="Choose…"|)
 
