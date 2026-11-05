@@ -362,7 +362,7 @@ Ash packages the other stacks use, then adds:
   another organization) and `<App>.Accounts.Changes.NotifyManagers` (notify the
   managers after the transaction commits; a failure is logged, never undoes the
   change);
-  `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
+  `<App>Web.LiveHelpers` (`find/4`, `report/3` (`socket |> report(result, msg)`), `manager?/1`, `error_message/1`,
   `format_value/1`, `display_name/1`, shared by the organization pages); the kit's
   `humanize/1` and `format_number/2` (grouped thousands, `compact: true` for
   `112.4M`); a `:require_manager` hook in
