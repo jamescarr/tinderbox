@@ -380,6 +380,7 @@ defmodule <%= @support_module %> do
           do: {to_string(relation.name), "#{fixture_name(target)}(organization, owner)"}
         ),
       form_params: form_params(scalars, required),
+      seeded: seeded(scalars),
       test_organization?: Enum.any?(required, &(&1.target != @user)),
       shown:
         Enum.find_value(scalars, fn attribute ->
@@ -407,5 +408,14 @@ defmodule <%= @support_module %> do
         end
 
     "%{" <> Enum.map_join(values, ", ", fn {key, value} -> "#{key}: #{value}" end) <> "}"
+  end
+
+  # What the new-record form starts with: a date input posts "" for an untouched
+  # field, which Ash reads as nil, so a required `date` or `datetime` is filled
+  # with today (or now) up front. `{name, expression}`, rendered into the form's params.
+  defp seeded(scalars) do
+    for %{required?: true, input: input} = attribute <- scalars, input in [:date, :datetime] do
+      {attribute.name, sample_value(attribute, :form)}
+    end
   end
 end
