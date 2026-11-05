@@ -2,7 +2,14 @@ defmodule <%= inspect(@web) %>.UI.ComponentsTest do
   use ExUnit.Case, async: true
 
   import <%= inspect(@web) %>.UI.Components,
-    only: [enum_options: 1, enum_options: 2, format_number: 1, format_number: 2, humanize: 1]
+    only: [
+      bar_list_share: 2,
+      enum_options: 1,
+      enum_options: 2,
+      format_number: 1,
+      format_number: 2,
+      humanize: 1
+    ]
 
   # Decimal comes with Ecto; a project without it has nothing to format.
   @compile {:no_warn_undefined, Decimal}
@@ -11,6 +18,11 @@ defmodule <%= inspect(@web) %>.UI.ComponentsTest do
     test "a decimal gets two places and grouped thousands" do
       assert format_number(Decimal.new("1234567.8")) == "1,234,567.80"
       assert format_number(Decimal.new("-0.5")) == "-0.50"
+    end
+
+    test "bar_list_share reads decimals too" do
+      assert bar_list_share(Decimal.new("25"), Decimal.new("100")) == 25
+      assert bar_list_share(Decimal.new("1"), Decimal.new("0")) == 0
     end
   end
 
@@ -32,5 +44,12 @@ defmodule <%= inspect(@web) %>.UI.ComponentsTest do
 
     assert enum_options([:draft, :llc], labels: %{llc: "LLC"}) ==
              [{"Draft", :draft}, {"LLC", :llc}]
+  end
+
+  test "bar_list_share is a value's percentage of the total, and 0 without a total" do
+    assert bar_list_share(25, 100) == 25
+    assert bar_list_share(1, 3) == 33.33
+    assert bar_list_share(1, 0) == 0
+    assert bar_list_share(150, 100) == 100
   end
 end
