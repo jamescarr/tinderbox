@@ -603,6 +603,20 @@ def humanize(value) when is_atom(value) or is_binary(value) do
 end
 
 @doc """
+Select options for an enum: `[{label, value}]` with `humanize/1` labels, and
+`labels:` for the ones it gets wrong.
+
+## Examples
+
+    enum_options([:draft, :llc], labels: %{llc: "LLC"})  #=> [{"Draft", :draft}, {"LLC", :llc}]
+"""
+@spec enum_options([atom() | String.t()], keyword()) :: [{String.t(), atom() | String.t()}]
+def enum_options(values, opts \\ []) do
+  labels = Keyword.get(opts, :labels, %{})
+  Enum.map(values, &{Map.get(labels, &1, humanize(&1)), &1})
+end
+
+@doc """
 A number for people, with thousands grouped by commas: `1,234,567.80`.
 
   * `precision:` - decimal places; 2 for decimals and floats, 0 for integers,
