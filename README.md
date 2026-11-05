@@ -313,7 +313,8 @@ Ash packages the other stacks use, then adds:
   once), rewrites `<App>.Concept` from it, and generates the resources that are new
   (with `nav`, their pages too) with one migration. The landing page, the app shell's
   brand and the browser tab are drawn from `<App>.Concept`; until the task runs it
-  says what the stack does.
+  says what the stack does. The landing page's value propositions and pricing grids
+  fit the count (one centered, two side by side, three or more in columns).
 * **Validation** — first-party analytics in Postgres: `<App>.Analytics.track/3` and
   `change {<App>.Analytics.Changes.Track, event: …}` record named events (a landing
   view with its `utm_*` and referrer, a waitlist sign-up, a sign-in, an organization,
