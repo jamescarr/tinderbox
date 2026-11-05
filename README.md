@@ -332,8 +332,8 @@ Ash packages the other stacks use, then adds:
   references; a `<thing>.created` event; `[:organization_id, :inserted_at]` and every
   `belongs_to` column indexed; its fixture and migration), `mix
   <app>.gen.live` (the same, plus list, show and form pages that read at most 1000
-  rows, routes, a navigation
-  entry and a test), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
+  rows, routes, a navigation entry and a test; its form prefills required `date` and
+  `datetime` fields with today/now), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
   templates are copied into `priv/templates/<app>.gen/` for the project to edit; the
   shared code (`Mix.<App>.Gen`) has no Igniter in it and the tasks compile to a
   `Mix.raise` in production.
