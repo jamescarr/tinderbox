@@ -21,12 +21,16 @@ end
 
 @doc """
 Flashes `message` when an action succeeded, or what went wrong when it did not.
+
+The socket comes first, like `put_flash`: `socket |> report(result, "Saved")`
+reads the same way, and the old `result |> report(socket, …)` order failed at
+runtime when the socket was piped in.
 """
-@spec report(:ok | {:ok, term()} | {:error, term()}, Phoenix.LiveView.Socket.t(), String.t()) ::
+@spec report(Phoenix.LiveView.Socket.t(), :ok | {:ok, term()} | {:error, term()}, String.t()) ::
         Phoenix.LiveView.Socket.t()
-def report(:ok, socket, message), do: put_flash(socket, :info, message)
-def report({:ok, _record}, socket, message), do: put_flash(socket, :info, message)
-def report({:error, error}, socket, _message), do: put_flash(socket, :error, error_message(error))
+def report(socket, :ok, message), do: put_flash(socket, :info, message)
+def report(socket, {:ok, _record}, message), do: put_flash(socket, :info, message)
+def report(socket, {:error, error}, _message), do: put_flash(socket, :error, error_message(error))
 
 @doc "Whether a membership is an owner's or an admin's."
 @spec manager?(map() | nil) :: boolean()

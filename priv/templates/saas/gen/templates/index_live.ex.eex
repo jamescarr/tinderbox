@@ -52,8 +52,8 @@ def handle_event("delete", %{"id" => id}, socket) do
     end
 
   {:noreply,
-   result
-   |> report(socket, <%= inspect(@human_singular <> " deleted") %>)
+   socket
+   |> report(result, <%= inspect(@human_singular <> " deleted") %>)
    |> load()
    |> run(socket.assigns.table)}
 end

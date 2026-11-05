@@ -345,6 +345,13 @@ defmodule Tinderbox.Gen.SaasTest do
        %{igniter: igniter} do
     assert_has(source(igniter, "lib/test_web/live_helpers.ex"), "def manager?(%{role: role})")
 
+    assert_has(
+      source(igniter, "lib/test_web/live_helpers.ex"),
+      "def report(socket, :ok, message)"
+    )
+
+    assert_has(source(igniter, "lib/test_web/members_live.ex"), "socket |> report(result")
+
     for page <- ~w(members_live invitation_live billing_live) do
       live_view = source(igniter, "lib/test_web/#{page}.ex")
 
