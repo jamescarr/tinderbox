@@ -331,8 +331,8 @@ Ash packages the other stacks use, then adds:
   references; a `<thing>.created` event; `[:organization_id, :inserted_at]` and every
   `belongs_to` column indexed; its fixture and migration), `mix
   <app>.gen.live` (the same, plus list, show and form pages that read at most 1000
-  rows, routes, a navigation
-  entry and a test), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
+  rows, routes, a navigation entry and a test; its form prefills required `date` and
+  `datetime` fields with today/now), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
   templates are copied into `priv/templates/<app>.gen/` for the project to edit; the
   shared code (`Mix.<App>.Gen`) has no Igniter in it and the tasks compile to a
   `Mix.raise` in production.
@@ -362,7 +362,7 @@ Ash packages the other stacks use, then adds:
   another organization) and `<App>.Accounts.Changes.NotifyManagers` (notify the
   managers after the transaction commits; a failure is logged, never undoes the
   change);
-  `<App>Web.LiveHelpers` (`find/4`, `report/3`, `manager?/1`, `error_message/1`,
+  `<App>Web.LiveHelpers` (`find/4`, `report/3` (`socket |> report(result, msg)`), `manager?/1`, `error_message/1`,
   `format_value/1`, `display_name/1`, shared by the organization pages); the kit's
   `humanize/1`, `format_number/2` (grouped thousands, `compact: true` for
   `112.4M`) and `enum_options/2` (select options for an enum); a `:require_manager`

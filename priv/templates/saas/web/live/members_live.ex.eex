@@ -60,7 +60,7 @@ def handle_event("change_role", %{"membership_id" => id, "role" => role}, socket
       Ash.update(membership, %{role: role}, action: :change_role, actor: user)
     end
 
-  {:noreply, result |> report(socket, "Role updated") |> load()}
+  {:noreply, socket |> report(result, "Role updated") |> load()}
 end
 
 def handle_event("remove", %{"id" => id}, socket) do
@@ -71,7 +71,7 @@ def handle_event("remove", %{"id" => id}, socket) do
       Ash.destroy(membership, actor: user)
     end
 
-  {:noreply, result |> report(socket, "Member removed") |> load()}
+  {:noreply, socket |> report(result, "Member removed") |> load()}
 end
 
 def handle_event("revoke", %{"id" => id}, socket) do
@@ -82,7 +82,7 @@ def handle_event("revoke", %{"id" => id}, socket) do
       Ash.destroy(invitation, actor: user)
     end
 
-  {:noreply, result |> report(socket, "Invitation revoked") |> load()}
+  {:noreply, socket |> report(result, "Invitation revoked") |> load()}
 end
 
 @impl true

@@ -205,8 +205,8 @@ be reached; everything else works.
   organization itself, `id == …`) when connections should read the resource.
 * New organization pages mount `<%= inspect(@web) %>.LiveOrganization`
   (`:require_organization`, or `:require_manager` for owner/admin-only pages) and
-  import `<%= inspect(@web) %>.LiveHelpers` (`find/4`, `report/3`, `manager?/1`,
-  `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables, and
+  import `<%= inspect(@web) %>.LiveHelpers` (`find/4`, `report/3` (`socket |> report(result, msg)`),
+  `manager?/1`, `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables, and
   `current_page` to highlight its entry; add the entry to the `:nav` slot in
   `<%= inspect(@web) %>.Layouts.app/1`.
 * A sign-in is finished by `<%= inspect(@web) %>.AuthController`, which asks
@@ -254,6 +254,8 @@ be reached; everything else works.
   Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,
   `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `enum:a,b,c` and
   `belongs_to:Target` (`User`, another resource of the domain, or a full module name).
+  A required `date` or `datetime` is prefilled with today (now) on the new-record
+  form, since an untouched date input posts `""`, which Ash reads as nil.
   Generated resources are written by the organization's owners and admins and read
   by its members; platform admins do anything unless `--no-admin-bypass`. The files
   they are rendered from are in `priv/templates/<%= @app %>.gen/` and are this

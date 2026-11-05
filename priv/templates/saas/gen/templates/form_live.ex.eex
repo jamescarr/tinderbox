@@ -35,7 +35,7 @@ defp apply_action(socket, :new, _params) do
     |> AshPhoenix.Form.for_create(:create,
       actor: user,
       as: <%= inspect(@singular) %>,
-      params: %{"organization_id" => organization.id}
+      params: %{"organization_id" => organization.id<%= for {name, expression} <- @seeded do %>, <%= inspect(to_string(name)) %> => <%= expression %><% end %>}
     )
     |> to_form()
 

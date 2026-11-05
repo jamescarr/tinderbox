@@ -213,6 +213,7 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert_has(index, ~s|id="new-project"|)
       assert_has(index, "display_name(project.owner)")
       assert_has(index, "Ash.Query.limit(@limit)")
+      assert_has(index, "socket |> report(result")
 
       form = source(igniter, "lib/test_web/live/project_form_live.ex")
       assert_has(form, "on_mount {TestWeb.LiveOrganization, :require_manager}")
@@ -230,6 +231,37 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert_has(test, ~s|project: %{name: "Sample name", status: "draft", budget: "10.00"}|)
 
       assert igniter.issues == []
+    end
+
+    test "seeds required date and datetime fields on the new-record form", %{files: files} do
+      igniter =
+        gen(
+          project(files),
+          Live,
+          ~w(Test.Projects.Milestone name:string:required due_on:date:required starts_at:datetime:required)
+        )
+
+      form = source(igniter, "lib/test_web/live/milestone_form_live.ex")
+      assert_has(form, ~s|"due_on" => Date.to_iso8601(Date.utc_today())|)
+
+      assert_has(
+        form,
+        ~s|"starts_at" => Calendar.strftime(DateTime.utc_now(), "%Y-%m-%dT%H:%M")|
+      )
+
+      assert order(form, ~s|"organization_id" => organization.id|) <
+               order(form, ~s|"due_on" =>|)
+    end
+
+    test "seeds nothing for optional dates or other types", %{files: files, igniter: igniter} do
+      refute_has(source(igniter, "lib/test_web/live/project_form_live.ex"), "utc_today")
+
+      optional =
+        gen(project(files), Live, ~w(Test.Projects.Milestone name:string:required due_on:date))
+
+      form = source(optional, "lib/test_web/live/milestone_form_live.ex")
+      refute_has(form, ~s|"due_on" =>|)
+      assert_has(form, ~s|params: %{"organization_id" => organization.id}|)
     end
 
     test "routes the pages inside the signed-in session, new before :id", %{igniter: igniter} do

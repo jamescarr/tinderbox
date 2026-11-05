@@ -71,7 +71,7 @@ def handle_event("revoke", %{"id" => id}, socket) do
       Ash.update(connection, %{}, action: :revoke, actor: user)
     end
 
-  {:noreply, result |> report(socket, "Connection revoked") |> load()}
+  {:noreply, socket |> report(result, "Connection revoked") |> load()}
 end
 
 def handle_event("dismiss", _params, socket) do
