@@ -31,7 +31,7 @@ Checklist for `/plan-loop`. Each bullet is one PR against `main`. The sections u
 
 ## Checklist
 
-- [ ] `LiveHelpers.report/3` takes the socket first, like `put_flash`
+- [x] `LiveHelpers.report/3` takes the socket first, like `put_flash`
 - [ ] `gen.live` seeds required date and datetime fields on the new-record form
 - [x] UI kit `enum_options/2` and `gen.live` selects use it
 - [ ] UI kit `bar_list` component, and the modal doc shows the server-opened pattern

@@ -213,6 +213,7 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert_has(index, ~s|id="new-project"|)
       assert_has(index, "display_name(project.owner)")
       assert_has(index, "Ash.Query.limit(@limit)")
+      assert_has(index, "socket |> report(result")
 
       form = source(igniter, "lib/test_web/live/project_form_live.ex")
       assert_has(form, "on_mount {TestWeb.LiveOrganization, :require_manager}")
