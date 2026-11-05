@@ -251,6 +251,8 @@ be reached; everything else works.
   Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,
   `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `enum:a,b,c` and
   `belongs_to:Target` (`User`, another resource of the domain, or a full module name).
+  A required `date` or `datetime` is prefilled with today (now) on the new-record
+  form, since an untouched date input posts `""`, which Ash reads as nil.
   Generated resources are written by the organization's owners and admins and read
   by its members; platform admins do anything unless `--no-admin-bypass`. The files
   they are rendered from are in `priv/templates/<%= @app %>.gen/` and are this
