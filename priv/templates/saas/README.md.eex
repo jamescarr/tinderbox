@@ -83,7 +83,9 @@ The application measures whether anyone wants it, in its own database.
 description, the value propositions, the pricing, and either a waitlist form
 (`cta: :waitlist`) or links to sign in and register (`cta: :register`). Write the
 concept in `concept.exs` and run `mise exec -- mix <%= @app %>.gen.concept`; it rewrites
-`lib/<%= @app %>/concept.ex` (and generates the resources the manifest lists).
+`lib/<%= @app %>/concept.ex` (and generates the resources the manifest lists). The value
+propositions and the pricing lay themselves out for how many there are: one card is
+centered, two sit side by side, three or more fill the columns.
 
 `/admin/validation` holds the funnel to the manifest's `thresholds`:
 

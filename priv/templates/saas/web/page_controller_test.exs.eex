@@ -15,4 +15,15 @@ defmodule <%= inspect(@web) %>.PageControllerTest do
 
     assert conn |> get(~p"/") |> html_response(200) =~ tagline
   end
+
+  test "GET / sizes the pricing grid to the number of plans", %{conn: conn} do
+    html = conn |> get(~p"/") |> html_response(200)
+
+    case length(<%= inspect(@prefix) %>.Concept.plans()) do
+      0 -> refute html =~ ~s|id="pricing"|
+      1 -> assert html =~ "mx-auto max-w-md"
+      2 -> assert html =~ "mx-auto max-w-3xl sm:grid-cols-2"
+      _ -> assert html =~ "sm:grid-cols-2 lg:grid-cols-3"
+    end
+  end
 end

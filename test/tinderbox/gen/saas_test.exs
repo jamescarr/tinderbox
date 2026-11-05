@@ -493,6 +493,8 @@ defmodule Tinderbox.Gen.SaasTest do
       assert home =~ ~s|action={~p"/waitlist"}|
       assert home =~ ~s|name="signup[source]"|
       assert home =~ ~s|id="pricing"|
+      assert_has(home, "max-w-3xl sm:grid-cols-2")
+      assert_has(home, "length(@concept.plans) >= 3 && \"sm:grid-cols-2 lg:grid-cols-3\"")
 
       root = source(igniter, "lib/test_web/components/layouts/root.html.heex")
       assert root =~ "<.live_title default={tab_default()} suffix={tab_suffix()} phx-no-format>"
