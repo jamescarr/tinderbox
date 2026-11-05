@@ -236,7 +236,10 @@ def render(assigns) do
       </section>
 
       <section id="display" class="scroll-mt-20 space-y-4">
-        <.section_title title="Data display" text="Feeds, description lists, avatars and empty states." />
+        <.section_title
+          title="Data display"
+          text="Feeds, description lists, bar lists, avatars and empty states."
+        />
         <div class="grid gap-4 lg:grid-cols-2">
           <.card>
             <:title>Feed</:title>
@@ -262,6 +265,17 @@ def render(assigns) do
               <:item label="Status"><.status_badge status={:past_due} /></:item>
               <:item label="Created">{format_datetime(@now)}</:item>
             </.description_list>
+          </.card>
+          <.card>
+            <:title>Bar list</:title>
+            <.bar_list
+              items={[
+                %{label: "Public equity", value: 62_500, hint: "62%"},
+                %{label: "Real estate", value: 25_000, hint: "25%"},
+                %{label: "Cash", value: 12_500, hint: "13%"}
+              ]}
+              format={&"$#{format_number(&1)}"}
+            />
           </.card>
           <.card>
             <:title>Avatars</:title>

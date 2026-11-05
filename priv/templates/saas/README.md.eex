@@ -222,7 +222,7 @@ be reached; everything else works.
   with AshCloak.
 * Build pages from the UI kit, `<%= inspect(@web) %>.UI`, which every template imports:
   `page_header`, `card`, `stat_grid`, `badge`/`status_badge`, `alert`,
-  `empty_state`, `tabs`, `modal`, `dropdown`, `feed`, `description_list` and
+  `empty_state`, `tabs`, `modal`, `dropdown`, `feed`, `description_list`, `bar_list` and
   `data_table`. A list page keeps its rows and a `ListState` in assigns and runs
   every `"table"` event through `ListState.update/2` and `ListState.run/2` (see
   the admin users page); a short list passes `data_table` its rows and no state.

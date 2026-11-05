@@ -551,6 +551,83 @@ defp iso8601(%DateTime{} = time), do: DateTime.to_iso8601(time)
 defp iso8601(%NaiveDateTime{} = time), do: NaiveDateTime.to_iso8601(time) <> "Z"
 defp iso8601(%Date{} = date), do: Date.to_iso8601(date)
 
+@doc ~S"""
+A list of labelled amounts, each with a bar showing its share of the total:
+allocation by asset class, spend by category, seats by plan. Items are maps
+with a `:label`, a `:value` (a number or a Decimal) and an optional `:hint`
+shown muted beside the value. The share is `value / total`; `total` defaults
+to the sum of the values and `format` to `format_number/1`.
+
+## Examples
+
+    <.bar_list items={[
+      %{label: "Public equity", value: 62_500, hint: "62%"},
+      %{label: "Real estate", value: 25_000},
+      %{label: "Cash", value: 12_500}
+    ]} />
+
+    <.bar_list items={@allocation} total={@portfolio_value} format={&"$#{format_number(&1)}"} />
+"""
+attr :items, :list, required: true
+attr :total, :any, default: nil, doc: "a number or Decimal; defaults to the sum of the values"
+attr :format, :any, default: nil, doc: "`(value -> String.t())`; defaults to `format_number/1`"
+attr :class, :any, default: nil
+
+def bar_list(assigns) do
+  format = assigns.format || (&format_number/1)
+  total = assigns.total || Enum.sum(Enum.map(assigns.items, &bar_list_number(&1.value)))
+
+  rows =
+    for item <- assigns.items do
+      %{
+        label: item.label,
+        hint: item[:hint],
+        value: format.(item.value),
+        share: bar_list_share(item.value, total)
+      }
+    end
+
+  assigns = assign(assigns, :rows, rows)
+
+  ~H"""
+  <ul class={["space-y-4", @class]}>
+    <li :for={row <- @rows}>
+      <div class="flex items-baseline justify-between gap-3 text-sm">
+        <span class="min-w-0 truncate font-medium">{row.label}</span>
+        <span class="shrink-0 tabular-nums">
+          <span :if={row.hint} class="mr-2 text-xs text-base-content/60">{row.hint}</span>
+          {row.value}
+        </span>
+      </div>
+      <progress
+        class="progress progress-primary mt-1 w-full"
+        value={row.share}
+        max="100"
+        aria-label={"#{row.label}: #{row.value}"}
+      >
+      </progress>
+    </li>
+  </ul>
+  """
+end
+
+@doc false
+# `value` as a percentage of `total`, 0 to 100; 0 when there is no total.
+def bar_list_share(value, total) do
+  value = bar_list_number(value)
+  total = bar_list_number(total)
+
+  if total == 0 do
+    0
+  else
+    (value / total * 100) |> min(100.0) |> max(0.0) |> Float.round(2)
+  end
+end
+
+# A struct guard rather than `%Decimal{}`, for the same reason as `format_number/2`.
+defp bar_list_number(number) when is_struct(number, Decimal), do: Decimal.to_float(number)
+defp bar_list_number(number) when is_number(number), do: number
+
 @doc """
 How far `time` is from now, for people, in either direction: "just now",
 "5 min ago", "in 3 h", "2 d ago", "in 6 d", then the date. A `Date` reads
@@ -710,6 +787,16 @@ so keep it idempotent). Render it with `show` to open it on mount, e.g. for a
         <.button class="btn btn-error" phx-click="delete">Delete</.button>
       </:actions>
     </.modal>
+
+Opened from the server:
+
+    <.modal :if={@form} id="edit-holding" show on_cancel={JS.push("cancel")}>
+      <:title>Edit holding</:title>
+      <.form for={@form} phx-submit="save">…</.form>
+    </.modal>
+
+Assign `form` to open it; `cancel` clears the assign, and `phx-remove` closes it
+when the assign goes.
 """
 attr :id, :string, required: true
 attr :show, :boolean, default: false

@@ -419,7 +419,7 @@ The generator:
 * creates the kit, once — after that it is the project's code: `<App>Web.UI`
   (`use`d by `html_helpers/0`, so every template sees it), `.Components`
   (`page_header`, `card`, `stat_grid`, `badge`, `status_badge`, `alert`,
-  `empty_state`, `description_list`, `tabs`, `modal`, `dropdown`, `avatar`, `feed`,
+  `empty_state`, `description_list`, `bar_list`, `tabs`, `modal`, `dropdown`, `avatar`, `feed`,
   `form_section`, `search_input`, `pagination`, `relative_time/1`,
   `format_datetime/1`, `humanize/1`, `format_number/2`, `enum_options/2`), `.Shell`
   (`app_shell`, `nav_item`, `nav_section`,
