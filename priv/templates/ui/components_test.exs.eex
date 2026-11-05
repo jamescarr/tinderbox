@@ -1,7 +1,8 @@
 defmodule <%= inspect(@web) %>.UI.ComponentsTest do
   use ExUnit.Case, async: true
 
-  import <%= inspect(@web) %>.UI.Components, only: [format_number: 1, format_number: 2, humanize: 1]
+  import <%= inspect(@web) %>.UI.Components,
+    only: [enum_options: 1, enum_options: 2, format_number: 1, format_number: 2, humanize: 1]
 
   # Decimal comes with Ecto; a project without it has nothing to format.
   @compile {:no_warn_undefined, Decimal}
@@ -24,5 +25,12 @@ defmodule <%= inspect(@web) %>.UI.ComponentsTest do
   test "humanize reads atoms and strings as words" do
     assert humanize(:public_equity) == "Public equity"
     assert humanize("past_due") == "Past due"
+  end
+
+  test "enum_options humanizes values and takes label overrides" do
+    assert enum_options([:draft, :llc]) == [{"Draft", :draft}, {"Llc", :llc}]
+
+    assert enum_options([:draft, :llc], labels: %{llc: "LLC"}) ==
+             [{"Draft", :draft}, {"LLC", :llc}]
   end
 end

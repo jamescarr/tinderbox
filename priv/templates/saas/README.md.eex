@@ -226,7 +226,10 @@ be reached; everything else works.
   the admin users page); a short list passes `data_table` its rows and no state.
   Every component is on show, live, at `/dev/ui`. Style with daisyUI's semantic
   colors (`bg-base-100`, `text-primary`, …), never Tailwind's palette, so the
-  themepack (`mix tinderbox.gen.ui --themepack …`) and dark mode keep working.
+  themepack (`mix tinderbox.gen.ui --themepack …`) and dark mode keep working. The
+  kit's formatting helpers are `humanize/1`, `format_number/2` and
+  `enum_options/2` (`[{label, value}]` for a select, `labels: %{llc: "LLC"}` for the
+  labels `humanize/1` gets wrong).
 * Notify an organization's owners and admins with
   `<%= inspect(@accounts) %>.managers/1` as the recipients. From an action,
   `change {<%= inspect(@accounts) %>.Changes.NotifyManagers, key: "thing.created", data: {Module, :function}}`

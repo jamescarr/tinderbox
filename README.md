@@ -364,8 +364,9 @@ Ash packages the other stacks use, then adds:
   change);
   `<App>Web.LiveHelpers` (`find/4`, `report/3` (`socket |> report(result, msg)`), `manager?/1`, `error_message/1`,
   `format_value/1`, `display_name/1`, shared by the organization pages); the kit's
-  `humanize/1` and `format_number/2` (grouped thousands, `compact: true` for
-  `112.4M`); a `:require_manager` hook in
+  `humanize/1`, `format_number/2` (grouped thousands, `compact: true` for
+  `112.4M`) and `enum_options/2` (select options for an enum); a `:require_manager`
+  hook in
   `<App>Web.LiveOrganization` for owner/admin-only pages; `Layouts.app` takes `wide`
   for pages made of tables and `current_page` to highlight its navigation entry;
   `<App>.PromEx.Plugins.App`, an empty PromEx plugin for
@@ -419,7 +420,8 @@ The generator:
   (`page_header`, `card`, `stat_grid`, `badge`, `status_badge`, `alert`,
   `empty_state`, `description_list`, `tabs`, `modal`, `dropdown`, `avatar`, `feed`,
   `form_section`, `search_input`, `pagination`, `relative_time/1`,
-  `format_datetime/1`), `.Shell` (`app_shell`, `nav_item`, `nav_section`,
+  `format_datetime/1`, `humanize/1`, `format_number/2`, `enum_options/2`), `.Shell`
+  (`app_shell`, `nav_item`, `nav_section`,
   `user_menu`), `.DataTable` (searchable, sortable, paginated) and `.ListState`
   (the table's in-memory search/sort/paging state, with its test);
 * mounts `<App>Web.UIGalleryLive` at `/dev/ui` inside Phoenix's dev-only scope:
