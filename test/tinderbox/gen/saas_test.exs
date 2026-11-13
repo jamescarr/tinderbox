@@ -28,6 +28,8 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/accounts/validations/not_last_owner.ex
           lib/test/accounts/validations/same_organization.ex
           lib/test/accounts/checks/actor_manages_organization.ex
+          lib/test/accounts/version_indexes.ex
+          lib/test/activity.ex
           lib/test/billing.ex
           lib/test/billing/plans.ex
           lib/test/billing/subscription.ex
@@ -47,6 +49,7 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/dashboard_live.ex
           lib/test_web/live_helpers.ex
           lib/test_web/inbox_live.ex
+          lib/test_web/activity_live.ex
           lib/test_web/billing_live.ex
           lib/test_web/admin/dashboard_live.ex
           lib/test_web/admin/users_live.ex
@@ -73,6 +76,7 @@ defmodule Tinderbox.Gen.SaasTest do
           test/support/fixtures.ex
           test/support/live_test_helpers.ex
           test/test_web/live/members_live_test.exs
+          test/test_web/live/activity_live_test.exs
           test/test_web/live/connections_live_test.exs
           test/test_web/api_connections_test.exs
           priv/repo/migrations/20250101000000_create_fun_with_flags_toggles.exs
@@ -186,6 +190,62 @@ defmodule Tinderbox.Gen.SaasTest do
     end
 
     refute_has(router, "magic_sign_in_route")
+  end
+
+  test "/activity is routed inside the signed-in session and linked after Members", %{
+    igniter: igniter
+  } do
+    router = source(igniter, "lib/test_web/router.ex")
+    session = "ash_authentication_live_session :authenticated_routes"
+
+    [_before, after_session] = router |> plain() |> String.split(plain(session), parts: 2)
+    [inside, _rest] = String.split(after_session, " end ", parts: 2)
+    assert inside =~ plain(~s|live "/activity", ActivityLive|)
+
+    layouts = source(igniter, "lib/test_web/components/layouts.ex")
+
+    assert_has(layouts, ~s|navigate={~p"/activity"}|)
+    assert_has(layouts, ~s|icon="hero-clock"|)
+    assert order(layouts, ~s|~p"/organizations/members"|) < order(layouts, ~s|~p"/activity"|)
+    assert order(layouts, ~s|~p"/activity"|) < order(layouts, ~s|~p"/billing"|)
+  end
+
+  test "the activity feed reads the versions of every versioned resource of the organization",
+       %{igniter: igniter} do
+    activity = source(igniter, "lib/test/activity.ex")
+
+    assert_has(activity, "def feed(organization, opts \\\\ [limit: @default_limit])")
+    assert_has(activity, "AshPaperTrail.Resource.Info.version_resource()")
+    assert_has(activity, "Ash.Query.filter(query, version_source_id == ^id)")
+    assert_has(activity, "Ash.Query.filter(query, organization_id == ^id)")
+    assert_has(activity, "Ash.Query.sort(version_inserted_at: :desc)")
+    assert_has(activity, "Ash.read!(authorize?: false)")
+    assert_has(activity, "%{sensitive?: true, name: name}")
+
+    live = source(igniter, "lib/test_web/activity_live.ex")
+
+    assert_has(live, "Activity.feed(socket.assigns.current_organization)")
+    assert_has(live, "current_page={:activity}")
+    assert_has(live, "<.empty_state :if={@entries == []}")
+  end
+
+  test "organization-scoped resources keep the organization on their version rows, indexed",
+       %{igniter: igniter} do
+    mixin = source(igniter, "lib/test/accounts/version_indexes.ex")
+
+    assert_has(mixin, "defmacro __using__(_opts)")
+    assert_has(mixin, "index [:organization_id, :version_inserted_at]")
+
+    for path <- ~w(lib/test/accounts/membership.ex lib/test/accounts/invitation.ex
+                   lib/test/billing/subscription.ex lib/test/connections/connection.ex) do
+      resource = source(igniter, path)
+
+      assert_has(resource, "attributes_as_attributes [:organization_id]")
+      assert_has(resource, "mixin Test.Accounts.VersionIndexes")
+    end
+
+    # Its versions are found through `version_source_id`.
+    refute_has(source(igniter, "lib/test/accounts/organization.ex"), "attributes_as_attributes")
   end
 
   test "files are downloaded through a controller in the browser scope, routed once", %{

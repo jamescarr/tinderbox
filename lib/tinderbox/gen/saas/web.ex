@@ -11,23 +11,24 @@ defmodule Tinderbox.Gen.Saas.Web do
     demo layout (`flash_group/1` and `theme_toggle/1` are kept as generated),
   * the landing page and its test, which now invite a visitor to sign in,
   * LiveViews inside the installer's `ash_authentication_live_session`:
-    `/dashboard`, `/organizations/new`, `/organizations/members`,
+    `/dashboard`, `/organizations/new`, `/organizations/members`, `/activity`,
     `/invitations/:token`, `/inbox`, `/settings/notifications`, `/billing`,
     `/connections`, and `<App>Web.LiveHelpers`, what the organization-scoped ones
     share,
+  * `<App>.Activity`, the feed of versions `/activity` lists,
   * `POST /organizations/switch`, the organization switcher's target,
   * `GET /files/*key`, `<App>Web.FileController`: downloads of what a `file`
     attribute stored, for the members of the organization the key names first,
   * test support: `<App>.Fixtures` (users, organizations, memberships, API
-    connections), `<App>Web.LiveTestHelpers.sign_in/2`, and tests of the members
-    and connections pages and of the file controller that use them.
+    connections), `<App>Web.LiveTestHelpers.sign_in/2`, and tests of the members,
+    activity and connections pages and of the file controller that use them.
   """
 
   alias Tinderbox.Gen
   alias Tinderbox.Gen.Saas.Edits
 
   @live_views ~w(DashboardLive OrganizationNewLive MembersLive InvitationLive InboxLive
-                 NotificationSettingsLive BillingLive ConnectionsLive)
+                 NotificationSettingsLive BillingLive ConnectionsLive ActivityLive)
 
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
@@ -119,7 +120,8 @@ defmodule Tinderbox.Gen.Saas.Web do
     Gen.create_modules(
       igniter,
       [
-        {Module.concat(web, LiveHelpers), "saas/web/live_helpers.ex.eex"}
+        {Module.concat(web, LiveHelpers), "saas/web/live_helpers.ex.eex"},
+        {Module.concat(assigns[:prefix], Activity), "saas/web/activity.ex.eex"}
         | Enum.map(@live_views, fn name ->
             {Module.concat(web, name), "saas/web/live/#{Macro.underscore(name)}.ex.eex"}
           end)
@@ -152,6 +154,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     live "/dashboard", DashboardLive
     live "/organizations/new", OrganizationNewLive
     live "/organizations/members", MembersLive
+    live "/activity", ActivityLive
     live "/invitations/:token", InvitationLive
     live "/inbox", InboxLive
     live "/settings/notifications", NotificationSettingsLive
@@ -224,6 +227,10 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> Igniter.create_new_file(
       "test/#{assigns[:app]}_web/live/members_live_test.exs",
       Gen.render_template("saas/test/members_live_test.exs.eex", assigns)
+    )
+    |> Igniter.create_new_file(
+      "test/#{assigns[:app]}_web/live/activity_live_test.exs",
+      Gen.render_template("saas/test/activity_live_test.exs.eex", assigns)
     )
     |> Igniter.create_new_file(
       "test/#{assigns[:app]}_web/live/connections_live_test.exs",

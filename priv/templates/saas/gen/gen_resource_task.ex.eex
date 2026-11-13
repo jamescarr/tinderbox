@@ -18,6 +18,9 @@ if Code.ensure_loaded?(Igniter) do
     * a `<name>.created` analytics event on create, and
       `<%= inspect(@accounts) %>.Validations.SameOrganization` for every `belongs_to` to
       another organization-scoped resource,
+    * a version history (`AshPaperTrail`, deletes included, with `organization_id` on the
+      version row) that `<%= inspect(@prefix) %>.Activity` lists at `/activity`; the domain
+      gets `AshPaperTrail.Domain`,
     * the domain, through `mix <%= @app %>.gen.domain`, when it does not exist yet,
     * `<name>_fixture/3` in `<%= inspect(@prefix) %>.Fixtures`,
     * the migration, `mix ash.codegen add_<table>` (`--no-codegen` skips it; `--table`

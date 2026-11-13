@@ -34,6 +34,10 @@ paper_trail do
   reference_source? false
   # The token is a bearer secret: never copy it into the audit trail.
   sensitive_attributes :ignore
+  # The organization is a column of the version row, not only a key inside
+  # `changes`, so the activity feed can filter and index on it.
+  attributes_as_attributes [:organization_id]
+  mixin <%= inspect(@accounts) %>.VersionIndexes
   belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
 end
 

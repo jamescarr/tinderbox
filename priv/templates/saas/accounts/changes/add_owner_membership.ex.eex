@@ -7,11 +7,13 @@ use Ash.Resource.Change
 alias <%= inspect(@accounts) %>.Membership
 
 @impl true
-def change(changeset, _opts, %{actor: %{id: user_id}}) do
+def change(changeset, _opts, %{actor: %{id: user_id} = actor}) do
   Ash.Changeset.after_action(changeset, fn _changeset, organization ->
     attributes = %{organization_id: organization.id, user_id: user_id, role: :owner}
 
-    case Ash.create(Membership, attributes, action: :add, authorize?: false) do
+    # The actor is only recorded (the membership's version says who created it);
+    # `authorize?: false` is what lets a new organization's first membership exist.
+    case Ash.create(Membership, attributes, action: :add, actor: actor, authorize?: false) do
       {:ok, _membership} -> {:ok, organization}
       {:error, error} -> {:error, error}
     end

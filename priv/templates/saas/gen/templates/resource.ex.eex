@@ -10,7 +10,8 @@ use Ash.Resource,
   domain: <%= inspect(@domain) %>,
   data_layer: AshPostgres.DataLayer,
   authorizers: [Ash.Policy.Authorizer],
-  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier]
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshPaperTrail.Resource]
 
 postgres do
   table <%= inspect(@table) %>
@@ -26,6 +27,19 @@ postgres do
   custom_indexes do
     index [:organization_id, :inserted_at]
   end
+end
+
+# Versions feed `/activity` (`<%= inspect(@prefix) %>.Activity`). A deleted row leaves its versions
+# behind, so the feed can say "deleted".
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  create_version_on_destroy? true
+  reference_source? false
+  attributes_as_attributes [:organization_id]
+  mixin <%= inspect(@accounts) %>.VersionIndexes
+  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
 end
 
 actions do

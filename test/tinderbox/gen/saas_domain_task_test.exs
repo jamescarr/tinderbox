@@ -6,7 +6,7 @@ defmodule Tinderbox.Gen.SaasDomainTaskTest do
 
   import Igniter.Test
   import Tinderbox.Test.SaasFixtures
-  import Tinderbox.Test.SourceHelpers, only: [source: 2]
+  import Tinderbox.Test.SourceHelpers, only: [assert_has: 2, source: 2]
 
   setup_all do
     Application.put_env(:test, :ash_domains, [Test.Accounts])
@@ -27,6 +27,11 @@ defmodule Tinderbox.Gen.SaasDomainTaskTest do
       assert content =~ "use Ash.Domain"
     end)
 
+    # Every resource `gen.resource` writes keeps versions, which the domain has to include.
+    domain = source(igniter, "lib/test/upstreams.ex")
+    assert_has(domain, "AshPaperTrail.Domain")
+    assert_has(domain, "include_versions? true")
+
     config = source(igniter, "config/config.exs")
 
     assert config =~ "ash_domains: [Test.Upstreams, Test.Accounts]"
@@ -46,8 +51,13 @@ defmodule Tinderbox.Gen.SaasDomainTaskTest do
 
     igniter = gen_domain(project, ["Test.Accounts", "--queues", "default:3"])
 
-    assert source(igniter, "lib/test/accounts.ex") ==
-             source(saas_project(), "lib/test/accounts.ex")
+    # Not recreated: the resources are still there; it gains the versions, once.
+    domain = source(igniter, "lib/test/accounts.ex")
+
+    assert_has(domain, "resource Test.Accounts.User")
+    assert_has(domain, "AshPaperTrail.Domain")
+    assert_has(domain, "include_versions? true")
+    assert source(gen_domain(igniter, ["Test.Accounts"]), "lib/test/accounts.ex") == domain
 
     config = source(igniter, "config/config.exs")
 

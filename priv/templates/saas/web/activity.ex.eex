@@ -1,0 +1,155 @@
+@moduledoc """
+What happened in an organization: the version rows (AshPaperTrail) of every resource
+that keeps them, newest first. `<%= inspect(@web) %>.ActivityLive` shows them at `/activity`.
+
+A resource takes part when it has `AshPaperTrail.Resource` and its `paper_trail`
+block lists `attributes_as_attributes [:organization_id]` (what `mix <%= @app %>.gen.resource`
+writes). Organizations are found through the version's `version_source_id`.
+Versions are read without authorization: whoever calls `feed/2` has already shown
+membership of the organization, and version resources carry no policies.
+"""
+
+require Ash.Query
+
+alias <%= inspect(@accounts) %>.Organization
+
+@default_limit 50
+@label_fields [:name, :title, :email]
+
+@typedoc """
+One version: `action` is the action that ran (`:create`, `:add`, `:invite`, …), `type`
+what it did to the record (`:create`, `:update` or `:destroy`), `resource` the
+resource's name for people, `label` what to call the record (its name, title or
+email, else a short id) and `changes` the attributes the action set, without the
+sensitive ones.
+"""
+@type entry :: %{
+        at: DateTime.t(),
+        actor: map() | nil,
+        action: atom(),
+        type: :create | :update | :destroy,
+        resource: String.t(),
+        label: String.t(),
+        changes: %{optional(String.t()) => term()},
+        record_id: term()
+      }
+
+@doc """
+The latest `limit` (default #{@default_limit}) versions of `organization`'s records, newest
+first, across every versioned resource of the application.
+
+Each resource is read with its own `ORDER BY … LIMIT`, so one call reads at most
+`limit` rows per versioned resource.
+"""
+@spec feed(%{required(:id) => term()}, keyword()) :: [entry()]
+def feed(organization, opts \\ [limit: @default_limit]) do
+  limit = Keyword.get(opts, :limit, @default_limit)
+
+  versions =
+    versioned_resources()
+    |> Enum.flat_map(&versions(&1, organization, limit))
+    |> Enum.sort_by(fn {_source, version} -> version.version_inserted_at end, {:desc, DateTime})
+
+  names = remembered_names(versions)
+
+  versions
+  |> Enum.take(limit)
+  |> Enum.map(&entry(&1, names))
+end
+
+# -- finding the versions -----------------------------------------------------
+
+defp versioned_resources do
+  <%= inspect(@app) %>
+  |> Application.get_env(:ash_domains, [])
+  |> Enum.flat_map(&Ash.Domain.Info.resources/1)
+  |> Enum.filter(&(AshPaperTrail.Resource in Spark.extensions(&1)))
+  |> Enum.uniq()
+  |> Enum.filter(&scoped?/1)
+end
+
+defp scoped?(Organization), do: true
+
+defp scoped?(resource),
+  do: :organization_id in AshPaperTrail.Resource.Info.attributes_as_attributes(resource)
+
+defp versions(source, organization, limit) do
+  source
+  |> AshPaperTrail.Resource.Info.version_resource()
+  |> in_organization(source, organization.id)
+  |> Ash.Query.sort(version_inserted_at: :desc)
+  |> Ash.Query.limit(limit)
+  |> Ash.Query.load([:user, :version_source])
+  |> Ash.read!(authorize?: false)
+  |> Enum.map(&{source, &1})
+end
+
+defp in_organization(query, Organization, id),
+  do: Ash.Query.filter(query, version_source_id == ^id)
+
+defp in_organization(query, _source, id), do: Ash.Query.filter(query, organization_id == ^id)
+
+# -- one entry ----------------------------------------------------------------
+
+defp entry({source, version}, names) do
+  %{
+    at: version.version_inserted_at,
+    actor: version.user,
+    action: version.version_action_name,
+    type: version.version_action_type,
+    resource: resource_name(source),
+    label: label(version, names),
+    changes: visible_changes(version.changes, source),
+    record_id: version.version_source_id
+  }
+end
+
+defp resource_name(source) do
+  source |> Module.split() |> List.last() |> Macro.underscore() |> Phoenix.Naming.humanize()
+end
+
+# The record's current name, else the one the version set, else one an earlier version
+# of the same record set (a deleted row leaves its versions, not its attributes), else a
+# short id.
+defp label(version, names) do
+  named(version.version_source) || named(version.changes) ||
+    Map.get(names, version.version_source_id) || short_id(version.version_source_id)
+end
+
+# The newest name each record was given, from the versions just read (newest first).
+defp remembered_names(versions) do
+  Enum.reduce(versions, %{}, fn {_source, version}, names ->
+    case named(version.changes) do
+      nil -> names
+      name -> Map.put_new(names, version.version_source_id, name)
+    end
+  end)
+end
+
+# A record's or a `changes` map's name, title or email.
+defp named(nil), do: nil
+
+defp named(data) do
+  Enum.find_value(@label_fields, fn field ->
+    present(Map.get(data, field) || Map.get(data, to_string(field)))
+  end)
+end
+
+defp present(value) when is_binary(value) and value != "", do: value
+defp present(value) when is_struct(value, Ash.CiString), do: present(to_string(value))
+defp present(_value), do: nil
+
+defp short_id(id), do: id |> to_string() |> String.slice(0, 8)
+
+defp visible_changes(nil, _source), do: %{}
+
+defp visible_changes(changes, source) do
+  hidden =
+    for %{sensitive?: true, name: name} <- Ash.Resource.Info.attributes(source),
+        do: to_string(name)
+
+  for {key, value} <- changes,
+      to_string(key) not in ["organization_id" | hidden],
+      into: %{},
+      do: {to_string(key), value}
+end

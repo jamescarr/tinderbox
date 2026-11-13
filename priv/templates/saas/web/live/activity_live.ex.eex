@@ -1,0 +1,80 @@
+@moduledoc """
+What happened in the current organization, newest first: every create, update and
+delete of the resources that keep versions (`<%= inspect(@prefix) %>.Activity.feed/2`),
+with who did it and which attributes it set. Any member can read it.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+import <%= inspect(@web) %>.LiveHelpers
+
+alias <%= inspect(@prefix) %>.Activity
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@impl true
+def mount(_params, _session, socket) do
+  {:ok,
+   socket
+   |> assign(:page_title, "Activity")
+   |> assign(:entries, Activity.feed(socket.assigns.current_organization))}
+end
+
+@impl true
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp entry_title(entry), do: "#{actor_name(entry.actor)} #{verb(entry.type)} #{entry.resource} #{entry.label}"
+
+defp actor_name(nil), do: "Someone"
+defp actor_name(actor), do: to_string(actor.email)
+
+defp verb(:create), do: "created"
+defp verb(:update), do: "updated"
+defp verb(:destroy), do: "deleted"
+
+defp entry_icon(:create), do: "hero-plus-circle"
+defp entry_icon(:update), do: "hero-pencil-square"
+defp entry_icon(:destroy), do: "hero-trash"
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+    current_page={:activity}
+    wide
+  >
+    <.page_header>
+      Activity
+      <:subtitle>What changed in {@current_organization.name}, newest first</:subtitle>
+    </.page_header>
+
+    <.card>
+      <.feed :if={@entries != []} id="activity">
+        <:item
+          :for={{entry, index} <- Enum.with_index(@entries)}
+          id={"activity-#{index}"}
+          title={entry_title(entry)}
+          time={entry.at}
+          icon={entry_icon(entry.type)}
+        >
+          <.description_list :if={entry.changes != %{}}>
+            <:item :for={{name, value} <- entry.changes} label={humanize(name)}>
+              {format_value(value)}
+            </:item>
+          </.description_list>
+        </:item>
+      </.feed>
+      <.empty_state :if={@entries == []} icon="hero-clock" title="Nothing yet">
+        Creating, changing and deleting records shows up here.
+      </.empty_state>
+    </.card>
+  </Layouts.app>
+  """
+end

@@ -1,0 +1,18 @@
+@moduledoc """
+Mixed into the version resource of every organization-scoped resource
+(`paper_trail do mixin <%= inspect(@accounts) %>.VersionIndexes end`, next to
+`attributes_as_attributes [:organization_id]`).
+
+`<%= inspect(@prefix) %>.Activity.feed/2` reads one organization's versions newest first;
+this index makes that an index scan instead of a read of every version row.
+"""
+
+defmacro __using__(_opts) do
+  quote do
+    postgres do
+      custom_indexes do
+        index [:organization_id, :version_inserted_at]
+      end
+    end
+  end
+end

@@ -106,6 +106,29 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert igniter.issues == []
     end
 
+    test "keeps versions of its rows, even after they are deleted, for the activity feed", %{
+      files: files
+    } do
+      igniter = gen(project(files), Resource, @project)
+      resource = source(igniter, "lib/test/projects/project.ex")
+
+      for snippet <- [
+            "extensions: [AshPaperTrail.Resource]",
+            "create_version_on_destroy? true",
+            "reference_source? false",
+            "change_tracking_mode :changes_only",
+            "attributes_as_attributes [:organization_id]",
+            "mixin Test.Accounts.VersionIndexes",
+            "belongs_to_actor :user, Test.Accounts.User, domain: Test.Accounts"
+          ] do
+        assert_has(resource, snippet)
+      end
+
+      domain = source(igniter, "lib/test/projects.ex")
+      assert_has(domain, "AshPaperTrail.Domain")
+      assert_has(domain, "include_versions? true")
+    end
+
     test "a belongs_to another resource of the organization is checked to be in it", %{
       files: files
     } do
