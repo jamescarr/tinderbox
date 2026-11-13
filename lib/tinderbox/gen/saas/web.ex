@@ -16,9 +16,11 @@ defmodule Tinderbox.Gen.Saas.Web do
     `/connections`, and `<App>Web.LiveHelpers`, what the organization-scoped ones
     share,
   * `POST /organizations/switch`, the organization switcher's target,
+  * `GET /files/*key`, `<App>Web.FileController`: downloads of what a `file`
+    attribute stored, for the members of the organization the key names first,
   * test support: `<App>.Fixtures` (users, organizations, memberships, API
     connections), `<App>Web.LiveTestHelpers.sign_in/2`, and tests of the members
-    and connections pages that use them.
+    and connections pages and of the file controller that use them.
   """
 
   alias Tinderbox.Gen
@@ -35,6 +37,7 @@ defmodule Tinderbox.Gen.Saas.Web do
     |> replace_landing_page(assigns)
     |> create_live_views(assigns)
     |> add_routes(assigns)
+    |> add_file_controller(assigns)
     |> add_test_support(assigns)
   end
 
@@ -172,6 +175,36 @@ defmodule Tinderbox.Gen.Saas.Web do
         router: router
       )
     end)
+  end
+
+  # -- files -----------------------------------------------------------------
+
+  # What `file` attributes (`mix <app>.gen.live`/`gen.resource`) store is
+  # downloaded through here: a plain controller, since a LiveView cannot send a
+  # file, in the `:browser` scope that has the signed-in user. The controller
+  # decides who may read a key, so the route is the same for every resource.
+  defp add_file_controller(igniter, assigns) do
+    router = assigns[:router]
+
+    igniter
+    |> Gen.create_modules(
+      [{Module.concat(assigns[:web], FileController), "saas/web/file_controller.ex.eex"}],
+      assigns
+    )
+    |> Edits.unless_contains(router, "FileController", fn igniter ->
+      Igniter.Libs.Phoenix.append_to_scope(
+        igniter,
+        "/",
+        ~s(get "/files/*key", FileController, :show),
+        with_pipelines: [:browser],
+        arg2: assigns[:web],
+        router: router
+      )
+    end)
+    |> Igniter.create_new_file(
+      "test/#{assigns[:app]}_web/controllers/file_controller_test.exs",
+      Gen.render_template("saas/web/file_controller_test.exs.eex", assigns)
+    )
   end
 
   # -- test support ----------------------------------------------------------

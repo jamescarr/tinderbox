@@ -19,7 +19,10 @@ on_mount {<%= inspect(@web) %>.LiveOrganization, :require_manager}
 
 @impl true
 def mount(_params, _session, socket) do
-  {:ok, <%= if @belongs_to == [], do: "socket", else: "assign_options(socket)" %>}
+  {:ok,
+   socket<%= if @belongs_to != [] do %>
+   |> assign_options()<% end %><%= for file <- @files do %>
+   |> allow_upload(<%= inspect(file.name) %>, accept: :any, max_entries: 1, max_file_size: 10_000_000)<% end %>}
 end
 
 @impl true
@@ -63,7 +66,7 @@ end
 def handle_event("validate", %{<%= inspect(@singular) %> => params}, socket) do
   {:noreply, assign(socket, :form, AshPhoenix.Form.validate(socket.assigns.form, params))}
 end
-
+<%= if @files == [] do %>
 def handle_event("save", %{<%= inspect(@singular) %> => params}, socket) do
   case AshPhoenix.Form.submit(socket.assigns.form, params: params) do
     {:ok, <%= @singular %>} ->
@@ -76,9 +79,80 @@ def handle_event("save", %{<%= inspect(@singular) %> => params}, socket) do
       {:noreply, assign(socket, :form, form)}
   end
 end
+<% else %>
+# A form with nothing but file inputs posts no <%= inspect(@singular) %> params at all.
+def handle_event("validate", _params, socket), do: {:noreply, socket}
+
+def handle_event("save", params, socket) do
+  # The files come from the uploads, never from what the browser posts for them.
+  params = params |> Map.get(<%= inspect(@singular) %>, %{}) |> Map.drop(<%= inspect(Enum.map(@files, &to_string(&1.name))) %>)
+
+  with {:ok, files} <- consume_files(socket),
+       {:ok, <%= @singular %>} <-
+         AshPhoenix.Form.submit(socket.assigns.form, params: Map.merge(params, files)) do
+    {:noreply,
+     socket
+     |> put_flash(:info, <%= inspect(@human_singular <> " saved") %>)
+     |> push_navigate(to: ~p"/<%= @route %>/#{<%= @singular %>.id}")}
+  else
+    {:error, {:storage, _reason}} ->
+      {:noreply, put_flash(socket, :error, "The file could not be stored, try again")}
+
+    {:error, form} ->
+      {:noreply, assign(socket, :form, form)}
+  end
+end
+<%= for file <- @files do %>
+def handle_event("cancel-upload", %{"upload" => <%= inspect(to_string(file.name)) %>, "ref" => ref}, socket) do
+  {:noreply, cancel_upload(socket, <%= inspect(file.name) %>, ref)}
+end
+<% end %><% end %>
 
 @impl true
 def handle_info(_message, socket), do: {:noreply, socket}
+<%= if @files != [] do %>
+defp upload_error(:too_large), do: "The file is too large (10 MB at most)"
+defp upload_error(:too_many_files), do: "Choose one file"
+defp upload_error(_error), do: "The file cannot be uploaded"
+
+# Stores what was uploaded under the organization's id, where
+# `<%= inspect(@web) %>.FileController` looks for it, and returns the params that
+# describe the files. A file field with nothing uploaded is left out of them, so an
+# edit keeps the file it has. An upload is consumed even when the form then fails
+# validation: the file has to be chosen again, and the stored object stays behind.
+defp consume_files(socket) do
+  organization = socket.assigns.current_organization
+
+  Enum.reduce_while(<%= inspect(Enum.map(@files, & &1.name)) %>, {:ok, %{}}, fn name, {:ok, files} ->
+    case consume_uploaded_entries(socket, name, &store_file(&1, &2, organization)) do
+      [] -> {:cont, {:ok, files}}
+      [{:ok, file}] -> {:cont, {:ok, Map.put(files, to_string(name), file)}}
+      [{:error, reason}] -> {:halt, {:error, {:storage, reason}}}
+    end
+  end)
+end
+
+defp store_file(%{path: path}, entry, organization) do
+  key = "#{organization.id}/<%= @table %>/#{Ash.UUID.generate()}/#{Path.basename(entry.client_name)}"
+
+  result =
+    case <%= inspect(@prefix) %>.Storage.put(key, File.read!(path)) do
+      :ok ->
+        {:ok,
+         %{
+           "key" => key,
+           "filename" => Path.basename(entry.client_name),
+           "content_type" => entry.client_type,
+           "size" => entry.client_size
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+
+  {:ok, result}
+end
+<% end %>
 <%= if @belongs_to != [] do %>
 # The choices for each `belongs_to`, from the current organization: at most 1000
 # of them (a longer list wants a search box, not a select).
@@ -131,7 +205,38 @@ def render(assigns) do
           type="select"
           label=<%= inspect(@gen.humanize(attribute.name)) %>
           options={enum_options(<%= inspect(attribute.values) %>)}
-        /><% :relation -> %><.input
+        /><% :file -> %><div class="fieldset mb-2">
+          <label class="label mb-1" for={@uploads.<%= attribute.name %>.ref}><%= @gen.humanize(attribute.name) %></label>
+          <.live_file_input upload={@uploads.<%= attribute.name %>} class="file-input w-full" />
+          <p :if={@<%= @singular %> && @<%= @singular %>.<%= attribute.name %>} class="mt-1 text-sm text-base-content/70">
+            Current file: <.file_link file={@<%= @singular %>.<%= attribute.name %>} />. Choose another to replace it.
+          </p>
+          <div :for={entry <- @uploads.<%= attribute.name %>.entries} class="mt-2 flex items-center gap-2 text-sm">
+            <span class="truncate">{entry.client_name}</span>
+            <progress class="progress progress-primary w-24" value={entry.progress} max="100">
+              {entry.progress}%
+            </progress>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs"
+              phx-click="cancel-upload"
+              phx-value-upload=<%= inspect(to_string(attribute.name)) %>
+              phx-value-ref={entry.ref}
+              aria-label={"Cancel #{entry.client_name}"}
+            >
+              &times;
+            </button>
+            <span :for={error <- upload_errors(@uploads.<%= attribute.name %>, entry)} class="text-error">
+              {upload_error(error)}
+            </span>
+          </div>
+          <p :for={error <- upload_errors(@uploads.<%= attribute.name %>)} class="mt-1 text-sm text-error">
+            {upload_error(error)}
+          </p>
+          <p :for={error <- @form[<%= inspect(attribute.field) %>].errors} class="mt-1 text-sm text-error">
+            {translate_error(error)}
+          </p>
+        </div><% :relation -> %><.input
           field={@form[<%= inspect(attribute.field) %>]}
           type="select"
           label=<%= inspect(@gen.humanize(attribute.name)) %>

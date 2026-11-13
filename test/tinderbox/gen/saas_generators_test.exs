@@ -162,6 +162,48 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       )
     end
 
+    test "a file attribute is a map of what a download needs, and cannot be unique", %{
+      files: files
+    } do
+      igniter =
+        gen(
+          project(files),
+          Resource,
+          ~w(Test.Projects.Document title:string:required attachment:file:required)
+        )
+
+      resource = source(igniter, "lib/test/projects/document.ex")
+
+      assert_has(resource, "attribute :attachment, :map, allow_nil?: false, public?: true")
+
+      # The formatter breaks the nested keyword list over lines: check its parts.
+      for snippet <- [
+            "constraints: [",
+            "fields: [",
+            "key: [type: :string, allow_nil?: false],",
+            "filename: [type: :string, allow_nil?: false],",
+            "content_type: [type: :string, allow_nil?: false],",
+            "size: [type: :integer, allow_nil?: false]"
+          ] do
+        assert_has(resource, snippet)
+      end
+
+      fixtures = source(igniter, "test/support/fixtures.ex")
+      assert_has(fixtures, ~s|attachment: %{ key: "fixture/attachment.txt",|)
+      assert_has(fixtures, ~s|filename: "attachment.txt", content_type: "text/plain", size: 5|)
+
+      optional = gen(project(files), Resource, ~w(Test.Projects.Document attachment:file))
+
+      assert_has(
+        source(optional, "lib/test/projects/document.ex"),
+        "attribute :attachment, :map, public?: true, constraints: ["
+      )
+
+      assert_raise Mix.Error, ~r/attachment:file:unique: file cannot be unique/, fn ->
+        gen(project(files), Resource, ~w(Test.Projects.Document attachment:file:unique))
+      end
+    end
+
     test "refuses reserved names, unknown types and a module without a domain, before writing",
          %{files: files} do
       project = project(files)
@@ -262,6 +304,61 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       form = source(optional, "lib/test_web/live/milestone_form_live.ex")
       refute_has(form, ~s|"due_on" =>|)
       assert_has(form, ~s|params: %{"organization_id" => organization.id}|)
+    end
+
+    test "a file attribute is uploaded through the form and linked from the pages", %{
+      files: files,
+      igniter: igniter
+    } do
+      # Nothing to upload, nothing generated for it.
+      plain_form = source(igniter, "lib/test_web/live/project_form_live.ex")
+      refute_has(plain_form, "allow_upload")
+      refute_has(plain_form, "consume_files")
+
+      igniter =
+        gen(
+          project(files),
+          Live,
+          ~w(Test.Projects.Document title:string:required attachment:file:required)
+        )
+
+      form = source(igniter, "lib/test_web/live/document_form_live.ex")
+
+      for snippet <- [
+            "allow_upload(:attachment, accept: :any, max_entries: 1, max_file_size: 10_000_000)",
+            "<.live_file_input upload={@uploads.attachment}",
+            "consume_uploaded_entries(socket, name, &store_file(&1, &2, organization))",
+            ~S|key = "#{organization.id}/documents/#{Ash.UUID.generate()}/|,
+            "Test.Storage.put(key, File.read!(path))",
+            ~s|"content_type" => entry.client_type|,
+            ~s|Map.drop(["attachment"])|,
+            "Map.merge(params, files)",
+            "{:error, {:storage, _reason}} ->",
+            "{:error, form} ->",
+            "<.file_link file={@document.attachment} />",
+            ~s|phx-value-upload="attachment"|,
+            ~s|def handle_event("cancel-upload"|
+          ] do
+        assert_has(form, snippet)
+      end
+
+      assert order(form, "consume_files(socket)") < order(form, "AshPhoenix.Form.submit")
+
+      assert_has(
+        source(igniter, "lib/test_web/live/documents_live.ex"),
+        "<.file_link file={document.attachment} />"
+      )
+
+      assert_has(
+        source(igniter, "lib/test_web/live/document_live.ex"),
+        "<.file_link file={@document.attachment} />"
+      )
+
+      test = source(igniter, "test/test_web/live/documents_live_test.exs")
+      assert_has(test, ~s|file_input(new_view, "#document-form", :attachment|)
+      assert_has(test, ~s|render_upload(attachment, "attachment.txt")|)
+      assert_has(test, ~S|"/files/#{organization.id}/documents/"|)
+      assert_has(test, "document: %{title: \"Sample title\"}")
     end
 
     test "routes the pages inside the signed-in session, new before :id", %{igniter: igniter} do

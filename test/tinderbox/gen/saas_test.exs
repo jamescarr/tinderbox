@@ -52,6 +52,8 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/admin/users_live.ex
           lib/test_web/health_controller.ex
           lib/test_web/organization_controller.ex
+          lib/test_web/file_controller.ex
+          test/test_web/controllers/file_controller_test.exs
           lib/test_web/stripe_webhook_handler.ex
           .github/workflows/ci.yml
           lib/test/connections.ex
@@ -182,6 +184,31 @@ defmodule Tinderbox.Gen.SaasTest do
     end
 
     refute_has(router, "magic_sign_in_route")
+  end
+
+  test "files are downloaded through a controller in the browser scope, routed once", %{
+    igniter: igniter
+  } do
+    route = ~s|get "/files/*key", FileController, :show|
+    router = source(igniter, "lib/test_web/router.ex")
+
+    assert_has(router, route)
+    assert order(router, ~s|post "/organizations/switch"|) < order(router, route)
+
+    again = source(Saas.apply(igniter, []), "lib/test_web/router.ex")
+    assert length(String.split(plain(again), plain(route))) == 2
+
+    controller = source(igniter, "lib/test_web/file_controller.ex")
+    assert_has(controller, "defmodule TestWeb.FileController")
+    assert_has(controller, "Test.Accounts.Membership")
+    assert_has(controller, ~s|send_resp(conn, 404, "Not found")|)
+    assert_has(controller, ~s|{"application/octet-stream", "attachment"}|)
+    assert_has(controller, ~s|put_resp_header("x-content-type-options", "nosniff")|)
+
+    assert_has(source(igniter, "lib/test_web/live_helpers.ex"), "def file_link(assigns)")
+
+    test = source(igniter, "test/test_web/controllers/file_controller_test.exs")
+    assert_has(test, "defmodule TestWeb.FileControllerTest")
   end
 
   test "the JSON:API router is mounted at /api", %{igniter: igniter} do

@@ -242,7 +242,10 @@ be reached; everything else works.
 * The application's own metrics go in `<%= inspect(@prefix) %>.PromEx.Plugins.App`.
 * `<%= inspect(@prefix) %>.Storage` has `put/2`, `get/1`, `delete/1` and `presign/2`
   (S3 only; GCS answers `{:error, :not_supported}`). Prefix keys with the
-  organization id.
+  organization id: files stored under `<organization id>/…` are served by
+  `<%= inspect(@web) %>.FileController` (`GET /files/<key>`) to the members of that
+  organization, and to nobody else (a 404, so a foreign key is not confirmed).
+  The `file` attribute type does all of it: the form uploads, the pages link to it.
 * Grow the domain with the project's own generators (run them through
   `mise exec -- mix …`):
 
@@ -254,8 +257,15 @@ be reached; everything else works.
   | `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things [--queues things:5]` | a domain, registered in `ash_domains` (AshOban only sees the triggers of registered domains), with its Oban queues |
 
   Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,
-  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `enum:a,b,c` and
-  `belongs_to:Target` (`User`, another resource of the domain, or a full module name).
+  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `file`,
+  `enum:a,b,c` and `belongs_to:Target` (`User`, another resource of the domain, or a
+  full module name). A `file` (never unique) is a map of `key`, `filename`,
+  `content_type` and `size`: the generated form has a file input (one file, 10 MB at
+  most), stores the upload in `<%= inspect(@prefix) %>.Storage` under
+  `<organization id>/<table>/<uuid>/<filename>`, and keeps the stored file on an edit
+  that uploads none; the show and list pages link to it (`file_link/1` in
+  `<%= inspect(@web) %>.LiveHelpers`). A form that fails validation drops its upload:
+  the file has to be chosen again.
   A required `date` or `datetime` is prefilled with today (now) on the new-record
   form, since an untouched date input posts `""`, which Ash reads as nil.
   Generated resources are written by the organization's owners and admins and read
