@@ -12,7 +12,7 @@ defmodule <%= inspect(@web) %>.<%= @index_live %>Test do
 
   test "an owner adds a <%= String.downcase(@human_singular) %> and lands on it", %{
     conn: conn,
-    owner: owner<%= if @test_organization? do %>,
+    owner: owner<%= if @test_organization? or @files != [] do %>,
     organization: organization<% end %>
   } do
 <%= for {var, call} <- @parents do %>    <%= var %> = <%= call %>
@@ -22,7 +22,14 @@ defmodule <%= inspect(@web) %>.<%= @index_live %>Test do
     assert has_element?(index, "#new-<%= @singular %>")
 
     {:ok, new_view, _html} = live(conn, ~p"/<%= @route %>/new")
+<%= for file <- @files do %>
+    <%= file.name %> =
+      file_input(new_view, "#<%= @singular %>-form", <%= inspect(file.name) %>, [
+        %{name: "<%= file.name %>.txt", content: "hello", type: "text/plain"}
+      ])
 
+    assert render_upload(<%= file.name %>, "<%= file.name %>.txt") =~ "<%= file.name %>.txt"
+<% end %>
     {:ok, show, html} =
       new_view
       |> form("#<%= @singular %>-form", <%= @singular %>: <%= @form_params %>)
@@ -30,7 +37,8 @@ defmodule <%= inspect(@web) %>.<%= @index_live %>Test do
       |> follow_redirect(conn)
 
     assert html =~ "<%= @human_singular %> saved"<%= if @shown do %>
-    assert html =~ <%= @shown %><% end %>
+    assert html =~ <%= @shown %><% end %><%= if @files != [] do %>
+    assert html =~ "/files/#{organization.id}/<%= @table %>/"<% end %>
     assert has_element?(show, "#edit-<%= @singular %>")
   end
 

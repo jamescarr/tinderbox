@@ -1,0 +1,102 @@
+@moduledoc """
+Downloads the files `file` attributes store (`GET /files/<organization id>/…`).
+
+The files are in `<%= inspect(@prefix) %>.Storage` under the id of the organization they
+belong to, so the first segment of the key says who may read one: a user who
+belongs to that organization (any role), checked here rather than against the
+"current" organization, which a controller does not have. Everything else, a key
+that is not under one of the user's organizations, one with a segment that
+climbs out of it, or one that does not exist, is a plain 404: the answer never
+confirms that somebody else's file is there.
+
+The key carries no file metadata, so a file is sent as a download
+(`application/octet-stream`, `attachment`, `nosniff`), except the few types a
+browser shows safely: images and PDFs, sent inline.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+require Ash.Query
+require Logger
+
+alias <%= inspect(@accounts) %>.Membership
+alias <%= inspect(@prefix) %>.Storage
+
+@inline %{
+  ".png" => "image/png",
+  ".jpg" => "image/jpeg",
+  ".jpeg" => "image/jpeg",
+  ".gif" => "image/gif",
+  ".webp" => "image/webp",
+  ".pdf" => "application/pdf"
+}
+
+# GET /files/*key
+def show(conn, %{"key" => segments}) do
+  case conn.assigns[:current_user] do
+    nil -> redirect(conn, to: ~p"/sign-in")
+    user -> serve(conn, user, segments)
+  end
+end
+
+defp serve(conn, user, [organization_id | _rest] = segments) do
+  key = Enum.join(segments, "/")
+
+  with true <- Enum.all?(segments, &(&1 not in ["", ".", ".."])),
+       true <- member?(user, organization_id),
+       {:ok, body} <- Storage.get(key) do
+    send_file_response(conn, key, body)
+  else
+    false ->
+      not_found(conn)
+
+    {:error, :not_found} ->
+      not_found(conn)
+
+    {:error, reason} ->
+      Logger.error("could not read #{key} from storage: #{inspect(reason)}")
+      send_resp(conn, 502, "Storage is not available")
+  end
+end
+
+defp serve(conn, _user, _segments), do: not_found(conn)
+
+# The user belongs to the organization, in any role. A segment that is not a UUID
+# is no organization.
+defp member?(user, organization_id) do
+  case Ecto.UUID.cast(organization_id) do
+    {:ok, id} ->
+      Membership
+      |> Ash.Query.filter(user_id == ^user.id and organization_id == ^id)
+      |> Ash.exists?(actor: user)
+
+    :error ->
+      false
+  end
+end
+
+defp send_file_response(conn, key, body) do
+  filename = Path.basename(key)
+
+  {type, disposition} =
+    case Map.fetch(@inline, filename |> Path.extname() |> String.downcase()) do
+      {:ok, type} -> {type, "inline"}
+      :error -> {"application/octet-stream", "attachment"}
+    end
+
+  conn
+  |> put_resp_content_type(type, nil)
+  |> put_resp_header("content-disposition", content_disposition(disposition, filename))
+  |> put_resp_header("x-content-type-options", "nosniff")
+  |> put_resp_header("cache-control", "private")
+  |> send_resp(200, body)
+end
+
+# A quoted ASCII name for old clients, and the real one (RFC 6266) for the rest.
+defp content_disposition(disposition, filename) do
+  fallback = String.replace(filename, ~r/[^A-Za-z0-9._ -]/, "_")
+
+  ~s|#{disposition}; filename="#{fallback}"; filename*=UTF-8''#{URI.encode(filename, &URI.char_unreserved?/1)}|
+end
+
+defp not_found(conn), do: send_resp(conn, 404, "Not found")

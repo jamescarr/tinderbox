@@ -5,6 +5,9 @@ membership manages the organization, and showing a record's values. `import
 <%= inspect(@web) %>.LiveHelpers` in a LiveView that mounts `<%= inspect(@web) %>.LiveOrganization`.
 """
 
+use Phoenix.Component
+use <%= inspect(@web) %>, :verified_routes
+
 import Phoenix.LiveView, only: [put_flash: 3]
 
 alias <%= inspect(@web) %>.UI.Components
@@ -63,6 +66,37 @@ def format_value(value) when is_atom(value), do: Components.humanize(value)
 def format_value(value) when is_map(value) and not is_struct(value), do: inspect(value)
 def format_value(value) when is_list(value), do: inspect(value)
 def format_value(value), do: to_string(value)
+
+@doc """
+A `file` attribute's value as a link to `<%= inspect(@web) %>.FileController`, which
+checks the signed-in user belongs to the organization the file is stored under;
+a dash when there is no file.
+
+The value is the map the generated form stores (`key`, `filename`, `content_type`,
+`size`): atom keys as Ash returns it, string keys as a form posts it. Clicking the
+link does not also click the table row it may be in.
+"""
+attr :file, :map, default: nil
+
+def file_link(%{file: nil} = assigns), do: ~H"—"
+
+def file_link(assigns) do
+  file = assigns.file
+
+  assigns =
+    assign(assigns,
+      key: String.split(file_value(file, :key), "/"),
+      filename: file_value(file, :filename)
+    )
+
+  ~H"""
+  <.link href={~p"/files/#{@key}"} onclick="event.stopPropagation()" class="link link-primary">
+    {@filename}
+  </.link>
+  """
+end
+
+defp file_value(file, field), do: Map.get(file, field) || Map.fetch!(file, Atom.to_string(field))
 
 @doc """
 What to call a record in a label or a select: its `name`, `title` or `email`,
