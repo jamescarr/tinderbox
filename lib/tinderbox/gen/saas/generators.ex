@@ -37,7 +37,11 @@ defmodule Tinderbox.Gen.Saas.Generators do
   @spec apply(Igniter.t(), Tinderbox.Gen.Saas.assigns()) :: Igniter.t()
   def apply(igniter, assigns) do
     app = assigns[:app]
-    assigns = Keyword.merge(assigns, names(app))
+    # `Mfa` generates the vault (or finds the project's own) under this name.
+    assigns =
+      assigns
+      |> Keyword.put(:vault, Module.concat(assigns[:prefix], "Vault"))
+      |> Keyword.merge(names(app))
 
     igniter
     |> Igniter.create_new_file(

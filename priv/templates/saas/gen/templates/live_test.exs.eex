@@ -15,7 +15,8 @@ defmodule <%= inspect(@web) %>.<%= @index_live %>Test do
     owner: owner<%= if @test_organization? or @files != [] do %>,
     organization: organization<% end %>
   } do
-<%= for {var, call} <- @parents do %>    <%= var %> = <%= call %>
+<%= for secret <- @secrets do %>    <%= secret.name %>_secret = <%= @gen.sample_value(secret, :fixture) %>
+<% end %><%= for {var, call} <- @parents do %>    <%= var %> = <%= call %>
 <% end %>    conn = sign_in(conn, owner)
 
     {:ok, index, _html} = live(conn, ~p"/<%= @route %>")
@@ -38,7 +39,9 @@ defmodule <%= inspect(@web) %>.<%= @index_live %>Test do
 
     assert html =~ "<%= @human_singular %> saved"<%= if @shown do %>
     assert html =~ <%= @shown %><% end %><%= if @files != [] do %>
-    assert html =~ "/files/#{organization.id}/<%= @table %>/"<% end %>
+    assert html =~ "/files/#{organization.id}/<%= @table %>/"<% end %><%= for secret <- @secrets do %>
+    refute html =~ <%= secret.name %>_secret
+    assert html =~ "••••••"<% end %>
     assert has_element?(show, "#edit-<%= @singular %>")
   end
 

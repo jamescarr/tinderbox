@@ -343,6 +343,14 @@ defmodule Tinderbox.Gen.SaasTest do
     assert_has(source(igniter, "lib/test/prom_ex.ex"), "Test.PromEx.Plugins.App")
   end
 
+  test "the event notifier keeps sensitive attributes off the bus", %{igniter: igniter} do
+    notifier = source(igniter, "lib/test/events/ash_notifier.ex")
+
+    assert_has(notifier, "Enum.reject(& &1.sensitive?)")
+    assert order(notifier, "public_attributes") < order(notifier, "Enum.reject(& &1.sensitive?)")
+    assert_has(notifier, "`sensitive?` ones")
+  end
+
   test "the supervision tree starts metrics first and NATS before its consumers",
        %{igniter: igniter} do
     application = source(igniter, "lib/test/application.ex")

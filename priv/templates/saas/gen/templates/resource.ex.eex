@@ -11,7 +11,7 @@ use Ash.Resource,
   data_layer: AshPostgres.DataLayer,
   authorizers: [Ash.Policy.Authorizer],
   notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
-  extensions: [AshPaperTrail.Resource]
+  extensions: [AshPaperTrail.Resource<%= if @secrets != [] do %>, AshCloak<% end %>]
 
 postgres do
   table <%= inspect(@table) %>
@@ -34,13 +34,24 @@ end
 paper_trail do
   change_tracking_mode :changes_only
   store_action_name? true
-  ignore_attributes [:inserted_at, :updated_at]
+  ignore_attributes [:inserted_at, :updated_at<%= for secret <- @secrets do %>, :encrypted_<%= secret.name %><% end %>]
   create_version_on_destroy? true
   reference_source? false
   attributes_as_attributes [:organization_id]
   mixin <%= inspect(@accounts) %>.VersionIndexes
   belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
 end
+<%= if @secrets != [] do %>
+# A secret is stored as `encrypted_<name>` (AES-GCM with `<%= inspect(@vault) %>`, keyed by
+# `CLOAK_KEY`), and its `<name>` is a calculation that has to be loaded on purpose:
+# nothing here does, so a page, an API response or an event never carries one.
+# Versions skip the ciphertext too.
+cloak do
+  vault <%= inspect(@vault) %>
+  attributes <%= inspect(Enum.map(@secrets, & &1.name)) %>
+  decrypt_by_default []
+end
+<% end %>
 
 actions do
   defaults [:read, :destroy]

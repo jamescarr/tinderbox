@@ -9,7 +9,7 @@ if Code.ensure_loaded?(Igniter) do
 
     * `belongs_to :organization` (required, deleted with the organization) and one
       attribute or `belongs_to` per entry: `name:type[:required][:unique]`, with the
-      types string, text, integer, decimal, boolean, date, datetime, uuid, map, file,
+      types string, text, integer, decimal, boolean, date, datetime, uuid, map, file, secret,
       `enum:a,b,c` and `belongs_to:Target` (`User`, another resource of the domain, or
       a full module name). `unique` is unique within the organization,
     * policies: members of the organization read, its owners and admins create,

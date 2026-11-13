@@ -274,8 +274,9 @@ Ash packages the other stacks use, then adds:
   `<app>.events.<type>`. Every create, update and destroy of an organization,
   membership, invitation or subscription is published as `<resource>.<action>` through
   an `Ash.Notifier`; `<App>.Events.Handler` is where consumers go. A handler that
-  raises is nacked. The payload is the record's public attributes, so `public?` on
-  an attribute also puts it on the event bus.
+  raises is nacked. The payload is the record's public attributes except the
+  `sensitive?` ones (a `secret` attribute is one), so `public?` on an attribute
+  also puts it on the event bus.
 * **API** — AshJsonApi at `/api/json` and `/api` (organizations), OpenAPI at
   `/api/json/open_api`, Swagger UI at `/api/json/swaggerui`, bearer-token sign-in
   through the installer's `:api` pipeline. A request without a token gets `200` with
@@ -345,7 +346,10 @@ Ash packages the other stacks use, then adds:
   `datetime` fields with today/now, and a `file` attribute — `attachment:file:required` —
   gets a file input that stores the upload in `<App>.Storage` under
   `<organization id>/…`, with links on the pages to `<App>Web.FileController`, which
-  serves it to the members of that organization only), `mix <app>.gen.concept` and
+  serves it to the members of that organization only; a `secret` attribute —
+  `api_key:secret:required` — is encrypted at rest with AshCloak through `<App>.Vault`,
+  kept off the event bus and the activity feed, and shown masked, with a password input
+  that is never prefilled), `mix <app>.gen.concept` and
   `mix <app>.gen.domain`. Their
   templates are copied into `priv/templates/<app>.gen/` for the project to edit; the
   shared code (`Mix.<App>.Gen`) has no Igniter in it and the tasks compile to a

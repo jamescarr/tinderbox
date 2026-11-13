@@ -87,7 +87,7 @@ def render(assigns) do
 
     <.card>
       <.description_list><%= for attribute <- @scalars do %>
-        <:item label=<%= inspect(@gen.humanize(attribute.name)) %>><%= if attribute.type == :file do %><.file_link file={@<%= @singular %>.<%= attribute.name %>} /><% else %>{format_value(@<%= @singular %>.<%= attribute.name %>)}<% end %></:item><% end %><%= for relation <- @belongs_to do %>
+        <:item label=<%= inspect(@gen.humanize(attribute.name)) %>><%= cond do %><% attribute.type == :file -> %><.file_link file={@<%= @singular %>.<%= attribute.name %>} /><% attribute.type == :secret -> %>••••••<% true -> %>{format_value(@<%= @singular %>.<%= attribute.name %>)}<% end %></:item><% end %><%= for relation <- @belongs_to do %>
         <:item label=<%= inspect(@gen.humanize(relation.name)) %>>{display_name(@<%= @singular %>.<%= relation.name %>)}</:item><% end %>
         <:item label="Created">{format_datetime(@<%= @singular %>.inserted_at)}</:item>
         <:item label="Updated">{format_datetime(@<%= @singular %>.updated_at)}</:item>
