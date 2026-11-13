@@ -40,7 +40,7 @@ Checklist for `/plan-loop`. Each bullet is one PR against `main`. The sections u
 - [x] API rate limiting with Hammer in the `:api` pipeline
 - [x] `file` attribute type: upload through the generated form, download through an authorized controller (after: 2, 3)
 - [x] `secret` attribute type: encrypted at rest with AshCloak and kept off the event bus (after: 6, 8)
-- [ ] Dogfood: generate `studio_next`, exercise every new feature, write `docs/feedback/studio-next.md` (after: 1, 2, 3, 4, 5, 6, 7, 8, 9)
+- [x] Dogfood: generate `studio_next`, exercise every new feature, write `docs/feedback/studio-next.md` (after: 1, 2, 3, 4, 5, 6, 7, 8, 9)
 
 ## Bullet details
 
