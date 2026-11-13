@@ -23,6 +23,9 @@ defmodule Tinderbox.Gen.Saas.Accounts do
     and `Changes.NotifyManagers` (notify an organization's managers after commit),
   * `<App>.Accounts.managers/1`, an organization's owners and admins (the
     recipients of what happens to it),
+  * `Accounts.VersionIndexes`, the mixin every organization-scoped `paper_trail`
+    block uses so its version rows carry `organization_id`, indexed by time,
+    which `<App>.Activity` reads,
   * the organization switcher (`<App>Web.OrganizationController`) and the
     `<App>Web.LiveOrganization` hooks,
   * removal of the `magic_sign_in_route` the Phoenix installer adds, which does
@@ -245,7 +248,8 @@ defmodule Tinderbox.Gen.Saas.Accounts do
           {Module.concat([accounts, Validations, SameOrganization]),
            "saas/accounts/validations/same_organization.ex.eex"},
           {Module.concat([accounts, Checks, ActorManagesOrganization]),
-           "saas/accounts/checks/actor_manages_organization.ex.eex"}
+           "saas/accounts/checks/actor_manages_organization.ex.eex"},
+          {Module.concat(accounts, VersionIndexes), "saas/accounts/version_indexes.ex.eex"}
         ]
 
     Gen.create_modules(igniter, modules, assigns)

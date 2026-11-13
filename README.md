@@ -250,8 +250,11 @@ Ash packages the other stacks use, then adds:
   `member`) and `Invitation` (email, role, token link). The creator becomes the
   owner; the last owner cannot be removed or demoted. Re-inviting an address updates
   the open invitation instead of adding a row. Organizations, memberships,
-  invitations and subscriptions keep a version history (`AshPaperTrail`); the
-  invitation token is kept out of it.
+  invitations, connections and subscriptions keep a version history (`AshPaperTrail`;
+  the version row carries `organization_id`, indexed with its time, through
+  `Accounts.VersionIndexes`); the invitation token is kept out of it. `/activity`
+  (`<App>.Activity.feed/2`) lists the latest versions of every organization-scoped
+  resource, newest first, with who did it and what it set.
 * **Notifications** — `<App>.Notifications` with a catalog (`member.invited`,
   `member.joined`, `subscription.updated`, `payment.failed`), an in-app inbox at
   `/inbox` that updates live and a per-user email toggle at
@@ -330,7 +333,7 @@ Ash packages the other stacks use, then adds:
   status:enum:a,b owner:belongs_to:User …` (an organization-scoped resource: owners
   and admins write, members read, platform admins bypass; `SameOrganization` on
   references; a `<thing>.created` event; `[:organization_id, :inserted_at]` and every
-  `belongs_to` column indexed; its fixture and migration), `mix
+  `belongs_to` column indexed; a version history for `/activity`; its fixture and migration), `mix
   <app>.gen.live` (the same, plus list, show and form pages that read at most 1000
   rows, routes, a navigation entry and a test; its form prefills required `date` and
   `datetime` fields with today/now), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their

@@ -25,6 +25,10 @@ paper_trail do
   store_action_name? true
   ignore_attributes [:inserted_at, :updated_at]
   create_version_on_destroy? false
+  # The organization is a column of the version row, not only a key inside
+  # `changes`, so the activity feed can filter and index on it.
+  attributes_as_attributes [:organization_id]
+  mixin <%= inspect(@accounts) %>.VersionIndexes
   belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
 end
 

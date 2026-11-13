@@ -7,6 +7,8 @@ if Code.ensure_loaded?(Igniter) do
         mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Upstreams --queues upstreams:5,dead_letters
 
     * creates the domain with `mix ash.gen.domain` unless it exists already,
+    * adds `AshPaperTrail.Domain` (with `include_versions? true`) to it, new or not, so
+      the resources `gen.resource` writes keep the versions `<%= inspect(@prefix) %>.Activity` reads,
     * registers it in `config :<%= @app %>, ash_domains:` in `config/config.exs`
       (AshOban only sees the triggers of registered domains),
     * adds each queue to `config :<%= @app %>, Oban, queues:` as `name:limit`, with a
@@ -49,10 +51,19 @@ if Code.ensure_loaded?(Igniter) do
           else: Igniter.compose_task(igniter, "ash.gen.domain", [inspect(domain)])
 
       igniter
+      |> add_versions(domain)
       |> Igniter.Project.Config.configure("config.exs", app, [:ash_domains], [domain],
         updater: fn zipper -> Igniter.Code.List.prepend_new_to_list(zipper, domain) end
       )
       |> add_queues(app, queues)
+    end
+
+    # Every resource `gen.resource` writes keeps versions, which the domain has to
+    # include; both calls are idempotent, so a domain that predates this gets them too.
+    defp add_versions(igniter, domain) do
+      igniter
+      |> Spark.Igniter.add_extension(domain, Ash.Domain, :extensions, AshPaperTrail.Domain)
+      |> Spark.Igniter.set_option(domain, [:paper_trail, :include_versions?], true)
     end
 
     defp add_queues(igniter, app, queues) do

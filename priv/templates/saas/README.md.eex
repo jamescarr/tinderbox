@@ -211,6 +211,12 @@ be reached; everything else works.
   `manager?/1`, `error_message/1`). Pass `wide` to `Layouts.app` for pages made of tables, and
   `current_page` to highlight its entry; add the entry to the `:nav` slot in
   `<%= inspect(@web) %>.Layouts.app/1`.
+* Every organization-scoped resource keeps versions (AshPaperTrail) and `/activity`
+  lists them; `<%= inspect(@prefix) %>.Activity.feed/2` is the query. A resource's
+  `paper_trail` block lists `attributes_as_attributes [:organization_id]` and
+  `mixin <%= inspect(@accounts) %>.VersionIndexes`, so its version rows carry the organization,
+  indexed by time; resources you write by hand get the same `paper_trail do` block as a
+  generated one (see `priv/templates/<%= @app %>.gen/resource.ex.eex`), or they do not appear.
 * A sign-in is finished by `<%= inspect(@web) %>.AuthController`, which asks
   `<%= inspect(@accounts) %>.MFA.sign_in_step/2` whether the user is signed in, has to enter
   a code, or has to set a second factor up (`<%= inspect(@web) %>.MfaController`). Code
@@ -250,7 +256,7 @@ be reached; everything else works.
   |---|---|
   | `mix <%= @app %>.gen.concept [concept.exs]` | applies the manifest: rewrites `<%= inspect(@prefix) %>.Concept`, generates the `resources` that are new, one migration |
   | `mix <%= @app %>.gen.live <%= inspect(@prefix) %>.Things.Thing name:string:required … [--nav Things] [--icon hero-…] [--route things]` | list, show and form pages, routes, a navigation entry and a test (and the resource, when new) |
-  | `mix <%= @app %>.gen.resource <%= inspect(@prefix) %>.Things.Thing name:string:required … [--no-admin-bypass] [--table things]` | an organization-scoped resource, its fixture and migration (`--no-codegen` skips it) |
+  | `mix <%= @app %>.gen.resource <%= inspect(@prefix) %>.Things.Thing name:string:required … [--no-admin-bypass] [--table things]` | an organization-scoped resource that keeps versions for `/activity`, its fixture and migration (`--no-codegen` skips it) |
   | `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things [--queues things:5]` | a domain, registered in `ash_domains` (AshOban only sees the triggers of registered domains), with its Oban queues |
 
   Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,

@@ -1,0 +1,48 @@
+defmodule <%= inspect(@web) %>.ActivityLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@prefix) %>.Activity
+
+  setup do
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner, %{name: "Acme"})}
+  end
+
+  test "the owner sees who created the organization and its first membership",
+       %{conn: conn, owner: owner} do
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/activity")
+
+    assert has_element?(view, "#activity", "#{owner.email} created Organization Acme")
+    assert has_element?(view, "#activity", "#{owner.email} created Membership")
+  end
+
+  test "a member of another organization sees that organization's activity only",
+       %{conn: conn} do
+    stranger = user_fixture()
+    organization_fixture(stranger, %{name: "Other Co"})
+
+    {:ok, view, _html} = live(sign_in(conn, stranger), ~p"/activity")
+
+    assert has_element?(view, "#activity", "created Organization Other Co")
+    refute has_element?(view, "#activity", "Acme")
+  end
+
+  test "the feed has the newest version first, with the actor and the changes",
+       %{owner: owner, organization: organization} do
+    [newest | _] = entries = Activity.feed(organization)
+
+    assert newest.at == Enum.max_by(entries, & &1.at, DateTime).at
+    assert Enum.any?(entries, &(&1.resource == "Organization" and &1.label == "Acme"))
+    assert Enum.any?(entries, &(&1.actor && &1.actor.id == owner.id))
+    assert Enum.any?(entries, &(&1.changes["name"] == "Acme"))
+    refute Enum.any?(entries, &Map.has_key?(&1.changes, "organization_id"))
+  end
+
+  test "limit caps the feed", %{organization: organization} do
+    assert [_one] = Activity.feed(organization, limit: 1)
+  end
+end

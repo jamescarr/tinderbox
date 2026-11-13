@@ -36,7 +36,7 @@ Checklist for `/plan-loop`. Each bullet is one PR against `main`. The sections u
 - [x] UI kit `enum_options/2` and `gen.live` selects use it
 - [x] UI kit `bar_list` component, and the modal doc shows the server-opened pattern
 - [x] Landing pricing grid fits the number of plans
-- [ ] Activity feed: versions of organization-scoped resources on `/activity`, and `gen.resource` tracks versions
+- [x] Activity feed: versions of organization-scoped resources on `/activity`, and `gen.resource` tracks versions
 - [ ] API rate limiting with Hammer in the `:api` pipeline
 - [ ] `file` attribute type: upload through the generated form, download through an authorized controller (after: 2, 3)
 - [ ] `secret` attribute type: encrypted at rest with AshCloak and kept off the event bus (after: 6, 8)
