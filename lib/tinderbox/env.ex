@@ -105,6 +105,8 @@ defmodule Tinderbox.Env do
          {"AUTH0_CLIENT_ID", "replace_me"},
          {"AUTH0_CLIENT_SECRET", "replace_me"}
        ]},
+      {"API rate limit (per node): requests per window for each API connection, user or IP",
+       [{"API_RATE_LIMIT", "600"}, {"API_RATE_WINDOW_MS", "60000"}]},
       {"Mail: Mailpit (UI http://localhost:8025; SMTP_PORT and MAILPIT_UI_PORT are the host ports compose publishes)",
        [
          {"SMTP_HOST", "localhost"},

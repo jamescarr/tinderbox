@@ -99,7 +99,9 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
           {:bcrypt_elixir, "~> 3.0"},
           # Verifies the access tokens of API connections against the issuer's JWKS;
           # already in the lock through joken.
-          {:jose, "~> 1.11"}
+          {:jose, "~> 1.11"},
+          # The API's rate limiter (`<App>.RateLimit`); 7.4 added `:fix_window_per_key`.
+          {:hammer, "~> 7.4"}
         ] ++ Tinderbox.Gen.Saas.Mfa.deps()
     }
   end

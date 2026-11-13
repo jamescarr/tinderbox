@@ -172,7 +172,7 @@ defmodule Tinderbox.Gen.Saas.Ops do
     Gen.append_to_runtime_exs(
       igniter,
       Gen.render_template("saas/ops/mail_runtime.exs.eex", assigns),
-      fn igniter -> runtime_contains?(igniter, "Swoosh.Adapters.SMTP") end
+      Gen.runtime_contains?("Swoosh.Adapters.SMTP")
     )
   end
 
@@ -180,22 +180,8 @@ defmodule Tinderbox.Gen.Saas.Ops do
     Gen.append_to_runtime_exs(
       igniter,
       Gen.render_template("saas/ops/pooler_runtime.exs.eex", assigns),
-      fn igniter -> runtime_contains?(igniter, "DATABASE_POOLER") end
+      Gen.runtime_contains?("DATABASE_POOLER")
     )
-  end
-
-  # The SMTP config sits inside an `if`, which `configures_key?/4` does not look into.
-  defp runtime_contains?(igniter, snippet) do
-    if Igniter.exists?(igniter, "config/runtime.exs") do
-      igniter = Igniter.include_existing_file(igniter, "config/runtime.exs")
-
-      igniter.rewrite
-      |> Rewrite.source!("config/runtime.exs")
-      |> Rewrite.Source.get(:content)
-      |> String.contains?(snippet)
-    else
-      false
-    end
   end
 
   # -- notices ---------------------------------------------------------------

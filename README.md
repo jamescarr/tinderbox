@@ -301,6 +301,12 @@ Ash packages the other stacks use, then adds:
   at the provider and marks the row, so a token that has not expired stops working
   on its next request. A connection has no scopes: it reads what the read policies
   allow it, and `<App>.Accounts.Organization` lets it read its own organization.
+* **API rate limit** — `<App>Web.Plugs.RateLimit` follows `LoadConnection` in the `:api`
+  pipeline: `API_RATE_LIMIT` requests (default 600) per `API_RATE_WINDOW_MS` (default
+  60000) for each connection, else each signed-in user, else each IP address, with
+  `x-ratelimit-limit` / `x-ratelimit-remaining` headers and `429` + `retry-after` past
+  the limit. The counters are Hammer's ETS tables (`<App>.RateLimit`), so the limit is
+  per node; multi-node deployments switch `backend:` to Hammer's Redis backend.
 * **Admin** — `/admin` (the UI kit, in the app shell): dashboard, users, organizations (and one
   organization), subscriptions, validation, the waitlist, and the FunWithFlags
   dashboard at `/admin/flags`. Only `:admin` users get in: anyone else is sent to the

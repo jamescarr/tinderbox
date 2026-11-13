@@ -1,0 +1,14 @@
+@moduledoc """
+The rate limiter behind `<%= inspect(@web) %>.Plugs.RateLimit`: Hammer with its ETS backend,
+supervised by the application.
+
+    <%= inspect(@prefix) %>.RateLimit.hit("connection:42", :timer.minutes(1), 600)
+    #=> {:allow, 1} | {:deny, retry_after_ms}
+
+The counters live in this node's memory: with several nodes each one lets `API_RATE_LIMIT`
+requests through per window. Switch `backend:` to Hammer's Redis backend
+(`hammer_backend_redis`) when the limit has to hold across nodes. Each key's window starts
+at its first request (`:fix_window_per_key`), so keys do not all reset at the same instant.
+"""
+
+use Hammer, backend: :ets, algorithm: :fix_window_per_key
