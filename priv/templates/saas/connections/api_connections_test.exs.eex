@@ -80,6 +80,29 @@ defmodule <%= inspect(@web) %>.ApiConnectionsTest do
     assert %{"data" => []} = conn |> api(foreign) |> json_response(200)
   end
 
+  test "requests past the rate limit are answered with 429 and a retry-after", ctx do
+    %{conn: conn, key: key, config: config, connection: connection} = ctx
+    original = Application.fetch_env!(<%= inspect(@app) %>, <%= inspect(@prefix) %>.RateLimit)
+    Application.put_env(<%= inspect(@app) %>, <%= inspect(@prefix) %>.RateLimit, Keyword.put(original, :limit, 2))
+    on_exit(fn -> Application.put_env(<%= inspect(@app) %>, <%= inspect(@prefix) %>.RateLimit, original) end)
+
+    token = token(key, claims(config, connection))
+
+    first = api(conn, token)
+    assert json_response(first, 200)
+    assert get_resp_header(first, "x-ratelimit-limit") == ["2"]
+    assert get_resp_header(first, "x-ratelimit-remaining") == ["1"]
+
+    second = api(conn, token)
+    assert json_response(second, 200)
+    assert get_resp_header(second, "x-ratelimit-remaining") == ["0"]
+
+    third = api(conn, token)
+    assert %{"errors" => [%{"status" => "429", "title" => "Too Many Requests"}]} = json_response(third, 429)
+    assert [retry_after] = get_resp_header(third, "retry-after")
+    assert String.to_integer(retry_after) >= 1
+  end
+
   defp now, do: System.os_time(:second)
 
   defp claims(config, connection, overrides \\ %{}) do

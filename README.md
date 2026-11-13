@@ -304,6 +304,12 @@ Ash packages the other stacks use, then adds:
   at the provider and marks the row, so a token that has not expired stops working
   on its next request. A connection has no scopes: it reads what the read policies
   allow it, and `<App>.Accounts.Organization` lets it read its own organization.
+* **API rate limit** — `<App>Web.Plugs.RateLimit` follows `LoadConnection` in the `:api`
+  pipeline: `API_RATE_LIMIT` requests (default 600) per `API_RATE_WINDOW_MS` (default
+  60000) for each connection, else each signed-in user, else each IP address, with
+  `x-ratelimit-limit` / `x-ratelimit-remaining` headers and `429` + `retry-after` past
+  the limit. The counters are Hammer's ETS tables (`<App>.RateLimit`), so the limit is
+  per node; multi-node deployments switch `backend:` to Hammer's Redis backend.
 * **Admin** — `/admin` (the UI kit, in the app shell): dashboard, users, organizations (and one
   organization), subscriptions, validation, the waitlist, and the FunWithFlags
   dashboard at `/admin/flags`. Only `:admin` users get in: anyone else is sent to the
@@ -336,7 +342,11 @@ Ash packages the other stacks use, then adds:
   `belongs_to` column indexed; a version history for `/activity`; its fixture and migration), `mix
   <app>.gen.live` (the same, plus list, show and form pages that read at most 1000
   rows, routes, a navigation entry and a test; its form prefills required `date` and
-  `datetime` fields with today/now), `mix <app>.gen.concept` and `mix <app>.gen.domain`. Their
+  `datetime` fields with today/now, and a `file` attribute — `attachment:file:required` —
+  gets a file input that stores the upload in `<App>.Storage` under
+  `<organization id>/…`, with links on the pages to `<App>Web.FileController`, which
+  serves it to the members of that organization only), `mix <app>.gen.concept` and
+  `mix <app>.gen.domain`. Their
   templates are copied into `priv/templates/<app>.gen/` for the project to edit; the
   shared code (`Mix.<App>.Gen`) has no Igniter in it and the tasks compile to a
   `Mix.raise` in production.

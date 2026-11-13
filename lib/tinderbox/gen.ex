@@ -74,6 +74,26 @@ defmodule Tinderbox.Gen do
   end
 
   @doc """
+  The `configured?` check for `append_to_runtime_exs/3` when the config sits inside an
+  `if`, which `runtime_configures?/2` does not look into: runtime.exs mentions `snippet`.
+  """
+  @spec runtime_contains?(String.t()) :: (Igniter.t() -> boolean())
+  def runtime_contains?(snippet) do
+    fn igniter ->
+      if Igniter.exists?(igniter, "config/runtime.exs") do
+        igniter = Igniter.include_existing_file(igniter, "config/runtime.exs")
+
+        igniter.rewrite
+        |> Rewrite.source!("config/runtime.exs")
+        |> Rewrite.Source.get(:content)
+        |> String.contains?(snippet)
+      else
+        false
+      end
+    end
+  end
+
+  @doc """
   Applies `fun` to the content of the file at `path`: `{:ok, new_content}`
   rewrites it, `{:warning, message}` leaves it alone and warns. A missing file is
   warned about rather than created.

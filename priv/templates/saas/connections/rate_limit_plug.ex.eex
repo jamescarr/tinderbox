@@ -1,0 +1,65 @@
+@moduledoc """
+Plug that limits how often the API is called: `API_RATE_LIMIT` requests per
+`API_RATE_WINDOW_MS` (600 per minute by default), counted per node by
+`<%= inspect(@prefix) %>.RateLimit`.
+
+It runs in the `:api` pipeline after `<%= inspect(@web) %>.Plugs.LoadConnection`, so the key is
+the API connection that made the request, else the signed-in user, else the client's IP
+address. Every answer carries `x-ratelimit-limit` and `x-ratelimit-remaining`; a request over
+the limit is answered with `429`, a `retry-after` in seconds and a JSON:API error, and
+goes no further.
+"""
+
+@behaviour Plug
+
+import Plug.Conn
+
+alias <%= inspect(@prefix) %>.RateLimit
+
+@impl Plug
+def init(opts), do: opts
+
+@impl Plug
+def call(conn, _opts) do
+  config = Application.fetch_env!(<%= inspect(@app) %>, RateLimit)
+  limit = Keyword.fetch!(config, :limit)
+  window_ms = Keyword.fetch!(config, :window_ms)
+
+  case RateLimit.hit(key(conn), window_ms, limit) do
+    {:allow, count} ->
+      conn
+      |> put_resp_header("x-ratelimit-limit", Integer.to_string(limit))
+      |> put_resp_header("x-ratelimit-remaining", Integer.to_string(max(limit - count, 0)))
+
+    {:deny, retry_after_ms} ->
+      too_many_requests(conn, limit, max(div(retry_after_ms + 999, 1000), 1))
+  end
+end
+
+defp key(conn) do
+  case conn.assigns do
+    %{current_connection: %{id: id}} -> "connection:#{id}"
+    %{current_user: %{id: id}} -> "user:#{id}"
+    _anonymous -> "ip:#{:inet.ntoa(conn.remote_ip)}"
+  end
+end
+
+defp too_many_requests(conn, limit, retry_after) do
+  body = %{
+    errors: [
+      %{
+        status: "429",
+        title: "Too Many Requests",
+        detail: "Rate limit exceeded; retry after #{retry_after} seconds"
+      }
+    ]
+  }
+
+  conn
+  |> put_resp_header("x-ratelimit-limit", Integer.to_string(limit))
+  |> put_resp_header("x-ratelimit-remaining", "0")
+  |> put_resp_header("retry-after", Integer.to_string(retry_after))
+  |> put_resp_content_type("application/vnd.api+json")
+  |> send_resp(429, Jason.encode!(body))
+  |> halt()
+end

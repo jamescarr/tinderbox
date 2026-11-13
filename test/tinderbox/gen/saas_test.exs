@@ -55,6 +55,8 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test_web/admin/users_live.ex
           lib/test_web/health_controller.ex
           lib/test_web/organization_controller.ex
+          lib/test_web/file_controller.ex
+          test/test_web/controllers/file_controller_test.exs
           lib/test_web/stripe_webhook_handler.ex
           .github/workflows/ci.yml
           lib/test/connections.ex
@@ -67,6 +69,8 @@ defmodule Tinderbox.Gen.SaasTest do
           lib/test/connections/changes/register_client.ex
           lib/test/connections/changes/delete_client.ex
           lib/test_web/plugs/load_connection.ex
+          lib/test_web/plugs/rate_limit.ex
+          lib/test/rate_limit.ex
           lib/test_web/connections_live.ex
           lib/mix/tasks/test.gen.domain.ex
           test/support/fixtures.ex
@@ -244,6 +248,31 @@ defmodule Tinderbox.Gen.SaasTest do
     refute_has(source(igniter, "lib/test/accounts/organization.ex"), "attributes_as_attributes")
   end
 
+  test "files are downloaded through a controller in the browser scope, routed once", %{
+    igniter: igniter
+  } do
+    route = ~s|get "/files/*key", FileController, :show|
+    router = source(igniter, "lib/test_web/router.ex")
+
+    assert_has(router, route)
+    assert order(router, ~s|post "/organizations/switch"|) < order(router, route)
+
+    again = source(Saas.apply(igniter, []), "lib/test_web/router.ex")
+    assert length(String.split(plain(again), plain(route))) == 2
+
+    controller = source(igniter, "lib/test_web/file_controller.ex")
+    assert_has(controller, "defmodule TestWeb.FileController")
+    assert_has(controller, "Test.Accounts.Membership")
+    assert_has(controller, ~s|send_resp(conn, 404, "Not found")|)
+    assert_has(controller, ~s|{"application/octet-stream", "attachment"}|)
+    assert_has(controller, ~s|put_resp_header("x-content-type-options", "nosniff")|)
+
+    assert_has(source(igniter, "lib/test_web/live_helpers.ex"), "def file_link(assigns)")
+
+    test = source(igniter, "test/test_web/controllers/file_controller_test.exs")
+    assert_has(test, "defmodule TestWeb.FileControllerTest")
+  end
+
   test "the JSON:API router is mounted at /api", %{igniter: igniter} do
     router = source(igniter, "lib/test_web/router.ex")
 
@@ -276,6 +305,30 @@ defmodule Tinderbox.Gen.SaasTest do
 
     assert_has(source(igniter, "test/support/fixtures.ex"), "def connection_fixture(")
     assert_has(source(igniter, "lib/test/connections/provider.ex"), ~s|"auth0" -> |)
+  end
+
+  test "API rate limiting: the plug follows LoadConnection, Hammer is supervised after the vault, the limits are configured",
+       %{igniter: igniter} do
+    router = source(igniter, "lib/test_web/router.ex")
+
+    assert order(router, "plug TestWeb.Plugs.LoadConnection") <
+             order(router, "plug TestWeb.Plugs.RateLimit")
+
+    application = source(igniter, "lib/test/application.ex")
+    assert order(application, "Test.Vault") < order(application, "Test.RateLimit")
+
+    assert_has(source(igniter, "lib/test/rate_limit.ex"), "use Hammer, backend: :ets")
+    assert_has(source(igniter, "lib/test_web/plugs/rate_limit.ex"), "RateLimit.hit(key(conn)")
+
+    runtime = source(igniter, "config/runtime.exs")
+    assert_has(runtime, ~s|System.get_env("API_RATE_LIMIT", "600")|)
+    assert_has(runtime, ~s|System.get_env("API_RATE_WINDOW_MS", "60000")|)
+    assert_has(source(igniter, "config/test.exs"), "Test.RateLimit")
+
+    assert_has(
+      source(igniter, "test/test_web/api_connections_test.exs"),
+      ~s|"x-ratelimit-remaining"|
+    )
   end
 
   test "the endpoint verifies Stripe's signature before the body is parsed", %{igniter: igniter} do

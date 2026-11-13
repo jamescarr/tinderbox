@@ -1,0 +1,88 @@
+defmodule <%= inspect(@web) %>.FileControllerTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@prefix) %>.Storage
+
+  setup do
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  defp store(organization, path, body \\ "hi") do
+    key = "#{organization.id}/#{path}"
+    :ok = Storage.put(key, body)
+    String.split(key, "/")
+  end
+
+  test "an owner downloads a file of their organization as an attachment", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    segments = store(organization, "notes/#{Ash.UUID.generate()}/hello.txt")
+
+    conn = get(sign_in(conn, owner), ~p"/files/#{segments}")
+
+    assert response(conn, 200) == "hi"
+    assert [disposition] = get_resp_header(conn, "content-disposition")
+    assert disposition =~ ~s|attachment; filename="hello.txt"|
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    assert [<<"application/octet-stream", _rest::binary>>] = get_resp_header(conn, "content-type")
+  end
+
+  test "a member reads it too, and an image is shown inline", %{
+    conn: conn,
+    organization: organization
+  } do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+    segments = store(organization, "notes/#{Ash.UUID.generate()}/logo.png")
+
+    conn = get(sign_in(conn, member), ~p"/files/#{segments}")
+
+    assert response(conn, 200) == "hi"
+    assert [<<"image/png", _rest::binary>>] = get_resp_header(conn, "content-type")
+    assert [<<"inline;", _rest::binary>>] = get_resp_header(conn, "content-disposition")
+  end
+
+  test "somebody who belongs to another organization gets a 404", %{
+    conn: conn,
+    organization: organization
+  } do
+    segments = store(organization, "notes/#{Ash.UUID.generate()}/hello.txt")
+    stranger = user_fixture()
+    organization_fixture(stranger, %{name: "Elsewhere"})
+
+    conn = get(sign_in(conn, stranger), ~p"/files/#{segments}")
+
+    assert response(conn, 404) == "Not found"
+  end
+
+  test "a key outside the user's organizations, or one that climbs out of them, is a 404", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    conn = sign_in(conn, owner)
+
+    assert conn |> get(~p"/files/#{["fixture", "hello.txt"]}") |> response(404)
+
+    climbing = [organization.id, "..", Ash.UUID.generate(), "x.txt"]
+    assert conn |> get(~p"/files/#{climbing}") |> response(404)
+  end
+
+  test "a file that is not there is a 404", %{conn: conn, owner: owner, organization: organization} do
+    conn = get(sign_in(conn, owner), ~p"/files/#{[organization.id, "notes", "missing.txt"]}")
+
+    assert response(conn, 404) == "Not found"
+  end
+
+  test "somebody who is not signed in is sent to sign in", %{conn: conn, organization: organization} do
+    conn = get(conn, ~p"/files/#{[organization.id, "notes", "hello.txt"]}")
+
+    assert redirected_to(conn) == "/sign-in"
+  end
+end

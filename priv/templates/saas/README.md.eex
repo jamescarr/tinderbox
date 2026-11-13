@@ -61,6 +61,14 @@ is what tokens must carry in `aud`: clients send it as `audience=` when they ask
 for a token (for Auth0 it is the identifier of the API you registered). The tests
 use an in-memory `fake` provider whatever `OAUTH_PROVIDER` says.
 
+The API is rate limited in the `:api` pipeline, after the connection is known:
+`API_RATE_LIMIT` requests (default `600`) per `API_RATE_WINDOW_MS` (default `60000`)
+for each connection, else each signed-in user, else each IP address. Every answer
+carries `x-ratelimit-limit` and `x-ratelimit-remaining`; past the limit the API
+answers `429` with `retry-after` (seconds). The counters are Hammer's ETS tables
+(`<%= inspect(@prefix) %>.RateLimit`), so the limit is per node: multi-node deployments
+switch `backend:` to Hammer's Redis backend.
+
 Production (the release image, `mix phx.gen.release --docker`) refuses to start
 without `DATABASE_URL`, `SECRET_KEY_BASE`, `TOKEN_SIGNING_SECRET` and `CLOAK_KEY`
 (`openssl rand -base64 32`: the key two-factor secrets are encrypted with; losing it
@@ -238,6 +246,10 @@ be reached; everything else works.
   kit's formatting helpers are `humanize/1`, `format_number/2` and
   `enum_options/2` (`[{label, value}]` for a select, `labels: %{llc: "LLC"}` for the
   labels `humanize/1` gets wrong).
+* API requests are rate limited by `<%= inspect(@web) %>.Plugs.RateLimit`, which follows
+  `LoadConnection` in the `:api` pipeline (see Configuration for the limit). A route
+  that should be counted differently calls `<%= inspect(@prefix) %>.RateLimit.hit(key, window_ms, limit)`
+  itself; it answers `{:allow, count}` or `{:deny, retry_after_ms}`.
 * Notify an organization's owners and admins with
   `<%= inspect(@accounts) %>.managers/1` as the recipients. From an action,
   `change {<%= inspect(@accounts) %>.Changes.NotifyManagers, key: "thing.created", data: {Module, :function}}`
@@ -248,7 +260,10 @@ be reached; everything else works.
 * The application's own metrics go in `<%= inspect(@prefix) %>.PromEx.Plugins.App`.
 * `<%= inspect(@prefix) %>.Storage` has `put/2`, `get/1`, `delete/1` and `presign/2`
   (S3 only; GCS answers `{:error, :not_supported}`). Prefix keys with the
-  organization id.
+  organization id: files stored under `<organization id>/…` are served by
+  `<%= inspect(@web) %>.FileController` (`GET /files/<key>`) to the members of that
+  organization, and to nobody else (a 404, so a foreign key is not confirmed).
+  The `file` attribute type does all of it: the form uploads, the pages link to it.
 * Grow the domain with the project's own generators (run them through
   `mise exec -- mix …`):
 
@@ -260,8 +275,15 @@ be reached; everything else works.
   | `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things [--queues things:5]` | a domain, registered in `ash_domains` (AshOban only sees the triggers of registered domains), with its Oban queues |
 
   Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,
-  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `enum:a,b,c` and
-  `belongs_to:Target` (`User`, another resource of the domain, or a full module name).
+  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `file`,
+  `enum:a,b,c` and `belongs_to:Target` (`User`, another resource of the domain, or a
+  full module name). A `file` (never unique) is a map of `key`, `filename`,
+  `content_type` and `size`: the generated form has a file input (one file, 10 MB at
+  most), stores the upload in `<%= inspect(@prefix) %>.Storage` under
+  `<organization id>/<table>/<uuid>/<filename>`, and keeps the stored file on an edit
+  that uploads none; the show and list pages link to it (`file_link/1` in
+  `<%= inspect(@web) %>.LiveHelpers`). A form that fails validation drops its upload:
+  the file has to be chosen again.
   A required `date` or `datetime` is prefilled with today (now) on the new-record
   form, since an untouched date input posts `""`, which Ash reads as nil.
   Generated resources are written by the organization's owners and admins and read

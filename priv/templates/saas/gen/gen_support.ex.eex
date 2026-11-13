@@ -36,11 +36,13 @@ defmodule <%= @support_module %> do
 
   @grammar """
   An attribute is name:type[:required][:unique]. The types are string, text, integer,
-  decimal, boolean, date, datetime, uuid, map, enum:a,b,c (one of the atoms, never nil)
-  and belongs_to:Target (User, another resource of the same domain, or a full module
+  decimal, boolean, date, datetime, uuid, map, file (an upload: the form takes a file,
+  the pages link to it), enum:a,b,c (one of the atoms, never nil) and
+  belongs_to:Target (User, another resource of the same domain, or a full module
   name). For example:
 
       name:string:required status:enum:draft,active,archived budget:decimal owner:belongs_to:User
+      attachment:file:required
   """
 
   @typedoc """
@@ -59,7 +61,16 @@ defmodule <%= @support_module %> do
           values: [atom()] | nil,
           target: module() | nil,
           input:
-            :text | :textarea | :number | :checkbox | :date | :datetime | :select | :relation | :none
+            :text
+            | :textarea
+            | :number
+            | :checkbox
+            | :date
+            | :datetime
+            | :select
+            | :relation
+            | :file
+            | :none
         }
 
   @doc "The attribute grammar, for error messages."
@@ -118,6 +129,12 @@ defmodule <%= @support_module %> do
       name in @reserved -> {:error, "#{entry}: #{name} is reserved (#{Enum.join(@reserved, ", ")})"}
       true -> :ok
     end
+  end
+
+  # An uploaded file is a map of where it is stored and what it was called; the
+  # bytes are in `<%= inspect(@prefix) %>.Storage`, under the organization's id.
+  defp type(_entry, name, "file", flags, _domain, _accounts) do
+    {:ok, base(name, :file, :map, :file, []), flags}
   end
 
   defp type(entry, name, "enum", [values | flags], _domain, _accounts) do
@@ -179,8 +196,8 @@ defmodule <%= @support_module %> do
       "required", {:ok, attribute} ->
         {:cont, {:ok, %{attribute | required?: true}}}
 
-      "unique", {:ok, %{type: :map}} ->
-        {:halt, {:error, "#{entry}: a map cannot be unique"}}
+      "unique", {:ok, %{type: type}} when type in [:map, :file] ->
+        {:halt, {:error, "#{entry}: #{type} cannot be unique"}}
 
       "unique", {:ok, attribute} ->
         {:cont, {:ok, %{attribute | unique?: true}}}
@@ -188,6 +205,26 @@ defmodule <%= @support_module %> do
       flag, _acc ->
         {:halt, {:error, "#{entry}: unknown flag #{inspect(flag)} (#{Enum.join(@flags, ", ")})"}}
     end)
+  end
+
+  # `required` is the attribute's `allow_nil?`; the four fields are what
+  # `FileController` and `file_link/1` read back.
+  defp finish(%{type: :file} = attribute) do
+    options =
+      if(attribute.required?, do: [allow_nil?: false], else: []) ++
+        [
+          public?: true,
+          constraints: [
+            fields: [
+              key: [type: :string, allow_nil?: false],
+              filename: [type: :string, allow_nil?: false],
+              content_type: [type: :string, allow_nil?: false],
+              size: [type: :integer, allow_nil?: false]
+            ]
+          ]
+        ]
+
+    Map.merge(attribute, %{field: attribute.name, options: options})
   end
 
   defp finish(%{type: :belongs_to} = attribute) do
@@ -301,6 +338,14 @@ defmodule <%= @support_module %> do
   def sample_value(%{type: :map}, :form), do: nil
   def sample_value(%{type: :map}, :fixture), do: "%{}"
 
+  # A form uploads a file instead of posting a value; a fixture stores the map the
+  # form would have saved, for a file nobody uploaded.
+  def sample_value(%{type: :file}, :form), do: nil
+
+  def sample_value(%{type: :file, name: name}, :fixture) do
+    ~s|%{key: "fixture/#{name}.txt", filename: "#{name}.txt", content_type: "text/plain", size: 5}|
+  end
+
   # A unique attribute's fixture value differs on every call, so a test can make two.
   def sample_value(%{type: type, name: name, unique?: true}, :fixture)
       when type in [:string, :text],
@@ -355,6 +400,7 @@ defmodule <%= @support_module %> do
       scalars: scalars,
       belongs_to: belongs_to,
       unique: Enum.filter(attributes, & &1.unique?),
+      files: Enum.filter(attributes, &(&1.type == :file)),
       same_organization:
         for(%{target: target, field: field} <- belongs_to, target not in [@user, @organization],
           do: {field, target}
@@ -365,7 +411,9 @@ defmodule <%= @support_module %> do
       nav: opts[:nav] || names.human_plural,
       icon: opts[:icon] || "hero-rectangle-stack",
       search_fields: for(%{type: type, name: name} <- scalars, type in [:string, :text], do: name),
-      sortable: for(%{type: type, name: name} <- scalars, type != :map, do: name) ++ [:inserted_at],
+      sortable:
+        for(%{type: type, name: name} <- scalars, type not in [:map, :file], do: name) ++
+          [:inserted_at],
       fixture_values:
         Enum.map(scalars, &{&1.name, sample_value(&1, :fixture)}) ++
           for(%{target: target} = relation <- required, target in [@user, @organization],
