@@ -45,7 +45,7 @@
   # Organization-scoped resources, generated in order: list a belongs_to target
   # before the resource that references it. `attributes` follows
   # `mix <%= @app %>.gen.resource`: name:type[:required][:unique], with the types string,
-  # text, integer, decimal, boolean, date, datetime, uuid, map, file, enum:a,b,c and
+  # text, integer, decimal, boolean, date, datetime, uuid, map, file, secret, enum:a,b,c and
   # belongs_to:Target. With `nav` the resource also gets pages and a sidebar entry.
   resources: [
     # %{

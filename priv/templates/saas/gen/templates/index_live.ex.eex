@@ -115,8 +115,11 @@ def render(assigns) do
       row_id={&"<%= @singular %>-#{&1.id}"}
       row_click={&JS.navigate(~p"/<%= @route %>/#{&1.id}")}
     ><%= for attribute <- @scalars do %>
-      <:col :let={<%= @singular %>} label=<%= inspect(@gen.humanize(attribute.name)) %><%= unless attribute.type == :file do %> field={<%= inspect(attribute.name) %>} sortable<% end %><%= if attribute.type in [:text, :map], do: ~s( class="max-w-xs truncate") %>>
+      <%= if attribute.type == :secret do %><:col label=<%= inspect(@gen.humanize(attribute.name)) %>>
+        ••••••
+      <% else %><:col :let={<%= @singular %>} label=<%= inspect(@gen.humanize(attribute.name)) %><%= unless attribute.type == :file do %> field={<%= inspect(attribute.name) %>} sortable<% end %><%= if attribute.type in [:text, :map], do: ~s( class="max-w-xs truncate") %>>
         <%= if attribute.type == :file do %><.file_link file={<%= @singular %>.<%= attribute.name %>} /><% else %>{format_value(<%= @singular %>.<%= attribute.name %>)}<% end %>
+<% end %>
       </:col><% end %><%= for relation <- @belongs_to do %>
       <:col :let={<%= @singular %>} label=<%= inspect(@gen.humanize(relation.name)) %>>
         {display_name(<%= @singular %>.<%= relation.name %>)}

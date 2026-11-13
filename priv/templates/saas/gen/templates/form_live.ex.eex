@@ -68,7 +68,8 @@ def handle_event("validate", %{<%= inspect(@singular) %> => params}, socket) do
 end
 <%= if @files == [] do %>
 def handle_event("save", %{<%= inspect(@singular) %> => params}, socket) do
-  case AshPhoenix.Form.submit(socket.assigns.form, params: params) do
+<%= if @secrets != [] do %>  params = drop_blank_secrets(params, socket.assigns.<%= @singular %>)
+<% end %>  case AshPhoenix.Form.submit(socket.assigns.form, params: params) do
     {:ok, <%= @singular %>} ->
       {:noreply,
        socket
@@ -86,6 +87,8 @@ def handle_event("validate", _params, socket), do: {:noreply, socket}
 def handle_event("save", params, socket) do
   # The files come from the uploads, never from what the browser posts for them.
   params = params |> Map.get(<%= inspect(@singular) %>, %{}) |> Map.drop(<%= inspect(Enum.map(@files, &to_string(&1.name))) %>)
+<%= if @secrets != [] do %>  params = drop_blank_secrets(params, socket.assigns.<%= @singular %>)
+<% end %>
 
   with {:ok, files} <- consume_files(socket),
        {:ok, <%= @singular %>} <-
@@ -110,6 +113,16 @@ end
 
 @impl true
 def handle_info(_message, socket), do: {:noreply, socket}
+<%= if @secrets != [] do %>
+# A secret is never shown again: a field left blank on an edit keeps the stored
+# one. On a new record a blank one stays in the params, so a required secret is
+# reported as missing (a field that is not posted shows no error).
+defp drop_blank_secrets(params, nil), do: params
+
+defp drop_blank_secrets(params, _record) do
+  Map.reject(params, fn {key, value} -> key in <%= inspect(Enum.map(@secrets, &to_string(&1.name))) %> and value == "" end)
+end
+<% end %>
 <%= if @files != [] do %>
 defp upload_error(:too_large), do: "The file is too large (10 MB at most)"
 defp upload_error(:too_many_files), do: "Choose one file"
@@ -205,7 +218,7 @@ def render(assigns) do
           type="select"
           label=<%= inspect(@gen.humanize(attribute.name)) %>
           options={enum_options(<%= inspect(attribute.values) %>)}
-        /><% :file -> %><div class="fieldset mb-2">
+        /><% :password -> %><.input field={@form[<%= inspect(attribute.field) %>]} type="password" autocomplete="off" label=<%= inspect(@gen.humanize(attribute.name)) %> placeholder={if @<%= @singular %>, do: "Leave blank to keep the current one"} /><% :file -> %><div class="fieldset mb-2">
           <label class="label mb-1" for={@uploads.<%= attribute.name %>.ref}><%= @gen.humanize(attribute.name) %></label>
           <.live_file_input upload={@uploads.<%= attribute.name %>} class="file-input w-full" />
           <p :if={@<%= @singular %> && @<%= @singular %>.<%= attribute.name %>} class="mt-1 text-sm text-base-content/70">

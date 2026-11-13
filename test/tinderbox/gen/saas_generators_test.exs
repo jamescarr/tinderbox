@@ -227,6 +227,54 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       end
     end
 
+    test "a secret is an encrypted string that is sensitive and cannot be unique", %{
+      files: files
+    } do
+      resource = source(gen(project(files), Resource, @project), "lib/test/projects/project.ex")
+      refute_has(resource, "AshCloak")
+      refute_has(resource, "cloak do")
+      refute_has(resource, "encrypted_")
+
+      igniter =
+        gen(
+          project(files),
+          Resource,
+          ~w(Test.Projects.Upstream name:string:required api_key:secret:required)
+        )
+
+      resource = source(igniter, "lib/test/projects/upstream.ex")
+
+      for snippet <- [
+            "extensions: [AshPaperTrail.Resource, AshCloak]",
+            "attribute :api_key, :string, allow_nil?: false, public?: true, sensitive?: true",
+            "cloak do",
+            "vault Test.Vault",
+            "attributes [:api_key]",
+            "decrypt_by_default []",
+            # The ciphertext is not a version's business either.
+            "ignore_attributes [:inserted_at, :updated_at, :encrypted_api_key]",
+            "accept [:organization_id, :name, :api_key]"
+          ] do
+        assert_has(resource, snippet)
+      end
+
+      assert_has(
+        source(igniter, "test/support/fixtures.ex"),
+        ~S|api_key: "s3cr3t-#{System.unique_integer([:positive])}"|
+      )
+
+      optional = gen(project(files), Resource, ~w(Test.Projects.Upstream api_key:secret))
+
+      assert_has(
+        source(optional, "lib/test/projects/upstream.ex"),
+        "attribute :api_key, :string, public?: true, sensitive?: true"
+      )
+
+      assert_raise Mix.Error, ~r/api_key:secret:unique: secret cannot be unique/, fn ->
+        gen(project(files), Resource, ~w(Test.Projects.Upstream api_key:secret:unique))
+      end
+    end
+
     test "refuses reserved names, unknown types and a module without a domain, before writing",
          %{files: files} do
       project = project(files)
@@ -382,6 +430,65 @@ defmodule Tinderbox.Gen.SaasGeneratorsTest do
       assert_has(test, ~s|render_upload(attachment, "attachment.txt")|)
       assert_has(test, ~S|"/files/#{organization.id}/documents/"|)
       assert_has(test, "document: %{title: \"Sample title\"}")
+    end
+
+    test "a secret attribute is masked, never prefilled, and a blank one keeps the stored value",
+         %{files: files, igniter: igniter} do
+      # Nothing secret, nothing generated for it.
+      refute_has(source(igniter, "lib/test_web/live/project_form_live.ex"), "drop_blank_secrets")
+
+      igniter =
+        gen(
+          project(files),
+          Live,
+          ~w(Test.Projects.Upstream name:string:required api_key:secret:required)
+        )
+
+      form = source(igniter, "lib/test_web/live/upstream_form_live.ex")
+
+      for snippet <- [
+            ~s|<.input field={@form[:api_key]} type="password" autocomplete="off"|,
+            ~s|placeholder={if @upstream, do: "Leave blank to keep the current one"}|,
+            ~s|defp drop_blank_secrets(params, nil), do: params|,
+            ~s|defp drop_blank_secrets(params, _record) do|,
+            ~s|Map.reject(params, fn {key, value} -> key in ["api_key"] and value == "" end)|
+          ] do
+        assert_has(form, snippet)
+      end
+
+      assert order(form, "params = drop_blank_secrets(params, socket.assigns.upstream)") <
+               order(form, "AshPhoenix.Form.submit")
+
+      # Never searched, never sortable, never formatted: a literal mask.
+      index = source(igniter, "lib/test_web/live/upstreams_live.ex")
+      assert_has(index, "sortable: [:name, :inserted_at]")
+      assert_has(index, ~s|<:col label="Api key"> •••••• </:col>|)
+      refute_has(index, "upstream.api_key")
+
+      show = source(igniter, "lib/test_web/live/upstream_live.ex")
+      assert_has(show, ~s|<:item label="Api key">••••••</:item>|)
+      refute_has(show, "@upstream.api_key")
+
+      test = source(igniter, "test/test_web/live/upstreams_live_test.exs")
+      assert_has(test, ~S|api_key_secret = "s3cr3t-#{System.unique_integer([:positive])}"|)
+      assert_has(test, "upstream: %{name: \"Sample name\", api_key: api_key_secret}")
+      assert_has(test, "refute html =~ api_key_secret")
+    end
+
+    test "a secret next to a file is dropped when blank before the files are merged", %{
+      files: files
+    } do
+      igniter =
+        gen(
+          project(files),
+          Live,
+          ~w(Test.Projects.Upstream api_key:secret attachment:file)
+        )
+
+      form = source(igniter, "lib/test_web/live/upstream_form_live.ex")
+
+      assert order(form, "params = drop_blank_secrets(params, socket.assigns.upstream)") <
+               order(form, "Map.merge(params, files)")
     end
 
     test "routes the pages inside the signed-in session, new before :id", %{igniter: igniter} do

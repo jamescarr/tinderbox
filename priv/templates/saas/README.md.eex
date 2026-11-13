@@ -255,8 +255,8 @@ be reached; everything else works.
   `change {<%= inspect(@accounts) %>.Changes.NotifyManagers, key: "thing.created", data: {Module, :function}}`
   does it after commit; add the key to `<%= inspect(@prefix) %>.Notifications.Catalog`.
 * `<%= inspect(@prefix) %>.Events.AshNotifier` publishes a record's **public**
-  attributes: `public?` also means "goes onto the event bus", so keep large or
-  sensitive attributes private.
+  attributes except the `sensitive?` ones (a `secret` attribute is one): `public?`
+  also means "goes onto the event bus", so keep large attributes private.
 * The application's own metrics go in `<%= inspect(@prefix) %>.PromEx.Plugins.App`.
 * `<%= inspect(@prefix) %>.Storage` has `put/2`, `get/1`, `delete/1` and `presign/2`
   (S3 only; GCS answers `{:error, :not_supported}`). Prefix keys with the
@@ -275,7 +275,7 @@ be reached; everything else works.
   | `mix <%= @app %>.gen.domain <%= inspect(@prefix) %>.Things [--queues things:5]` | a domain, registered in `ash_domains` (AshOban only sees the triggers of registered domains), with its Oban queues |
 
   Attributes are `name:type[:required][:unique]`; the types are `string`, `text`,
-  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `file`,
+  `integer`, `decimal`, `boolean`, `date`, `datetime`, `uuid`, `map`, `file`, `secret`,
   `enum:a,b,c` and `belongs_to:Target` (`User`, another resource of the domain, or a
   full module name). A `file` (never unique) is a map of `key`, `filename`,
   `content_type` and `size`: the generated form has a file input (one file, 10 MB at
@@ -284,6 +284,12 @@ be reached; everything else works.
   that uploads none; the show and list pages link to it (`file_link/1` in
   `<%= inspect(@web) %>.LiveHelpers`). A form that fails validation drops its upload:
   the file has to be chosen again.
+  A `secret` (never unique) is a string encrypted with `CLOAK_KEY` through
+  `<%= inspect(@prefix) %>.Vault` (AshCloak: the table has `encrypted_<name>`, no
+  plain column), kept off the event bus and out of the activity feed, and shown
+  masked (`••••••`) on the pages; the form's password input is never prefilled, and
+  an edit that leaves it blank keeps the stored value. Nothing loads the decrypted
+  value: to use one, `Ash.load!(record, :<name>)` returns it.
   A required `date` or `datetime` is prefilled with today (now) on the new-record
   form, since an untouched date input posts `""`, which Ash reads as nil.
   Generated resources are written by the organization's owners and admins and read

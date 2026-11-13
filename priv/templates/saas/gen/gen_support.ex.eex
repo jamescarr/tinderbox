@@ -16,6 +16,7 @@ defmodule <%= @support_module %> do
   @user <%= inspect(@user) %>
   @organization <%= inspect(Module.concat(@accounts, "Organization")) %>
   @repo <%= inspect(@repo) %>
+  @vault <%= inspect(@vault) %>
 
   @scalar_types %{
     "string" => {:string, :text},
@@ -26,7 +27,8 @@ defmodule <%= @support_module %> do
     "date" => {:date, :date},
     "datetime" => {:utc_datetime, :datetime},
     "uuid" => {:uuid, :text},
-    "map" => {:map, :none}
+    "map" => {:map, :none},
+    "secret" => {:string, :password}
   }
 
   @reserved ~w(id organization organization_id inserted_at updated_at)
@@ -37,12 +39,12 @@ defmodule <%= @support_module %> do
   @grammar """
   An attribute is name:type[:required][:unique]. The types are string, text, integer,
   decimal, boolean, date, datetime, uuid, map, file (an upload: the form takes a file,
-  the pages link to it), enum:a,b,c (one of the atoms, never nil) and
-  belongs_to:Target (User, another resource of the same domain, or a full module
-  name). For example:
+  the pages link to it), secret (a string encrypted at rest, never shown again),
+  enum:a,b,c (one of the atoms, never nil) and belongs_to:Target (User, another
+  resource of the same domain, or a full module name). For example:
 
       name:string:required status:enum:draft,active,archived budget:decimal owner:belongs_to:User
-      attachment:file:required
+      attachment:file:required api_key:secret:required
   """
 
   @typedoc """
@@ -70,6 +72,7 @@ defmodule <%= @support_module %> do
             | :select
             | :relation
             | :file
+            | :password
             | :none
         }
 
@@ -196,7 +199,7 @@ defmodule <%= @support_module %> do
       "required", {:ok, attribute} ->
         {:cont, {:ok, %{attribute | required?: true}}}
 
-      "unique", {:ok, %{type: type}} when type in [:map, :file] ->
+      "unique", {:ok, %{type: type}} when type in [:map, :file, :secret] ->
         {:halt, {:error, "#{entry}: #{type} cannot be unique"}}
 
       "unique", {:ok, attribute} ->
@@ -223,6 +226,16 @@ defmodule <%= @support_module %> do
             ]
           ]
         ]
+
+    Map.merge(attribute, %{field: attribute.name, options: options})
+  end
+
+  # Encrypted at rest by AshCloak, so it is never searched, sorted or compared: not
+  # unique. `sensitive?` keeps it out of logs, the event bus and the activity feed.
+  defp finish(%{type: :secret} = attribute) do
+    options =
+      if(attribute.required?, do: [allow_nil?: false], else: []) ++
+        [public?: true, sensitive?: true]
 
     Map.merge(attribute, %{field: attribute.name, options: options})
   end
@@ -338,6 +351,13 @@ defmodule <%= @support_module %> do
   def sample_value(%{type: :map}, :form), do: nil
   def sample_value(%{type: :map}, :fixture), do: "%{}"
 
+  # A secret differs on every call, so a test can look for it on a page. The
+  # generated test binds the fixture value to `<name>_secret` and posts that.
+  def sample_value(%{type: :secret, name: name}, :form), do: "#{name}_secret"
+
+  def sample_value(%{type: :secret}, :fixture),
+    do: ~S|"s3cr3t-#{System.unique_integer([:positive])}"|
+
   # A form uploads a file instead of posting a value; a fixture stores the map the
   # form would have saved, for a file nobody uploaded.
   def sample_value(%{type: :file}, :form), do: nil
@@ -393,6 +413,7 @@ defmodule <%= @support_module %> do
       accounts: @accounts,
       user: @user,
       repo: @repo,
+      vault: @vault,
       gen: __MODULE__,
       resource: resource,
       domain: domain!(resource),
@@ -401,6 +422,7 @@ defmodule <%= @support_module %> do
       belongs_to: belongs_to,
       unique: Enum.filter(attributes, & &1.unique?),
       files: Enum.filter(attributes, &(&1.type == :file)),
+      secrets: Enum.filter(attributes, &(&1.type == :secret)),
       same_organization:
         for(%{target: target, field: field} <- belongs_to, target not in [@user, @organization],
           do: {field, target}
@@ -412,7 +434,7 @@ defmodule <%= @support_module %> do
       icon: opts[:icon] || "hero-rectangle-stack",
       search_fields: for(%{type: type, name: name} <- scalars, type in [:string, :text], do: name),
       sortable:
-        for(%{type: type, name: name} <- scalars, type not in [:map, :file], do: name) ++
+        for(%{type: type, name: name} <- scalars, type not in [:map, :file, :secret], do: name) ++
           [:inserted_at],
       fixture_values:
         Enum.map(scalars, &{&1.name, sample_value(&1, :fixture)}) ++
