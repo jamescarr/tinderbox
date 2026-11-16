@@ -786,7 +786,7 @@ Beyond that, generated projects were run end to end against the emulators:
 * **saas file drop and integrations (`itemizer`)** — generated with `--integrations`
   in 190 s: 118 tests on the untouched scaffold, among them the blocks' seven test
   files. The slice on top (statements, Amazon's order export and receipt emails become
-  transactions and purchases, matched by amount and date) passed 161; its demo script
+  transactions and purchases, matched by amount and date) passed 162; its demo script
   explained the sample `APPLE.COM/BILL -59.97` as its three items (with the fake model:
   the run had no Anthropic key). In a browser: `/drop`, `/transactions`, a transaction's
   items, `/integrations`; the receipt webhook answered 401 without its token and 202

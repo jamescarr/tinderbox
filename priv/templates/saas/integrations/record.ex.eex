@@ -32,6 +32,9 @@ postgres do
   custom_indexes do
     index [:organization_id, :inserted_at]
     index [:source_id, :status]
+    # The :process scheduler's query, every minute: pending records only, by id, so
+    # it reads the backlog rather than every record ever delivered.
+    index [:id], name: "integration_records_pending_index", where: "status = 'pending'"
   end
 end
 

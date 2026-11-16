@@ -38,6 +38,8 @@ postgres do
 
   custom_indexes do
     index [:organization_id, :inserted_at]
+    # The :ingest scheduler's query, every minute: pending uploads only, by id.
+    index [:id], name: "file_drop_uploads_pending_index", where: "status = 'pending'"
   end
 end
 

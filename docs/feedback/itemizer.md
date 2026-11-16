@@ -81,11 +81,13 @@ In itemizer, on top of the generated blocks:
   posted email becomes an `.eml` dropped on the file drop, so the model is only called
   from the drop's job), registered before the generic `webhook`.
 * `Itemizer.Integrations.Handler` (records into rows), `Itemizer.Spending.Matcher`
-  (equal totals, else sets of 2 to 4 purchases that add up, within -10/+2 days) and its
-  Oban worker, the "What this charge was" card, an Explained column, a purchase's items.
+  (equal totals, else sets of 2 to 4 purchases that add up, within -10/+2 days; a run
+  pages through the transactions the unmatched purchases' dates can explain, each page
+  against its own dates' purchases, by merchant) and its Oban worker, the "What this
+  charge was" card, an Explained column, a purchase's items.
 * `priv/samples/` (the card statement, the Apple receipt, the Amazon export as CSV and
   ZIP, an OFX statement) and `priv/samples/demo.exs`.
-* 161 tests: the scaffold's 118, the generated resource pages' tests, and the slice's own
+* 162 tests: the scaffold's 118, the generated resource pages' tests, and the slice's own
   (parsers, connectors, the matcher's rule and its runs against the database, handler,
   the end-to-end `explain_charge_test.exs`, the receipt webhook, the transaction page).
 
@@ -180,6 +182,25 @@ In itemizer, on top of the generated blocks:
     demo's output was filtered, so the warnings of departure 6 were only seen in an
     unfiltered dev run after review pointed at them. *Wants*: a dev-mode smoke step in
     these runs that counts `[warning]` lines.
+15. **The matcher stopped looking after 500 unexplained charges** (found in review, fixed).
+    `run/1` read the oldest 500 transactions without a match, and charges nothing explains
+    (groceries, payments) never leave that set, so one year's statement (about 80 rows a
+    month) would have left its newest months unexplained for good; it also loaded every
+    unmatched purchase and recomputed the description's regex for every pair. It now
+    reads only the transactions the unmatched purchases' dates can explain, pages through
+    them on `(posted_on, id)`, loads each page's purchases by date and groups them by
+    merchant (indexes on `[:organization_id, :posted_on]` and
+    `[:organization_id, :purchased_on]`). The regression test (600 older unexplainable
+    charges, then the Apple one) failed on the old `run/1` with `%{matched: 0}`.
+16. **The schedulers read every record ever delivered** (found in review, fixed in the
+    templates). The `:process` and `:ingest` schedulers run every minute with
+    `WHERE status = $1 ORDER BY id LIMIT 251`; the only index with `status` was
+    `[:source_id, :status]`, which Postgres 17 can only scan whole. With 200 000
+    records (4 pending) that was 332 buffers a minute; partial indexes on `[:id]` where
+    `status = 'pending'` (`integration_records_pending_index`,
+    `file_drop_uploads_pending_index`) make it 5, also once the prepared statement's plan
+    is cached (measured with `EXPLAIN (ANALYZE, BUFFERS)` in itemizer's dev database).
+    Records are still never pruned.
 
 ## Verified
 
@@ -192,7 +213,7 @@ In itemizer, on top of the generated blocks:
    with the token answered 202 `{"accepted":2,"duplicates":0}`, without it 401.
 3. **Fresh generation**: the scaffold's 118 tests; `grep -c 'clamav:' docker-compose.yml`
    is 1; `FILE_DROP_SCANNER` is in `.mise.toml` and `fly.toml`.
-4. **The slice**: `mise run check` in itemizer passed, 161 tests. An unfiltered demo run on
+4. **The slice**: `mise run check` in itemizer passed, 162 tests. An unfiltered demo run on
    a fresh dev database logged no "ongoing transaction" and no "Missed … notifications"
    warning (only JetStream's start-up one) and recorded three `charge.explained` events.
 5. **Demo** (`mise run setup`, `mise exec -- mix run priv/samples/demo.exs`, fake model):
