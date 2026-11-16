@@ -200,7 +200,11 @@ policies do
 end
 
 changes do
-  change <%= inspect(@integrations) %>.Changes.Broadcast, on: [:create, :update, :destroy]
+  # Not on :touch, which only runs inside `<%= inspect(@integrations) %>.ingest/2`'s
+  # transaction; that function announces the delivery once it has committed.
+  change <%= inspect(@integrations) %>.Changes.Broadcast,
+    on: [:create, :update, :destroy],
+    where: [negate(action_is(:touch))]
 end
 
 attributes do

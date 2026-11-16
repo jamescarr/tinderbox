@@ -70,7 +70,7 @@ In itemizer, on top of the generated blocks:
 * `concept.exs` (Itemizer, waitlist, three value propositions, no plans, domain
   `Spending`, activation `charge.explained`) and four generated resources: `Transaction`,
   `Purchase`, `PurchaseItem`, `Match`. Each got its own import action (`:import`
-  upserts, `:link` with the activation event), kept out of the version history.
+  upserts, `:link` for the matcher), kept out of the version history.
 * `Itemizer.AI` (one callback, `extract_receipt/2`), `.Live` on ReqLLM 1.30 and Anthropic,
   `.Fake` (in `lib`, so dev can use it too).
 * Parsers: `StatementCsv` (truebook's CSV reader plus `statement?/1`), `Ofx` (regular
@@ -85,9 +85,9 @@ In itemizer, on top of the generated blocks:
   Oban worker, the "What this charge was" card, an Explained column, a purchase's items.
 * `priv/samples/` (the card statement, the Apple receipt, the Amazon export as CSV and
   ZIP, an OFX statement) and `priv/samples/demo.exs`.
-* 159 tests: the scaffold's 118, the generated resource pages' tests, and the slice's own
-  (parsers, connectors, matcher, handler, the end-to-end `explain_charge_test.exs`, the
-  receipt webhook, the transaction page).
+* 161 tests: the scaffold's 118, the generated resource pages' tests, and the slice's own
+  (parsers, connectors, the matcher's rule and its runs against the database, handler,
+  the end-to-end `explain_charge_test.exs`, the receipt webhook, the transaction page).
 
 ### Where the code departs from the plan
 
@@ -108,10 +108,16 @@ In itemizer, on top of the generated blocks:
 5. **The Integrations nav entry goes after the end of the Files `<.nav_item>`**, not after
    the line containing `~p"/drop"`: the formatter breaks that item over three lines, and the
    line after the anchor is inside it.
-6. **Notifications after commit**: `Integrations.ingest/2` asks the source's `:touch` for
-   its notifications and sends them once its `Repo.transaction` has committed, and the
-   matcher writes a set of matches with one `Ash.bulk_create(transaction: :all)`. Both
-   logged Ash's "Missed 1 notifications" warning before.
+6. **Events after commit**: `Integrations.ingest/2` asks the source's `:touch` for its
+   notifications and sends them, with one `:integrations_updated`, once its
+   `Repo.transaction` has committed; `Record`'s broadcast runs on updates only and
+   `Source`'s skips `:touch`, the two actions that only run inside that transaction. The
+   matcher writes a set of matches with one `Ash.bulk_create(transaction: :all)` and then
+   records `charge.explained` itself, one event per charge explained (with the number of
+   purchases and the confidence), instead of a `Track` change on `:link`, one per match
+   row. Before, Ash logged "Missed 1 notifications" (ingest, the matcher) and "after_transaction
+   hooks … ongoing transaction" (each record ingested, each touch, each matched set), and
+   the page's reload could run before the rows it was told about had committed.
 7. **`FileDrop.error_text/1`** (not in the plan): an upload, source or record that failed
    after its last attempt stored `inspect/1` of an `Ash.Error.Invalid`, 2 000 characters of
    struct on `/drop` and `/integrations`. It now stores the messages ("the handler failed:
@@ -133,7 +139,9 @@ In itemizer, on top of the generated blocks:
    Amazon charges and left the Apple one unexplained, its email failed after three
    attempts. Per the plan's contingency, checks 5 to 7 ran with `config :itemizer,
    :ai_client, Itemizer.AI.Fake` in `config/dev.exs`, reverted afterwards. **The model was
-   not exercised.**
+   not exercised.** The placeholder line copied into itemizer's `.mise.local.toml` was
+   removed afterwards (under mise it would override a real key exported in the shell); a
+   comment there says where the key goes.
 2. **LiveView uploads and unknown MIME types** (departure 1): any block that accepts
    files by extension meets it. *Wants*: a note in the UI kit or a helper that splits
    known and unknown extensions.
@@ -167,6 +175,11 @@ In itemizer, on top of the generated blocks:
     AES-CTR); the stack's vault uses AES-GCM.
 13. `Organization`'s `:create` is not its primary action, so a script has to name it
     (`Ash.create!(Organization, …, action: :create)`).
+14. **Transaction-hook warnings never reach the tests**: the generated `config/test.exs`
+    sets `warn_on_transaction_hooks?: false` (the sandbox is one big transaction), and the
+    demo's output was filtered, so the warnings of departure 6 were only seen in an
+    unfiltered dev run after review pointed at them. *Wants*: a dev-mode smoke step in
+    these runs that counts `[warning]` lines.
 
 ## Verified
 
@@ -179,7 +192,9 @@ In itemizer, on top of the generated blocks:
    with the token answered 202 `{"accepted":2,"duplicates":0}`, without it 401.
 3. **Fresh generation**: the scaffold's 118 tests; `grep -c 'clamav:' docker-compose.yml`
    is 1; `FILE_DROP_SCANNER` is in `.mise.toml` and `fly.toml`.
-4. **The slice**: `mise run check` in itemizer passed, 159 tests.
+4. **The slice**: `mise run check` in itemizer passed, 161 tests. An unfiltered demo run on
+   a fresh dev database logged no "ongoing transaction" and no "Missed … notifications"
+   warning (only JetStream's start-up one) and recorded three `charge.explained` events.
 5. **Demo** (`mise run setup`, `mise exec -- mix run priv/samples/demo.exs`, fake model):
 
    ```text

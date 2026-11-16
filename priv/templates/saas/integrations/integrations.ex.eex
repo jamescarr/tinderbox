@@ -83,7 +83,8 @@ end
 Stores `records` for `source`: every `(type, external_id)` the source does not
 have yet becomes a `:pending` record (each with its `:process` job), the others
 are counted as duplicates. One transaction, which also marks the source as
-active just now.
+active just now; its events and one `:integrations_updated` go out once it has
+committed.
 """
 @spec ingest(Source.t(), [<%= inspect(@integrations) %>.Connector.entry()]) ::
         {:ok, summary()} | {:error, term()}
@@ -103,7 +104,7 @@ def ingest(source, records) when is_list(records) do
         end
       end)
 
-    # The source's event goes out once the transaction has committed.
+    # Sent once the transaction has committed, below.
     case Ash.update(source, %{},
            action: :touch,
            authorize?: false,
@@ -119,6 +120,7 @@ def ingest(source, records) when is_list(records) do
   |> case do
     {:ok, {summary, notifications}} ->
       Ash.Notifier.notify(notifications)
+      announce(source.organization_id)
       {:ok, summary}
 
     {:error, error} ->
@@ -203,6 +205,13 @@ def topic(organization_id), do: "integrations:#{organization_id}"
 @spec subscribe(term()) :: :ok | {:error, term()}
 def subscribe(organization_id),
   do: Phoenix.PubSub.subscribe(<%= inspect(@pubsub) %>, topic(organization_id))
+
+@doc false
+# Tells the organization's /integrations pages to reload (`Changes.Broadcast`, and
+# `ingest/2` once its transaction has committed).
+@spec announce(term()) :: :ok | {:error, term()}
+def announce(organization_id),
+  do: Phoenix.PubSub.broadcast(<%= inspect(@pubsub) %>, topic(organization_id), :integrations_updated)
 
 @doc false
 @spec config() :: keyword()

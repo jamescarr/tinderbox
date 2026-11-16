@@ -113,7 +113,9 @@ policies do
 end
 
 changes do
-  change <%= inspect(@integrations) %>.Changes.Broadcast, on: [:create, :update]
+  # Not on :ingest, which only runs inside `<%= inspect(@integrations) %>.ingest/2`'s
+  # transaction; that function announces the new records once it has committed.
+  change <%= inspect(@integrations) %>.Changes.Broadcast, on: [:update]
 end
 
 attributes do
