@@ -1,0 +1,323 @@
+defmodule <%= inspect(@prefix) %>.IntegrationsTest do
+  use <%= inspect(@prefix) %>.DataCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+
+  require Ash.Query
+
+  alias <%= inspect(@file_drop) %>
+  alias <%= inspect(@file_drop) %>.Upload
+  alias <%= inspect(@integrations) %>
+  alias <%= inspect(@integrations) %>.Connector
+  alias <%= inspect(@integrations) %>.Connectors.Webhook
+  alias <%= inspect(@integrations) %>.Record
+  alias <%= inspect(@integrations) %>.Source
+  alias <%= inspect(@prefix) %>.Storage
+
+  # Takes files that start with "NOTES": one record per line after it.
+  defmodule Notes do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_notes"
+    @impl true
+    def name, do: "Notes file"
+    @impl true
+    def description, do: "A test connector for files"
+    @impl true
+    def transports, do: [:file]
+
+    @impl true
+    def accepts?(_upload, body), do: String.starts_with?(body, "NOTES\n")
+
+    @impl true
+    def parse_file(_source, _upload, body) do
+      records =
+        body
+        |> String.split("\n", trim: true)
+        |> Enum.drop(1)
+        |> Enum.map(&%{type: "note", external_id: &1, data: %{"text" => &1}})
+
+      {:ok, records}
+    end
+  end
+
+  # Pulls two records, and tells the test what credentials it was given.
+  defmodule Puller do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_puller"
+    @impl true
+    def name, do: "Puller"
+    @impl true
+    def description, do: "A test connector that pulls"
+    @impl true
+    def transports, do: [:api]
+
+    @impl true
+    def sync(source) do
+      send(self(), {:synced, source.credentials})
+
+      {:ok,
+       [
+         %{type: "note", external_id: "p1", data: %{}},
+         %{type: "note", external_id: "p2", data: %{}}
+       ], %{"page" => 2}}
+    end
+  end
+
+  defmodule Down do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_down"
+    @impl true
+    def name, do: "Down"
+    @impl true
+    def description, do: "A test connector whose API is down"
+    @impl true
+    def transports, do: [:api]
+
+    @impl true
+    def sync(_source), do: {:error, :api_down}
+  end
+
+  # What this file depends on, whatever the application configured.
+  setup do
+    integrations = Application.get_env(<%= inspect(@app) %>, Integrations, [])
+    file_drop = Application.get_env(<%= inspect(@app) %>, FileDrop, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.merge(integrations, connectors: [Webhook, Notes, Puller, Down])
+    )
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      FileDrop,
+      Keyword.merge(file_drop,
+        handler: Integrations.DropHandler,
+        scanner: "none",
+        extensions: [".csv", ".ofx", ".qfx", ".pdf", ".zip", ".eml", ".txt"]
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(<%= inspect(@app) %>, Integrations, integrations)
+      Application.put_env(<%= inspect(@app) %>, FileDrop, file_drop)
+    end)
+
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  defp records(source) do
+    Record
+    |> Ash.Query.filter(source_id == ^source.id)
+    |> Ash.Query.sort(:external_id)
+    |> Ash.read!(authorize?: false)
+  end
+
+  defp delivery(token, records) do
+    %{
+      headers: [{"authorization", "Bearer #{token}"}],
+      raw_body: "",
+      params: %{"records" => records}
+    }
+  end
+
+  defp notes do
+    [
+      %{"type" => "note", "external_id" => "n1", "data" => %{"text" => "one"}},
+      %{
+        "type" => "note",
+        "external_id" => "n2",
+        "data" => %{},
+        "occurred_at" => "2026-01-02T03:04:05Z"
+      }
+    ]
+  end
+
+  defp source(organization, user, connector, attrs \\ %{}) do
+    Ash.create!(
+      Source,
+      Map.merge(%{organization_id: organization.id, connector: connector}, attrs),
+      actor: user
+    )
+  end
+
+  test "a webhook source shows its token once and keeps only its hash", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source_fixture(organization, owner)
+    token = source.__metadata__.webhook_token
+
+    assert is_binary(token) and byte_size(token) >= 43
+    stored = Ash.get!(Source, source.id, authorize?: false)
+    assert stored.webhook_token_hash == Connector.hash_token(token)
+    refute Map.has_key?(stored.__metadata__, :webhook_token)
+    assert stored.name == "Webhook"
+    refute stored.pull
+  end
+
+  test "a delivery stores each record once and hands it to the handler", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source_fixture(organization, owner)
+    token = source.__metadata__.webhook_token
+
+    assert Integrations.deliver(source, delivery(token, notes())) ==
+             {:ok, %{created: 2, duplicates: 0}}
+
+    assert [%{status: :pending, external_id: "n1"}, %{status: :pending, occurred_at: occurred_at}] =
+             records(source)
+
+    assert occurred_at == ~U[2026-01-02 03:04:05Z]
+
+    AshOban.Test.schedule_and_run_triggers({Record, :process})
+
+    # The generated handler claims no type, and "note" is nobody's.
+    assert Enum.map(records(source), & &1.status) == [:skipped, :skipped]
+
+    assert Integrations.deliver(source, delivery(token, notes())) ==
+             {:ok, %{created: 0, duplicates: 2}}
+
+    assert length(records(source)) == 2
+  end
+
+  test "a delivery without the source's token is refused", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source_fixture(organization, owner)
+
+    assert Integrations.deliver(source, delivery("wrong", notes())) == {:error, :unauthorized}
+
+    assert Integrations.deliver(source, %{delivery("x", notes()) | headers: []}) ==
+             {:error, :unauthorized}
+
+    assert records(source) == []
+  end
+
+  test "a connector that takes no webhooks is not found", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source(organization, owner, "test_notes")
+
+    assert Integrations.deliver(source, delivery("any", notes())) == {:error, :not_found}
+  end
+
+  test "a pulling source syncs with its credentials and keeps the cursor", %{
+    owner: owner,
+    organization: organization
+  } do
+    source =
+      source(organization, owner, "test_puller", %{credentials: %{"api_key" => "k-123"}})
+
+    assert source.pull
+    assert {:ok, _source} = Ash.update(source, %{}, action: :request_sync, actor: owner)
+
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    assert_received {:synced, %{"api_key" => "k-123"}}
+    assert Enum.map(records(source), & &1.external_id) == ["p1", "p2"]
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.cursor == %{"page" => 2}
+    assert source.last_synced_at
+    assert source.status == :active
+  end
+
+  @tag :capture_log
+  test "a source whose sync keeps failing is put in error", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source(organization, owner, "test_down")
+
+    AshOban.Test.schedule_and_run_triggers({Source, :sync},
+      with_scheduled: true,
+      with_recursion: true
+    )
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.status == :error
+    assert source.last_error =~ "api_down"
+  end
+
+  test "credentials are encrypted at rest", %{owner: owner, organization: organization} do
+    source =
+      source(organization, owner, "test_puller", %{credentials: %{"api_key" => "k-plaintext"}})
+
+    stored = Ash.get!(Source, source.id, authorize?: false)
+
+    assert is_binary(stored.encrypted_credentials)
+    refute String.contains?(stored.encrypted_credentials, "k-plaintext")
+
+    assert Ash.load!(stored, :credentials, authorize?: false).credentials == %{
+             "api_key" => "k-plaintext"
+           }
+  end
+
+  test "a plain member cannot add a source", %{organization: organization} do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    assert {:error, %Ash.Error.Forbidden{}} =
+             Ash.create(Source, %{organization_id: organization.id, connector: "webhook"},
+               actor: member
+             )
+  end
+
+  test "an unknown connector is refused", %{owner: owner, organization: organization} do
+    assert {:error, %Ash.Error.Invalid{} = error} =
+             Ash.create(Source, %{organization_id: organization.id, connector: "nope"},
+               actor: owner
+             )
+
+    assert Exception.message(error) =~ "is not a known connector"
+  end
+
+  test "somebody from another organization reads none of its sources", %{
+    owner: owner,
+    organization: organization
+  } do
+    source_fixture(organization, owner)
+    stranger = user_fixture()
+    organization_fixture(stranger, %{name: "Elsewhere"})
+
+    assert Ash.read!(Source, actor: stranger) == []
+  end
+
+  test "a dropped file goes to the connector that recognizes it", %{
+    owner: owner,
+    organization: organization
+  } do
+    {:ok, notes} = FileDrop.receive_binary(organization, owner, "NOTES\na\nb\n", "notes.txt")
+    {:ok, other} = FileDrop.receive_binary(organization, owner, "something else\n", "other.txt")
+
+    on_exit(fn ->
+      Storage.delete(notes.storage_key)
+      Storage.delete(other.storage_key)
+    end)
+
+    AshOban.Test.schedule_and_run_triggers({Upload, :ingest})
+
+    notes = Ash.get!(Upload, notes.id, authorize?: false)
+    assert notes.status == :processed
+    assert %{"connector" => "test_notes", "records" => 2, "duplicates" => 0} = notes.result
+
+    source = Ash.get!(Source, notes.result["source_id"], authorize?: false)
+    assert source.organization_id == organization.id
+    assert Enum.map(records(source), & &1.external_id) == ["a", "b"]
+
+    other = Ash.get!(Upload, other.id, authorize?: false)
+    assert other.status == :failed
+    assert other.error == "No connector recognizes this file"
+  end
+end

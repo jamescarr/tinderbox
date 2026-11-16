@@ -13,7 +13,8 @@ defmodule Mix.Tasks.Tinderbox.Gen.Mise do
 
   Pass `--no-compose` when no `docker-compose.yml` was generated: the `up`/`down`
   tasks and the `depends = ["up"]` links are then left out. `--deploy none` leaves
-  flyctl and `deploy` out of a SaaS project.
+  flyctl and `deploy` out of a SaaS project. `--file-drop` (SaaS) adds the file
+  drop's variables (`FILE_DROP_SCANNER`, `CLAMAV_HOST`, …).
   """
 
   use Igniter.Mix.Task
@@ -23,8 +24,22 @@ defmodule Mix.Tasks.Tinderbox.Gen.Mise do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix tinderbox.gen.mise --stack worker --broker sqs",
-      schema: [stack: :string, broker: :string, compose: :boolean, db: :boolean, deploy: :string],
-      defaults: [stack: "api", broker: "sqs", compose: true, db: true, deploy: "fly"]
+      schema: [
+        stack: :string,
+        broker: :string,
+        compose: :boolean,
+        db: :boolean,
+        deploy: :string,
+        file_drop: :boolean
+      ],
+      defaults: [
+        stack: "api",
+        broker: "sqs",
+        compose: true,
+        db: true,
+        deploy: "fly",
+        file_drop: false
+      ]
     }
   end
 

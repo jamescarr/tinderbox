@@ -1,0 +1,86 @@
+defmodule <%= inspect(@web) %>.FileDropControllerTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@file_drop) %>
+  alias <%= inspect(@file_drop) %>.Upload
+  alias <%= inspect(@prefix) %>.Storage
+
+  setup do
+    previous = Application.get_env(<%= inspect(@app) %>, FileDrop, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      FileDrop,
+      Keyword.merge(previous,
+        handler: FileDrop.Handlers.Keep,
+        scanner: "none",
+        extensions: [".csv", ".ofx", ".qfx", ".pdf", ".zip", ".eml", ".txt"]
+      )
+    )
+
+    on_exit(fn -> Application.put_env(<%= inspect(@app) %>, FileDrop, previous) end)
+
+    owner = user_fixture()
+    organization = organization_fixture(owner)
+    upload = upload_fixture(organization, owner, %{filename: "Card statement.csv"})
+    on_exit(fn -> Storage.delete(upload.storage_key) end)
+
+    %{owner: owner, organization: organization, upload: upload}
+  end
+
+  defp process(upload) do
+    AshOban.Test.schedule_and_run_triggers({Upload, :ingest})
+    Ash.get!(Upload, upload.id, authorize?: false)
+  end
+
+  test "a processed file downloads as an attachment, never inline", %{
+    conn: conn,
+    owner: owner,
+    upload: upload
+  } do
+    %{status: :processed} = process(upload)
+    {:ok, body} = Storage.get(upload.storage_key)
+
+    conn = get(sign_in(conn, owner), ~p"/drop/#{upload.id}/download")
+
+    assert response(conn, 200) == body
+    assert [disposition] = get_resp_header(conn, "content-disposition")
+    assert disposition =~ ~s|attachment; filename="Card statement.csv"|
+    assert [<<"application/octet-stream", _rest::binary>>] = get_resp_header(conn, "content-type")
+    assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    assert get_resp_header(conn, "cache-control") == ["private, no-store"]
+    assert get_resp_header(conn, "content-security-policy") == ["default-src 'none'; sandbox"]
+  end
+
+  test "a file that has not been scanned yet is not served", %{
+    conn: conn,
+    owner: owner,
+    upload: upload
+  } do
+    conn = get(sign_in(conn, owner), ~p"/drop/#{upload.id}/download")
+
+    assert response(conn, 409) == "This file is not available"
+  end
+
+  test "somebody from another organization, or a malformed id, gets a 404", %{
+    conn: conn,
+    upload: upload
+  } do
+    process(upload)
+    stranger = user_fixture()
+    organization_fixture(stranger, %{name: "Elsewhere"})
+    conn = sign_in(conn, stranger)
+
+    assert conn |> get(~p"/drop/#{upload.id}/download") |> response(404) == "Not found"
+    assert conn |> get(~p"/drop/not-an-id/download") |> response(404) == "Not found"
+  end
+
+  test "somebody who is not signed in is sent to sign in", %{conn: conn, upload: upload} do
+    conn = get(conn, ~p"/drop/#{upload.id}/download")
+
+    assert redirected_to(conn) == "/sign-in"
+  end
+end

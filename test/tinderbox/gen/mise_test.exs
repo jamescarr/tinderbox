@@ -146,6 +146,14 @@ defmodule Tinderbox.Gen.MiseTest do
     end
   end
 
+  test "--file-drop puts the scanner settings in [env]" do
+    toml = content(mise(stack: "saas", broker: :nats, file_drop: true))
+
+    assert toml =~ ~s(FILE_DROP_SCANNER = "none")
+    assert toml =~ ~s(CLAMAV_PORT = "3310")
+    refute content(mise(stack: "saas", broker: :nats)) =~ "FILE_DROP_SCANNER"
+  end
+
   test "saas deploys to Fly.io by default: flyctl and a deploy task" do
     toml = content(mise(stack: "saas", broker: :nats))
 

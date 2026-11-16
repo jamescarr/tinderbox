@@ -1,0 +1,85 @@
+@moduledoc """
+Downloads a dropped file (`GET /drop/:id/download`, `<%= inspect(@file_drop) %>`).
+
+The upload is read with the signed-in user as the actor, so only members of
+its organization get it; everybody else, and an id that is not one, gets a
+plain 404. A file that has not been scanned yet, or was found infected, is not
+served (409).
+
+A dropped file is whatever somebody uploaded, so it is always sent as an
+attachment, never inline, with `nosniff`, no caching, and a sandboxing
+Content-Security-Policy in case a browser renders it anyway.
+"""
+
+use <%= inspect(@web) %>, :controller
+
+require Logger
+
+alias <%= inspect(@file_drop) %>.Upload
+alias <%= inspect(@prefix) %>.Storage
+
+# GET /drop/:id/download
+def download(conn, %{"id" => id}) do
+  case conn.assigns[:current_user] do
+    nil -> redirect(conn, to: ~p"/sign-in")
+    user -> serve(conn, user, id)
+  end
+end
+
+defp serve(conn, user, id) do
+  with {:ok, upload} <- fetch(id, user),
+       :ok <- available(upload),
+       {:ok, body} <- Storage.get(upload.storage_key) do
+    send_attachment(conn, upload, body)
+  else
+    :not_found ->
+      not_found(conn)
+
+    :unavailable ->
+      send_resp(conn, 409, "This file is not available")
+
+    {:error, :not_found} ->
+      not_found(conn)
+
+    {:error, reason} ->
+      Logger.error("could not read a dropped file from storage: #{inspect(reason)}")
+      send_resp(conn, 502, "Storage is not available")
+  end
+end
+
+# Not found, forbidden and a malformed id look the same from outside.
+defp fetch(id, user) do
+  case Ecto.UUID.cast(id) do
+    {:ok, id} ->
+      case Ash.get(Upload, id, actor: user) do
+        {:ok, upload} -> {:ok, upload}
+        {:error, _error} -> :not_found
+      end
+
+    :error ->
+      :not_found
+  end
+end
+
+defp available(%{scanned_at: nil}), do: :unavailable
+defp available(%{status: :infected}), do: :unavailable
+defp available(_upload), do: :ok
+
+defp send_attachment(conn, upload, body) do
+  conn
+  |> put_resp_content_type("application/octet-stream", nil)
+  |> put_resp_header("content-disposition", content_disposition("attachment", upload.filename))
+  |> put_resp_header("x-content-type-options", "nosniff")
+  |> put_resp_header("cache-control", "private, no-store")
+  |> put_resp_header("content-security-policy", "default-src 'none'; sandbox")
+  |> send_resp(200, body)
+end
+
+# A quoted ASCII name for old clients, and the real one (RFC 6266) for the rest.
+defp content_disposition(disposition, filename) do
+  fallback = String.replace(filename, ~r/[^A-Za-z0-9._ -]/, "_")
+
+  ~s|#{disposition}; filename="#{fallback}"; filename*=UTF-8''#{URI.encode(filename, &URI.char_unreserved?/1)}|
+end
+
+defp not_found(conn), do: send_resp(conn, 404, "Not found")

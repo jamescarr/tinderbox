@@ -1,0 +1,24 @@
+@doc """
+A file dropped into `organization` by `user`, an owner or admin, through
+`<%= inspect(@file_drop) %>.receive_binary/5`; `attrs` set `:body` (a two-line CSV of its
+own by default, so every call has its own hash), `:filename` (`"sample.csv"`) and
+`:hint`. It is `:pending` until the `:ingest` trigger runs. The caller deletes
+its object (`upload.storage_key`) when the test is done.
+"""
+def upload_fixture(organization, user, attrs \\ %{}) do
+  body =
+    Map.get_lazy(attrs, :body, fn ->
+      "date,amount\n2026-01-01,#{System.unique_integer([:positive])}\n"
+    end)
+
+  {:ok, upload} =
+    <%= inspect(@file_drop) %>.receive_binary(
+      organization,
+      user,
+      body,
+      Map.get(attrs, :filename, "sample.csv"),
+      hint: Map.get(attrs, :hint)
+    )
+
+  upload
+end

@@ -82,7 +82,23 @@ With `SMTP_USERNAME` (and `SMTP_PASSWORD`) set, mail is authenticated and upgrad
 with verified STARTTLS. Behind PgBouncer set `DATABASE_POOLER=pgbouncer`. On an
 IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
 `force_ssl`, so a platform's plain-HTTP health check is not redirected.
-
+<%= if @opts[:file_drop] || @opts[:integrations] do %>
+Files dropped at `/drop` (`<%= inspect(@prefix) %>.FileDrop`) are scanned before the handler sees
+them when `FILE_DROP_SCANNER=clamav`: a ClamAV daemon at `CLAMAV_HOST:CLAMAV_PORT`.
+Locally it is the compose service of the `scan` profile, left out of `mise run up`:
+`docker compose --profile scan up -d --wait clamav` (the first start downloads the
+signature database and takes minutes). Outside production the default is `none`,
+no scan; production refuses to start until `FILE_DROP_SCANNER` says which.
+`FILE_DROP_MAX_BYTES` caps a file (25 MiB).
+<% end %><%= if @opts[:integrations] do %>
+Integrations (`/integrations`, `<%= inspect(@prefix) %>.Integrations`) turn dropped files, webhook
+deliveries and scheduled pulls into records, each handed once to
+`<%= inspect(@prefix) %>.Integrations.Handler`: that module is where records become this
+application's rows. Connectors are listed in `config :<%= @app %>, <%= inspect(@prefix) %>.Integrations,
+connectors: [...]`. n8n, Zapier or Make post to a `webhook` source at
+`/webhooks/integrations/<source id>` with its bearer token, shown once when the
+source is added.
+<% end %>
 ## Validation
 
 The application measures whether anyone wants it, in its own database.

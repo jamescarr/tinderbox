@@ -13,6 +13,9 @@ defmodule Mix.Tasks.Tinderbox.Gen.Compose do
   ```sh
   mix tinderbox.gen.compose --stack worker --broker sqs
   ```
+
+  `--file-drop` (SaaS) adds a ClamAV daemon in the `scan` profile, for the file
+  drop's scanner, and its variables to `.env.example`.
   """
 
   use Igniter.Mix.Task
@@ -22,8 +25,8 @@ defmodule Mix.Tasks.Tinderbox.Gen.Compose do
     %Igniter.Mix.Task.Info{
       group: :tinderbox,
       example: "mix tinderbox.gen.compose --stack worker --broker sqs",
-      schema: [stack: :string, broker: :string, db: :boolean],
-      defaults: [stack: "api", broker: "sqs", db: true]
+      schema: [stack: :string, broker: :string, db: :boolean, file_drop: :boolean],
+      defaults: [stack: "api", broker: "sqs", db: true, file_drop: false]
     }
   end
 

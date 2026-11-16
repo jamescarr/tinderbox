@@ -308,7 +308,7 @@ defmodule Tinderbox.Gen.Saas.Mfa do
       String.contains?(content, ~s(~p"/settings/security")) ->
         {:ok, content}
 
-      new = insert_line(content, @user_menu_anchor, @user_menu_entry, :after) ->
+      new = Edits.insert_line(content, @user_menu_anchor, @user_menu_entry, :after) ->
         {:ok, new}
 
       true ->
@@ -333,7 +333,12 @@ defmodule Tinderbox.Gen.Saas.Mfa do
            ),
          {:ok, content} <- add_page_value(content, ":security"),
          new when is_binary(new) <-
-           insert_line(content, ~s(<.nav_item href={~p"/admin/flags"}), @admin_nav_entry, :before) do
+           Edits.insert_line(
+             content,
+             ~s(<.nav_item href={~p"/admin/flags"}),
+             @admin_nav_entry,
+             :before
+           ) do
       {:ok, new}
     else
       true ->
@@ -364,23 +369,6 @@ defmodule Tinderbox.Gen.Saas.Mfa do
       {:ok, String.replace(content, pattern, replacement, global: false)}
     else
       :error
-    end
-  end
-
-  # Inserts `line` before or after the first line containing `anchor`, with that
-  # line's indentation; `nil` when no line does.
-  defp insert_line(content, anchor, line, placement) do
-    lines = String.split(content, "\n")
-
-    case Enum.find_index(lines, &String.contains?(&1, anchor)) do
-      nil ->
-        nil
-
-      index ->
-        [indent] = Regex.run(~r/^\s*/, Enum.at(lines, index))
-        at = if placement == :after, do: index + 1, else: index
-
-        lines |> List.insert_at(at, indent <> line) |> Enum.join("\n")
     end
   end
 

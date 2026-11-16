@@ -231,7 +231,20 @@ services:
     ports:
       - "${SMTP_PORT:-1025}:1025"
       - "${MAILPIT_UI_PORT:-8025}:8025"
-<% end %>
+<%= if @file_drop? do %>
+  # ClamAV daemon for the file drop's scanner (FILE_DROP_SCANNER=clamav). It is in
+  # the `scan` profile, so `docker compose up` leaves it out; start it with
+  #   docker compose --profile scan up -d --wait clamav
+  # The first start downloads the signature database and takes minutes. The image
+  # ships its own healthcheck.
+  clamav:
+    image: clamav/clamav-debian:1.5
+    profiles: ["scan"]
+    ports:
+      - "${CLAMAV_PORT:-3310}:3310"
+    volumes:
+      - clamav-data:/var/lib/clamav
+<% end %><% end %>
   # Stays up once every bootstrap job above has finished. Compose fails
   # `up --wait` when a job container merely exits, even with status 0, unless a
   # running service depends on it completing: this is that service. It also means
@@ -258,4 +271,5 @@ volumes:
 <% end %>  floci-data:
   floci-gcp-data:
 <%= if @extra_service == :nats do %>  nats-data:
+<% end %><%= if @file_drop? do %>  clamav-data:
 <% end %>

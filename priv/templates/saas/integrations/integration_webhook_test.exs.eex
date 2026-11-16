@@ -1,0 +1,116 @@
+defmodule <%= inspect(@web) %>.IntegrationWebhookTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+
+  alias <%= inspect(@integrations) %>
+  alias <%= inspect(@integrations) %>.Connectors.Webhook
+
+  setup do
+    previous = Application.get_env(<%= inspect(@app) %>, Integrations, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.merge(previous, connectors: [Webhook], webhook_max_bytes: 5_000_000)
+    )
+
+    on_exit(fn -> Application.put_env(<%= inspect(@app) %>, Integrations, previous) end)
+
+    owner = user_fixture()
+    organization = organization_fixture(owner)
+    source = source_fixture(organization, owner)
+
+    %{owner: owner, source: source, token: source.__metadata__.webhook_token}
+  end
+
+  @records %{
+    "records" => [
+      %{"type" => "note", "external_id" => "1", "data" => %{"a" => 1}},
+      %{"type" => "note", "external_id" => "2", "data" => %{}}
+    ]
+  }
+
+  defp deliver(conn, source, body, token \\ nil) do
+    conn = put_req_header(conn, "content-type", "application/json")
+    conn = if token, do: put_req_header(conn, "authorization", "Bearer #{token}"), else: conn
+
+    post(conn, "/webhooks/integrations/#{source.id}", body)
+  end
+
+  test "accepts records with the token, and counts duplicates", %{
+    conn: conn,
+    source: source,
+    token: token
+  } do
+    body = Jason.encode!(@records)
+
+    assert conn |> deliver(source, body, token) |> json_response(202) ==
+             %{"accepted" => 2, "duplicates" => 0}
+
+    assert build_conn() |> deliver(source, body, token) |> json_response(202) ==
+             %{"accepted" => 0, "duplicates" => 2}
+  end
+
+  test "refuses a delivery without the token or with another one", %{
+    conn: conn,
+    source: source
+  } do
+    body = Jason.encode!(@records)
+
+    conn = deliver(conn, source, body)
+    assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    assert get_resp_header(conn, "www-authenticate") == ["Bearer"]
+
+    assert build_conn() |> deliver(source, body, "nope") |> json_response(401)
+  end
+
+  test "an unknown or disabled source is not found", %{
+    conn: conn,
+    owner: owner,
+    source: source,
+    token: token
+  } do
+    body = Jason.encode!(@records)
+
+    assert conn |> deliver(%{id: Ash.UUID.generate()}, body, token) |> json_response(404)
+    assert build_conn() |> deliver(%{id: "not-a-uuid"}, body, token) |> json_response(404)
+
+    Ash.update!(source, %{}, action: :disable, actor: owner)
+
+    assert build_conn() |> deliver(source, body, token) |> json_response(404) ==
+             %{"error" => "not_found"}
+  end
+
+  test "a body that is not records, or not JSON, is unprocessable", %{
+    conn: conn,
+    source: source,
+    token: token
+  } do
+    assert %{"error" => "expected" <> _} =
+             conn |> deliver(source, ~s({"rows": []}), token) |> json_response(422)
+
+    assert build_conn() |> deliver(source, "{nope", token) |> json_response(422) ==
+             %{"error" => "invalid JSON"}
+  end
+
+  test "a body over the limit is too large", %{conn: conn, source: source, token: token} do
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.put(Application.get_env(<%= inspect(@app) %>, Integrations), :webhook_max_bytes, 64)
+    )
+
+    body = Jason.encode!(@records)
+    assert byte_size(body) > 64
+
+    assert conn |> deliver(source, body, token) |> json_response(413) == %{"error" => "too_large"}
+  end
+
+  test "anything but a POST goes on to the router", %{conn: conn, source: source} do
+    conn = get(conn, "/webhooks/integrations/#{source.id}")
+
+    # The router's 404 page, not the plug's JSON.
+    assert html_response(conn, 404)
+  end
+end

@@ -1,0 +1,9 @@
+@moduledoc """
+The default `<%= inspect(@file_drop) %>.Handler`: keeps the file, does nothing with it.
+Replace it in `config <%= inspect(@app) %>, <%= inspect(@file_drop) %>, handler: …`.
+"""
+
+@behaviour <%= inspect(@file_drop) %>.Handler
+
+@impl true
+def handle(_upload, _body), do: {:ok, %{}}

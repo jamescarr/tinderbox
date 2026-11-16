@@ -1,0 +1,34 @@
+@moduledoc """
+Deletes an upload's object once the row is gone. After the transaction: a row
+that failed to delete keeps its file. An object that cannot be deleted is
+logged; nothing points to it any more.
+"""
+
+use Ash.Resource.Change
+
+require Logger
+
+alias <%= inspect(@prefix) %>.Storage
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.after_transaction(changeset, fn
+    changeset, {:ok, _record} = result ->
+      delete(changeset.data.storage_key)
+      result
+
+    changeset, :ok ->
+      delete(changeset.data.storage_key)
+      :ok
+
+    _changeset, result ->
+      result
+  end)
+end
+
+defp delete(key) do
+  case Storage.delete(key) do
+    :ok -> :ok
+    {:error, reason} -> Logger.error("could not delete #{key}: #{inspect(reason)}")
+  end
+end

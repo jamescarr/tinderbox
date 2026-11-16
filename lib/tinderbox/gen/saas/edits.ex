@@ -349,6 +349,27 @@ defmodule Tinderbox.Gen.Saas.Edits do
     %{igniter | notices: Enum.reject(igniter.notices, &String.contains?(&1, snippet))}
   end
 
+  @doc """
+  Inserts `line` before or after the first line of `content` containing
+  `anchor`, with that line's indentation; `nil` when no line does. For text
+  edits of a source, such as a layout's navigation, inside `Tinderbox.Gen.rewrite_module/3`.
+  """
+  @spec insert_line(String.t(), String.t(), String.t(), :before | :after) :: String.t() | nil
+  def insert_line(content, anchor, line, placement) do
+    lines = String.split(content, "\n")
+
+    case Enum.find_index(lines, &String.contains?(&1, anchor)) do
+      nil ->
+        nil
+
+      index ->
+        [indent] = Regex.run(~r/^\s*/, Enum.at(lines, index))
+        at = if placement == :after, do: index + 1, else: index
+
+        lines |> List.insert_at(at, indent <> line) |> Enum.join("\n")
+    end
+  end
+
   defp flatten(code), do: code |> String.replace(["(", ")"], " ") |> String.replace(~r/\s+/, " ")
 
   # --- internals ----------------------------------------------------------

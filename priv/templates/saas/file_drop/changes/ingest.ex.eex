@@ -1,0 +1,116 @@
+@moduledoc """
+The work of the `:ingest` trigger, in a `before_action` hook of an action that
+runs outside a transaction (`transaction? false`): nothing is locked while the
+scanner or the handler answers.
+
+  1. The object is read back. Missing, or not the bytes that were uploaded (its
+     sha256 differs): `:failed`.
+  2. It is scanned (`<%= inspect(@file_drop) %>.Scanner`). Infected: the object is
+     deleted and the upload is `:infected`; the handler never sees it.
+  3. The handler (`<%= inspect(@file_drop) %>.handler/0`) gets the clean bytes:
+     `{:ok, summary}` is `:processed`, `{:reject, message}` is `:failed` with
+     that message.
+
+A storage error, a scanner that cannot be reached, or a handler's
+`{:error, reason}` fail the action instead, so the job retries; after the last
+attempt `:mark_failed` records the error.
+"""
+
+use Ash.Resource.Change
+
+require Logger
+
+alias <%= inspect(@file_drop) %>
+alias <%= inspect(@file_drop) %>.Scanner
+alias <%= inspect(@prefix) %>.Storage
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_action(changeset, &ingest/1)
+end
+
+defp ingest(changeset) do
+  upload = changeset.data
+
+  case Storage.get(upload.storage_key) do
+    {:ok, body} ->
+      verify(changeset, upload, body)
+
+    {:error, :not_found} ->
+      fail(changeset, "The file is missing from storage")
+
+    {:error, reason} ->
+      Ash.Changeset.add_error(changeset, "could not read the file: #{inspect(reason)}")
+  end
+end
+
+defp verify(changeset, upload, body) do
+  if sha256(body) == upload.sha256 do
+    scan(changeset, upload, body)
+  else
+    fail(changeset, "The stored file does not match what was uploaded")
+  end
+end
+
+defp scan(changeset, upload, body) do
+  case Scanner.scan(body) do
+    {:ok, {:infected, signature}} ->
+      delete_object(upload.storage_key)
+
+      changeset
+      |> set(:status, :infected)
+      |> set(:scan_result, signature)
+      |> set(:scanned_at, now())
+
+    {:ok, verdict} when verdict in [:clean, :skipped] ->
+      handle(changeset, upload, body, Atom.to_string(verdict))
+
+    {:error, reason} ->
+      Ash.Changeset.add_error(changeset, "could not scan the file: #{inspect(reason)}")
+  end
+end
+
+defp handle(changeset, upload, body, scan_result) do
+  case FileDrop.handler().handle(upload, body) do
+    {:ok, summary} when is_map(summary) ->
+      changeset
+      |> scanned(scan_result)
+      |> set(:status, :processed)
+      |> set(:result, summary)
+      |> set(:error, nil)
+
+    {:reject, message} ->
+      changeset
+      |> scanned(scan_result)
+      |> fail(message)
+
+    {:error, reason} ->
+      Ash.Changeset.add_error(changeset, "the handler failed: #{inspect(reason)}")
+  end
+end
+
+defp scanned(changeset, scan_result) do
+  changeset
+  |> set(:scan_result, scan_result)
+  |> set(:scanned_at, now())
+end
+
+defp fail(changeset, message) do
+  changeset
+  |> set(:status, :failed)
+  |> set(:error, message)
+end
+
+defp set(changeset, attribute, value),
+  do: Ash.Changeset.force_change_attribute(changeset, attribute, value)
+
+defp delete_object(key) do
+  case Storage.delete(key) do
+    :ok -> :ok
+    {:error, reason} -> Logger.error("could not delete infected #{key}: #{inspect(reason)}")
+  end
+end
+
+defp sha256(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+
+defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)

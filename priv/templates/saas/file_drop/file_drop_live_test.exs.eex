@@ -1,0 +1,97 @@
+defmodule <%= inspect(@web) %>.FileDropLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  require Ash.Query
+
+  alias <%= inspect(@file_drop) %>
+  alias <%= inspect(@file_drop) %>.Upload
+  alias <%= inspect(@prefix) %>.Storage
+
+  setup do
+    previous = Application.get_env(<%= inspect(@app) %>, FileDrop, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      FileDrop,
+      Keyword.merge(previous,
+        handler: FileDrop.Handlers.Keep,
+        scanner: "none",
+        extensions: [".csv", ".ofx", ".qfx", ".pdf", ".zip", ".eml", ".txt"]
+      )
+    )
+
+    owner = user_fixture()
+    organization = organization_fixture(owner)
+
+    on_exit(fn ->
+      Application.put_env(<%= inspect(@app) %>, FileDrop, previous)
+    end)
+
+    %{owner: owner, organization: organization}
+  end
+
+  defp uploads(organization) do
+    Upload
+    |> Ash.Query.filter(organization_id == ^organization.id)
+    |> Ash.read!(authorize?: false)
+  end
+
+  defp delete_objects(uploads), do: Enum.each(uploads, &Storage.delete(&1.storage_key))
+
+  test "the owner drops a CSV and sees it pending", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    on_exit(fn -> delete_objects(uploads(organization)) end)
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/drop")
+
+    input =
+      file_input(view, "#drop-form", :drop, [
+        %{name: "statement.csv", content: "date,amount\n2026-01-02,-12.50\n", type: "text/csv"}
+      ])
+
+    render_upload(input, "statement.csv")
+    view |> form("#drop-form") |> render_submit()
+
+    assert render(view) =~ "1 received"
+    assert [upload] = uploads(organization)
+    assert has_element?(view, "#upload-#{upload.id}", "statement.csv")
+    assert has_element?(view, "#upload-#{upload.id}", "Pending")
+  end
+
+  test "a member sees the files but cannot drop or delete", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    upload = upload_fixture(organization, owner)
+    on_exit(fn -> Storage.delete(upload.storage_key) end)
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    {:ok, view, _html} = live(sign_in(conn, member), ~p"/drop")
+
+    assert has_element?(view, "#upload-#{upload.id}", "sample.csv")
+    refute has_element?(view, "#drop-form")
+    refute has_element?(view, "button", "Delete")
+  end
+
+  test "the owner deletes a file", %{conn: conn, owner: owner, organization: organization} do
+    upload = upload_fixture(organization, owner)
+    on_exit(fn -> Storage.delete(upload.storage_key) end)
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/drop")
+
+    view |> element("#upload-#{upload.id} button", "Delete") |> render_click()
+
+    refute has_element?(view, "#upload-#{upload.id}")
+    assert uploads(organization) == []
+    assert Storage.get(upload.storage_key) == {:error, :not_found}
+  end
+end

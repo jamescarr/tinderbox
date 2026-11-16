@@ -1,0 +1,352 @@
+@moduledoc """
+The current organization's integration sources (`<%= inspect(@integrations) %>`), at
+`/integrations`: where its data comes from, how much of it is waiting, and what
+went wrong last.
+
+Everyone in the organization sees the list. Owners and admins add a source from
+the connector catalog, sync a pulling one now, issue a new webhook token,
+disable, enable and delete. A webhook token is shown once, with the URL and a
+`curl` to try it, until it is dismissed. The list follows deliveries as they
+happen, reloading at most twice a second.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+import <%= inspect(@web) %>.LiveHelpers
+
+require Ash.Query
+
+alias <%= inspect(@integrations) %>
+alias <%= inspect(@integrations) %>.Source
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@reload_after 500
+
+@impl true
+def mount(_params, _session, socket) do
+  organization = socket.assigns.current_organization
+
+  if connected?(socket), do: Integrations.subscribe(organization.id)
+
+  connectors = Integrations.connectors()
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Integrations")
+   |> assign(:manager?, manager?(socket.assigns.current_membership))
+   |> assign(:connectors, connectors)
+   |> assign(:new_token, nil)
+   |> assign(:reload_pending?, false)
+   |> assign(:form, new_form(connectors))
+   |> load()}
+end
+
+# The form's values are kept so the fields clear once a source is added.
+@impl true
+def handle_event("validate", %{"source" => params}, socket) do
+  {:noreply, assign(socket, :form, to_form(params, as: "source"))}
+end
+
+def handle_event("create", %{"source" => params}, socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  params = %{
+    organization_id: organization.id,
+    connector: params["connector"],
+    name: blank_to_nil(params["name"])
+  }
+
+  case Ash.create(Source, params, actor: user) do
+    {:ok, source} ->
+      {:noreply,
+       socket
+       |> put_flash(:info, "#{source.name} added")
+       |> assign(:new_token, token_for(source))
+       |> assign(:form, new_form(socket.assigns.connectors))
+       |> load()}
+
+    {:error, error} ->
+      {:noreply, put_flash(socket, :error, error_message(error))}
+  end
+end
+
+def handle_event("sync", %{"id" => id}, socket) do
+  {:noreply, run(socket, id, :request_sync, "Syncing")}
+end
+
+def handle_event("rotate", %{"id" => id}, socket) do
+  with {:ok, source} <- find(Source, id, socket),
+       {:ok, source} <-
+         Ash.update(source, %{}, action: :rotate_token, actor: socket.assigns.current_user) do
+    {:noreply,
+     socket
+     |> put_flash(:info, "New token issued; the old one no longer works")
+     |> assign(:new_token, token_for(source))
+     |> load()}
+  else
+    {:error, error} -> {:noreply, put_flash(socket, :error, error_message(error))}
+  end
+end
+
+def handle_event("disable", %{"id" => id}, socket) do
+  {:noreply, run(socket, id, :disable, "Source disabled")}
+end
+
+def handle_event("enable", %{"id" => id}, socket) do
+  {:noreply, run(socket, id, :enable, "Source enabled")}
+end
+
+def handle_event("delete", %{"id" => id}, socket) do
+  result =
+    with {:ok, source} <- find(Source, id, socket) do
+      Ash.destroy(source, actor: socket.assigns.current_user)
+    end
+
+  {:noreply, socket |> flash(result, "Source deleted") |> load()}
+end
+
+def handle_event("dismiss", _params, socket), do: {:noreply, assign(socket, :new_token, nil)}
+
+@impl true
+def handle_info(:integrations_updated, %{assigns: %{reload_pending?: true}} = socket),
+  do: {:noreply, socket}
+
+def handle_info(:integrations_updated, socket) do
+  Process.send_after(self(), :reload, @reload_after)
+  {:noreply, assign(socket, :reload_pending?, true)}
+end
+
+def handle_info(:reload, socket) do
+  {:noreply, socket |> assign(:reload_pending?, false) |> load()}
+end
+
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp run(socket, id, action, message) do
+  result =
+    with {:ok, source} <- find(Source, id, socket) do
+      Ash.update(source, %{}, action: action, actor: socket.assigns.current_user)
+    end
+
+  socket |> flash(result, message) |> load()
+end
+
+defp load(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  sources =
+    Source
+    |> Ash.Query.filter(organization_id == ^organization.id)
+    |> Ash.Query.load([:created_by, :record_count, :pending_count])
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!(actor: user)
+
+  assign(socket, :sources, sources)
+end
+
+defp new_form(connectors) do
+  first = connectors |> List.first() |> then(&(&1 && &1.key()))
+  to_form(%{"connector" => first, "name" => ""}, as: "source")
+end
+
+defp token_for(%{__metadata__: %{webhook_token: token}} = source) when is_binary(token) do
+  url = Integrations.webhook_url(source)
+
+  %{
+    name: source.name,
+    url: url,
+    token: token,
+    curl: """
+    curl -X POST #{url} \\
+      -H 'authorization: Bearer #{token}' \\
+      -H 'content-type: application/json' \\
+      -d '{"records":[{"type":"note","external_id":"1","data":{}}]}'\
+    """
+  }
+end
+
+defp token_for(_source), do: nil
+
+defp flash(socket, :ok, message), do: put_flash(socket, :info, message)
+defp flash(socket, {:ok, _record}, message), do: put_flash(socket, :info, message)
+
+defp flash(socket, {:error, error}, _message),
+  do: put_flash(socket, :error, error_message(error))
+
+defp blank_to_nil(value) when value in [nil, ""], do: nil
+defp blank_to_nil(value), do: String.trim(value)
+
+defp connector_module(connectors, key), do: Enum.find(connectors, &(&1.key() == key))
+
+defp connector_name(connectors, key) do
+  case connector_module(connectors, key) do
+    nil -> key
+    connector -> connector.name()
+  end
+end
+
+defp transports(connectors, key) do
+  case connector_module(connectors, key) do
+    nil -> []
+    connector -> connector.transports()
+  end
+end
+
+defp transport_label(:file), do: "File"
+defp transport_label(:webhook), do: "Webhook"
+defp transport_label(:api), do: "Sync"
+
+defp status_color(:active), do: "success"
+defp status_color(:error), do: "error"
+defp status_color(_disabled), do: "neutral"
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+    current_page={:integrations}
+    wide
+  >
+    <.page_header>
+      Integrations
+      <:subtitle>Where {@current_organization.name}'s data comes from</:subtitle>
+    </.page_header>
+
+    <div class="space-y-6">
+      <div :if={@new_token} id="new-token">
+        <.alert kind="success" title="Copy the token now; it is not shown again">
+          <dl class="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-[max-content_1fr]">
+            <dt class="font-medium">Source</dt>
+            <dd>{@new_token.name}</dd>
+            <dt class="font-medium">URL</dt>
+            <dd><code class="break-all">{@new_token.url}</code></dd>
+            <dt class="font-medium">Token</dt>
+            <dd><code class="break-all">{@new_token.token}</code></dd>
+          </dl>
+          <p class="mt-3">Post records to it, from n8n, Zapier, Make or a script:</p>
+          <pre class="mt-1 overflow-x-auto rounded-box bg-base-200 p-3 text-xs"><code>{@new_token.curl}</code></pre>
+          <:actions>
+            <.button phx-click="dismiss">Done</.button>
+          </:actions>
+        </.alert>
+      </div>
+
+      <.card padded={@sources == []}>
+        <:title>Sources</:title>
+        <div :if={@sources != []} class="overflow-x-auto">
+          <table class="table" id="sources">
+            <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Connector</th>
+                <th scope="col">Takes</th>
+                <th scope="col">Status</th>
+                <th scope="col">Last activity</th>
+                <th scope="col">Pending</th>
+                <th scope="col">Last error</th>
+                <th :if={@manager?} scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={source <- @sources} id={"source-#{source.id}"}>
+                <td class="font-medium">{source.name}</td>
+                <td>{connector_name(@connectors, source.connector)}</td>
+                <td class="space-x-1">
+                  <.badge :for={transport <- transports(@connectors, source.connector)}>
+                    {transport_label(transport)}
+                  </.badge>
+                </td>
+                <td>
+                  <.badge color={status_color(source.status)}>{humanize(source.status)}</.badge>
+                </td>
+                <td>{relative_time(source.last_synced_at)}</td>
+                <td class="tabular-nums">{source.pending_count} of {source.record_count}</td>
+                <td class="max-w-xs truncate text-sm text-error">{source.last_error}</td>
+                <td :if={@manager?} class="text-right whitespace-nowrap">
+                  <.button
+                    :if={
+                      :api in transports(@connectors, source.connector) and
+                        source.status != :disabled
+                    }
+                    class="btn btn-ghost btn-sm"
+                    phx-click="sync"
+                    phx-value-id={source.id}
+                  >
+                    Sync now
+                  </.button>
+                  <.button
+                    :if={:webhook in transports(@connectors, source.connector)}
+                    class="btn btn-ghost btn-sm"
+                    phx-click="rotate"
+                    phx-value-id={source.id}
+                    data-confirm={"Issue a new token for #{source.name}? The current one stops working."}
+                  >
+                    New token
+                  </.button>
+                  <.button
+                    :if={source.status != :disabled}
+                    class="btn btn-ghost btn-sm"
+                    phx-click="disable"
+                    phx-value-id={source.id}
+                  >
+                    Disable
+                  </.button>
+                  <.button
+                    :if={source.status == :disabled}
+                    class="btn btn-ghost btn-sm"
+                    phx-click="enable"
+                    phx-value-id={source.id}
+                  >
+                    Enable
+                  </.button>
+                  <.button
+                    class="btn btn-ghost btn-sm text-error"
+                    phx-click="delete"
+                    phx-value-id={source.id}
+                    data-confirm={"Delete #{source.name} and every record it delivered?"}
+                  >
+                    Delete
+                  </.button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <.empty_state :if={@sources == []} icon="hero-puzzle-piece" title="No sources yet">
+          Drop a file on Files, or add a source to take data from elsewhere.
+        </.empty_state>
+      </.card>
+
+      <.card :if={@manager?}>
+        <:title>Add a source</:title>
+        <:description>Connect {@current_organization.name} to where its data lives.</:description>
+        <.form for={@form} id="source-form" phx-change="validate" phx-submit="create">
+          <.input
+            field={@form[:connector]}
+            type="select"
+            label="Connector"
+            options={Enum.map(@connectors, &{&1.name(), &1.key()})}
+          />
+          <.input field={@form[:name]} type="text" label="Name (optional)" />
+          <ul class="mt-2 space-y-1 text-sm text-base-content/70">
+            <li :for={connector <- @connectors}>
+              <span class="font-medium">{connector.name()}</span>: {connector.description()}
+            </li>
+          </ul>
+          <div class="mt-2 flex justify-end">
+            <.button variant="primary" phx-disable-with="Adding...">Add</.button>
+          </div>
+        </.form>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end

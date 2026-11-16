@@ -1,0 +1,40 @@
+@moduledoc """
+The work of the `:process` trigger: `<%= inspect(@integrations) %>.Handler.handle/1`, in a
+`before_action` hook, so it runs inside the record's transaction. `:ok` is
+`:processed`, `:skip` is `:skipped`; `{:error, reason}` fails the action (and
+rolls back whatever the handler wrote), so the job retries.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@integrations) %>.Handler
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_action(changeset, &process/1)
+end
+
+defp process(changeset) do
+  # Through apply/3: the generated handler only ever skips, and the compiler
+  # would otherwise call the other outcomes unreachable.
+  case apply(Handler, :handle, [changeset.data]) do
+    :ok ->
+      done(changeset, :processed)
+
+    :skip ->
+      done(changeset, :skipped)
+
+    {:error, reason} ->
+      Ash.Changeset.add_error(changeset, "the handler failed: #{inspect(reason)}")
+  end
+end
+
+defp done(changeset, status) do
+  changeset
+  |> Ash.Changeset.force_change_attribute(:status, status)
+  |> Ash.Changeset.force_change_attribute(:error, nil)
+  |> Ash.Changeset.force_change_attribute(
+    :processed_at,
+    DateTime.utc_now() |> DateTime.truncate(:second)
+  )
+end

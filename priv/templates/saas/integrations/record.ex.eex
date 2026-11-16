@@ -1,0 +1,148 @@
+@moduledoc """
+The inbox: one thing a source delivered (a transaction, an order, a receipt),
+stored once per `(source, type, external_id)`.
+
+`<%= inspect(@integrations) %>.ingest/2` records it `:pending`; the `:process` trigger
+(queue `integrations`, five attempts) hands it to
+`<%= inspect(@integrations) %>.Handler.handle/1` inside the record's transaction, so what
+the handler writes commits or rolls back with the status: `:processed`,
+`:skipped` (not something the application uses), or, after the last failed
+attempt, `:failed`. Owners and admins can `:reprocess` a record.
+
+`data` is not public: it is whatever the source sent. There are no versions and
+no events here; a source can deliver thousands of records at once.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@integrations) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  extensions: [AshOban]
+
+postgres do
+  table "integration_records"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :source, on_delete: :delete
+    reference :organization, on_delete: :delete
+  end
+
+  custom_indexes do
+    index [:organization_id, :inserted_at]
+    index [:source_id, :status]
+  end
+end
+
+oban do
+  triggers do
+    trigger :process do
+      action :process
+      where expr(status == :pending)
+      queue :integrations
+      max_attempts 5
+      scheduler_cron "* * * * *"
+      worker_module_name <%= inspect(@integrations) %>.Record.AshOban.Worker.Process
+      scheduler_module_name <%= inspect(@integrations) %>.Record.AshOban.Scheduler.Process
+      on_error :mark_failed
+    end
+  end
+end
+
+actions do
+  defaults [:read]
+
+  create :ingest do
+    description "Stores a delivered record; use <%= inspect(@integrations) %>.ingest/2"
+    accept [:organization_id, :source_id, :type, :external_id, :occurred_at, :data]
+
+    # A record already stored stays as it is.
+    upsert? true
+    upsert_identity :unique_record
+    upsert_fields []
+
+    change run_oban_trigger(:process)
+  end
+
+  update :process do
+    description "Hands the record to <%= inspect(@integrations) %>.Handler (the :process trigger)"
+    accept []
+    require_atomic? false
+
+    change <%= inspect(@integrations) %>.Changes.Process
+  end
+
+  update :mark_failed do
+    accept []
+    require_atomic? false
+    argument :error, :map
+
+    change fn changeset, _context ->
+      error =
+        changeset |> Ash.Changeset.get_argument(:error) |> inspect() |> String.slice(0, 2_000)
+
+      changeset
+      |> Ash.Changeset.force_change_attribute(:status, :failed)
+      |> Ash.Changeset.force_change_attribute(:error, error)
+    end
+  end
+
+  update :reprocess do
+    description "Hands the record to the handler again"
+    accept []
+    require_atomic? false
+
+    change set_attribute(:status, :pending)
+    change set_attribute(:error, nil)
+    change run_oban_trigger(:process)
+  end
+end
+
+policies do
+  bypass AshOban.Checks.AshObanInteraction do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(exists(organization.memberships, user_id == ^actor(:id)))
+  end
+
+  policy action(:reprocess) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+  end
+end
+
+changes do
+  change <%= inspect(@integrations) %>.Changes.Broadcast, on: [:create, :update]
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :type, :string, allow_nil?: false, public?: true
+  attribute :external_id, :string, allow_nil?: false, public?: true
+  attribute :occurred_at, :utc_datetime, public?: true
+  attribute :data, :map, allow_nil?: false, default: %{}
+
+  attribute :status, :atom,
+    allow_nil?: false,
+    public?: true,
+    default: :pending,
+    constraints: [one_of: [:pending, :processed, :skipped, :failed]]
+
+  attribute :error, :string, public?: true
+  attribute :processed_at, :utc_datetime, public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :source, <%= inspect(@integrations) %>.Source, allow_nil?: false, public?: true
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+end
+
+identities do
+  identity :unique_record, [:source_id, :type, :external_id]
+end

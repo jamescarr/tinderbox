@@ -1,0 +1,219 @@
+@moduledoc """
+Files an organization drops in: statements, exports, emails, documents.
+
+`receive_file/4` and `receive_binary/5` are the way in, for the `/drop` page
+(`<%= inspect(@web) %>.FileDropLive`) and for code that receives a file some other way (a
+webhook, an inbound email). Each file is:
+
+  1. size-checked (`max_bytes/0`, `FILE_DROP_MAX_BYTES`, 25 MiB by default),
+  2. type-checked by its bytes, not by what the browser says
+     (`<%= inspect(@file_drop) %>.Sniff`; `extensions/0` lists what is accepted),
+  3. hashed (sha256): the same bytes twice in one organization are one upload,
+  4. stored with `<%= inspect(@prefix) %>.Storage` under `drop/<organization id>/<uuid>/<name>`, a
+     key the server chooses, and recorded as a `:pending`
+     `<%= inspect(@file_drop) %>.Upload`.
+
+The upload's `:ingest` AshOban trigger (queue `file_drop`) then reads the file
+back, scans it (`<%= inspect(@file_drop) %>.Scanner`, `FILE_DROP_SCANNER`), and hands a
+clean file to the handler (`handler/0`, a `<%= inspect(@file_drop) %>.Handler`), recording
+what it said: `:processed` with its summary, `:failed` with a reason, or
+`:infected` with the signature, in which case the object is deleted and the
+handler never sees it.
+
+Members of the organization read uploads and download processed ones
+(`<%= inspect(@web) %>.FileDropController`); owners and admins drop, retry and delete.
+Deleting an upload deletes its object. Platform admins have no special access:
+what an organization drops here is its own.
+
+Configuration (`config <%= inspect(@app) %>, <%= inspect(@file_drop) %>`): `:handler`, `:extensions`
+(config.exs), `:scanner`, `:max_bytes`, `:clamav_host`, `:clamav_port`
+(runtime.exs).
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>, extensions: [AshPaperTrail.Domain]
+
+require Ash.Query
+require Logger
+
+alias <%= inspect(@file_drop) %>.Sniff
+alias <%= inspect(@file_drop) %>.Upload
+alias <%= inspect(@prefix) %>.Storage
+
+paper_trail do
+  include_versions? true
+end
+
+resources do
+  resource Upload
+end
+
+@default_max_bytes 26_214_400
+@default_extensions [".csv", ".ofx", ".qfx", ".pdf", ".zip", ".eml", ".txt"]
+
+@typedoc "Why a file was not taken."
+@type reason ::
+        :empty
+        | :too_large
+        | :unsupported_type
+        | :type_mismatch
+        | {:storage, term()}
+        | Ash.Error.t()
+
+@typedoc """
+Options of `receive_file/4` and `receive_binary/5`:
+
+  * `:hint` - stored on the upload; the handler may route the file by it,
+  * `:authorize?` - `false` for system intake (a webhook), with a `nil` actor;
+    `true` by default.
+"""
+@type option :: {:hint, String.t() | nil} | {:authorize?, boolean()}
+
+@doc """
+Takes the file at `path` (a LiveView upload's temporary file, say) named
+`filename` for `organization`, dropped by `actor`. The size is checked before
+the file is read.
+"""
+@spec receive_file(%{id: term()}, map() | nil, %{path: Path.t(), filename: String.t()}, [
+        option()
+      ]) ::
+        {:ok, Upload.t()} | {:duplicate, Upload.t()} | {:error, reason()}
+def receive_file(organization, actor, %{path: path, filename: filename}, opts \\ []) do
+  size = File.stat!(path).size
+
+  cond do
+    size == 0 -> {:error, :empty}
+    size > max_bytes() -> {:error, :too_large}
+    true -> receive_binary(organization, actor, File.read!(path), filename, opts)
+  end
+end
+
+@doc """
+Takes `binary` as a file named `filename` for `organization`, dropped by `actor`.
+
+`{:duplicate, upload}` when the organization already has a file with the same
+bytes; nothing is stored then.
+"""
+@spec receive_binary(%{id: term()}, map() | nil, binary(), String.t(), [option()]) ::
+        {:ok, Upload.t()} | {:duplicate, Upload.t()} | {:error, reason()}
+def receive_binary(organization, actor, binary, filename, opts \\ [])
+    when is_binary(binary) and is_binary(filename) do
+  authorize? = Keyword.get(opts, :authorize?, true) != false
+
+  with :ok <- check_size(binary),
+       {:ok, %{kind: kind, content_type: content_type}} <- Sniff.detect(binary, filename),
+       sha256 = :crypto.hash(:sha256, binary) |> Base.encode16(case: :lower),
+       :none <- find_duplicate(organization.id, sha256, actor, authorize?) do
+    name = display_name(filename)
+    key = "drop/#{organization.id}/#{Ash.UUID.generate()}/#{key_name(name)}"
+
+    params = %{
+      organization_id: organization.id,
+      filename: name,
+      content_type: content_type,
+      kind: kind,
+      byte_size: byte_size(binary),
+      sha256: sha256,
+      storage_key: key,
+      hint: opts[:hint]
+    }
+
+    store(key, binary, params, actor, authorize?)
+  end
+end
+
+defp check_size(""), do: {:error, :empty}
+
+defp check_size(binary) do
+  if byte_size(binary) > max_bytes(), do: {:error, :too_large}, else: :ok
+end
+
+defp find_duplicate(organization_id, sha256, actor, authorize?) do
+  Upload
+  |> Ash.Query.filter(organization_id == ^organization_id and sha256 == ^sha256)
+  |> Ash.read_one(actor: actor, authorize?: authorize?)
+  |> case do
+    {:ok, nil} -> :none
+    {:ok, upload} -> {:duplicate, upload}
+    {:error, error} -> {:error, error}
+  end
+end
+
+defp store(key, binary, params, actor, authorize?) do
+  case Storage.put(key, binary) do
+    :ok ->
+      case Ash.create(Upload, params, action: :receive, actor: actor, authorize?: authorize?) do
+        {:ok, upload} ->
+          {:ok, upload}
+
+        {:error, error} ->
+          delete_object(key)
+          {:error, error}
+      end
+
+    {:error, reason} ->
+      {:error, {:storage, reason}}
+  end
+end
+
+defp delete_object(key) do
+  case Storage.delete(key) do
+    :ok -> :ok
+    {:error, reason} -> Logger.warning("could not delete #{key}: #{inspect(reason)}")
+  end
+end
+
+# What the page shows: the file's own name without control characters, quotes,
+# slashes or backslashes.
+defp display_name(filename) do
+  name =
+    filename
+    |> Path.basename()
+    |> String.replace(~r/[\x00-\x1f\x7f"\\\/]/u, "")
+    |> String.slice(0, 255)
+
+  if String.trim(name) == "", do: "file", else: name
+end
+
+# The last segment of the storage key: the display name in plain ASCII.
+defp key_name(name) do
+  name
+  |> String.replace(~r/[^A-Za-z0-9._-]/u, "_")
+  |> String.slice(0, 100)
+end
+
+@doc "The largest file accepted, in bytes (`FILE_DROP_MAX_BYTES`)."
+@spec max_bytes() :: pos_integer()
+def max_bytes, do: config()[:max_bytes] || @default_max_bytes
+
+@doc "The extensions accepted, lowercase with the dot (`config <%= inspect(@app) %>, <%= inspect(@file_drop) %>, extensions: …`)."
+@spec extensions() :: [String.t()]
+def extensions, do: config()[:extensions] || @default_extensions
+
+@doc "What a clean file is handed to: a `<%= inspect(@file_drop) %>.Handler`."
+@spec handler() :: module()
+def handler, do: config()[:handler] || <%= inspect(@file_drop) %>.Handlers.Keep
+
+@doc false
+@spec config() :: keyword()
+def config, do: Application.get_env(<%= inspect(@app) %>, __MODULE__, [])
+
+@doc "The PubSub topic an organization's upload changes are broadcast on."
+@spec topic(term()) :: String.t()
+def topic(organization_id), do: "file_drop:#{organization_id}"
+
+@doc "Subscribes the calling process to `topic/1`: `{:upload_updated, id}` messages."
+@spec subscribe(term()) :: :ok | {:error, term()}
+def subscribe(organization_id),
+  do: Phoenix.PubSub.subscribe(<%= inspect(@pubsub) %>, topic(organization_id))
+
+@doc "A sentence for a `t:reason/0`, fit for a flash message."
+@spec error_message(reason() | term()) :: String.t()
+def error_message(:empty), do: "The file is empty"
+
+def error_message(:too_large),
+  do: "The file is larger than #{div(max_bytes(), 1_048_576)} MB"
+
+def error_message(:unsupported_type), do: "This kind of file is not accepted"
+def error_message(:type_mismatch), do: "The file's content does not match its extension"
+def error_message({:storage, _reason}), do: "The file could not be stored, try again"
+def error_message(_error), do: "The file could not be saved"

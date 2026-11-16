@@ -1,0 +1,209 @@
+@moduledoc """
+Data coming in from elsewhere: bank exports, order histories, receipts, posts
+from n8n, Zapier or Make.
+
+A *connector* (`<%= inspect(@integrations) %>.Connector`) knows one kind of source and
+turns what it sends into records: a dropped file (`:file`, through
+`<%= inspect(@file_drop) %>` and `<%= inspect(@integrations) %>.DropHandler`), a webhook delivery
+(`:webhook`, `POST /webhooks/integrations/<source id>`), or a scheduled pull
+(`:api`, the `:sync` trigger of `<%= inspect(@integrations) %>.Source`). The catalog is
+`config <%= inspect(@app) %>, <%= inspect(@integrations) %>, connectors: [...]`.
+
+A *source* is one connector set up for an organization, with its own config,
+encrypted credentials and webhook token. Every *record* a source delivers is
+stored once per `(source, type, external_id)` in `<%= inspect(@integrations) %>.Record`,
+then handed, with retries, to `<%= inspect(@integrations) %>.Handler`: the application's
+module that turns records into its own rows.
+
+Owners and admins manage sources at `/integrations`; members see them. Platform
+admins have no special access.
+"""
+
+use Ash.Domain, otp_app: <%= inspect(@app) %>, extensions: [AshPaperTrail.Domain]
+
+require Ash.Query
+
+alias <%= inspect(@integrations) %>.Record
+alias <%= inspect(@integrations) %>.Source
+
+paper_trail do
+  include_versions? true
+end
+
+resources do
+  resource Source
+  resource Record
+end
+
+@typedoc "What `ingest/2` and `deliver/2` did: records stored, and records the source already had."
+@type summary :: %{created: non_neg_integer(), duplicates: non_neg_integer()}
+
+@doc "The connector catalog (`config <%= inspect(@app) %>, <%= inspect(@integrations) %>, connectors: …`)."
+@spec connectors() :: [module()]
+def connectors, do: config()[:connectors] || [<%= inspect(@integrations) %>.Connectors.Webhook]
+
+@doc "The connector whose `key/0` is `key`."
+@spec connector(String.t() | nil) :: {:ok, module()} | :error
+def connector(key) do
+  case Enum.find(connectors(), &(&1.key() == key)) do
+    nil -> :error
+    connector -> {:ok, connector}
+  end
+end
+
+@doc """
+The organization's oldest active source of `connector`, created (as the system,
+named after the connector) when it has none.
+"""
+@spec ensure_source(term(), module()) :: {:ok, Source.t()} | {:error, term()}
+def ensure_source(organization_id, connector) do
+  key = connector.key()
+
+  Source
+  |> Ash.Query.filter(
+    organization_id == ^organization_id and connector == ^key and status == :active
+  )
+  |> Ash.Query.sort(inserted_at: :asc)
+  |> Ash.Query.limit(1)
+  |> Ash.read_one(authorize?: false)
+  |> case do
+    {:ok, nil} ->
+      Ash.create(
+        Source,
+        %{organization_id: organization_id, connector: key, name: connector.name()},
+        authorize?: false
+      )
+
+    other ->
+      other
+  end
+end
+
+@doc """
+Stores `records` for `source`: every `(type, external_id)` the source does not
+have yet becomes a `:pending` record (each with its `:process` job), the others
+are counted as duplicates. One transaction, which also marks the source as
+active just now.
+"""
+@spec ingest(Source.t(), [<%= inspect(@integrations) %>.Connector.entry()]) ::
+        {:ok, summary()} | {:error, term()}
+def ingest(source, records) when is_list(records) do
+  <%= inspect(@repo) %>.transaction(fn ->
+    known = known_keys(source, records)
+
+    {created, duplicates, _seen} =
+      Enum.reduce(records, {0, 0, known}, fn record, {created, duplicates, seen} ->
+        key = {record.type, record.external_id}
+
+        if MapSet.member?(seen, key) do
+          {created, duplicates + 1, seen}
+        else
+          create_record!(source, record)
+          {created + 1, duplicates, MapSet.put(seen, key)}
+        end
+      end)
+
+    # The source's event goes out once the transaction has committed.
+    case Ash.update(source, %{},
+           action: :touch,
+           authorize?: false,
+           return_notifications?: true
+         ) do
+      {:ok, _source, notifications} ->
+        {%{created: created, duplicates: duplicates}, notifications}
+
+      {:error, error} ->
+        <%= inspect(@repo) %>.rollback(error)
+    end
+  end)
+  |> case do
+    {:ok, {summary, notifications}} ->
+      Ash.Notifier.notify(notifications)
+      {:ok, summary}
+
+    {:error, error} ->
+      {:error, error}
+  end
+end
+
+defp known_keys(_source, []), do: MapSet.new()
+
+defp known_keys(source, records) do
+  external_ids = records |> Enum.map(& &1.external_id) |> Enum.uniq()
+
+  Record
+  |> Ash.Query.filter(source_id == ^source.id and external_id in ^external_ids)
+  |> Ash.Query.select([:type, :external_id])
+  |> Ash.read!(authorize?: false)
+  |> MapSet.new(&{&1.type, &1.external_id})
+end
+
+defp create_record!(source, record) do
+  params = %{
+    organization_id: source.organization_id,
+    source_id: source.id,
+    type: record.type,
+    external_id: record.external_id,
+    occurred_at: Map.get(record, :occurred_at),
+    data: record.data
+  }
+
+  case Ash.create(Record, params, action: :ingest, authorize?: false) do
+    {:ok, record} -> record
+    {:error, error} -> <%= inspect(@repo) %>.rollback(error)
+  end
+end
+
+@doc """
+A webhook delivery for `source` (what `<%= inspect(@web) %>.Plugs.IntegrationWebhook`
+calls): the connector's `handle_webhook/2`, then `ingest/2` of what it returned.
+`{:error, :not_found}` when the source's connector is not in the catalog or
+takes no webhooks.
+"""
+@spec deliver(Source.t(), %{
+        headers: [{String.t(), String.t()}],
+        raw_body: binary(),
+        params: map()
+      }) ::
+        {:ok, summary()}
+        | {:reject, String.t()}
+        | {:error, :unauthorized | :not_found | term()}
+def deliver(source, payload) do
+  with {:ok, connector} <- webhook_connector(source) do
+    case connector.handle_webhook(source, payload) do
+      {:ok, records} -> ingest(source, records)
+      other -> other
+    end
+  end
+end
+
+defp webhook_connector(source) do
+  with {:ok, connector} <- connector(source.connector),
+       true <- exports?(connector, :handle_webhook, 2) do
+    {:ok, connector}
+  else
+    _missing -> {:error, :not_found}
+  end
+end
+
+@doc false
+def exports?(module, function, arity),
+  do: Code.ensure_loaded?(module) and function_exported?(module, function, arity)
+
+@doc "Where `source` takes webhook deliveries."
+@spec webhook_url(Source.t()) :: String.t()
+def webhook_url(source),
+  do: <%= inspect(@web) %>.Endpoint.url() <> "/webhooks/integrations/" <> source.id
+
+@doc "The PubSub topic an organization's source and record changes are announced on."
+@spec topic(term()) :: String.t()
+def topic(organization_id), do: "integrations:#{organization_id}"
+
+@doc "Subscribes the calling process to `topic/1`: `:integrations_updated` messages."
+@spec subscribe(term()) :: :ok | {:error, term()}
+def subscribe(organization_id),
+  do: Phoenix.PubSub.subscribe(<%= inspect(@pubsub) %>, topic(organization_id))
+
+@doc false
+@spec config() :: keyword()
+def config, do: Application.get_env(<%= inspect(@app) %>, __MODULE__, [])

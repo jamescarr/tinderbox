@@ -1,0 +1,74 @@
+defmodule <%= inspect(@file_drop) %>.ClamAVTest do
+  # Changes the file drop's configuration, which is global.
+  use ExUnit.Case, async: false
+
+  alias <%= inspect(@file_drop) %>
+  alias <%= inspect(@file_drop) %>.Scanners.ClamAV
+
+  setup do
+    previous = Application.get_env(<%= inspect(@app) %>, FileDrop, [])
+    on_exit(fn -> Application.put_env(<%= inspect(@app) %>, FileDrop, previous) end)
+
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, packet: :raw, reuseaddr: true])
+    {:ok, port} = :inet.port(listener)
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      FileDrop,
+      Keyword.merge(previous, clamav_host: "127.0.0.1", clamav_port: port)
+    )
+
+    %{listener: listener, port: port}
+  end
+
+  # A stand-in for clamd: reads one INSTREAM request, reports it to the test, and
+  # answers `reply`.
+  defp serve(listener, reply) do
+    test = self()
+
+    spawn_link(fn ->
+      {:ok, socket} = :gen_tcp.accept(listener, 5_000)
+      {:ok, command} = :gen_tcp.recv(socket, 10, 5_000)
+      chunks = read_chunks(socket, [])
+      send(test, {:clamd, command, chunks})
+      :ok = :gen_tcp.send(socket, reply)
+      :gen_tcp.close(socket)
+    end)
+  end
+
+  defp read_chunks(socket, acc) do
+    {:ok, <<size::32>>} = :gen_tcp.recv(socket, 4, 5_000)
+
+    if size == 0 do
+      Enum.reverse(acc)
+    else
+      {:ok, chunk} = :gen_tcp.recv(socket, size, 5_000)
+      read_chunks(socket, [chunk | acc])
+    end
+  end
+
+  test "streams the file in length-prefixed chunks, and a clean reply is clean", %{
+    listener: listener
+  } do
+    serve(listener, "stream: OK\0")
+    body = :binary.copy("a", 65_536 + 10)
+
+    assert ClamAV.scan(body) == {:ok, :clean}
+
+    assert_receive {:clamd, "zINSTREAM\0", chunks}
+    assert Enum.map(chunks, &byte_size/1) == [65_536, 10]
+    assert IO.iodata_to_binary(chunks) == body
+  end
+
+  test "a FOUND reply names the signature", %{listener: listener} do
+    serve(listener, "stream: Win.Test.EICAR_HDB-1 FOUND\0")
+
+    assert ClamAV.scan("X5O!P%@AP") == {:ok, {:infected, "Win.Test.EICAR_HDB-1"}}
+  end
+
+  test "a daemon that is not there is an error", %{listener: listener} do
+    :gen_tcp.close(listener)
+
+    assert {:error, {:clamav, _reason}} = ClamAV.scan("anything")
+  end
+end

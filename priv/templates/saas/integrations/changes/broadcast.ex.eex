@@ -1,0 +1,33 @@
+@moduledoc """
+Tells the organization's `/integrations` pages that a source or a record changed
+(`:integrations_updated` on `<%= inspect(@integrations) %>.topic/1`), after the
+transaction. The page throttles its reloads, so a large delivery is cheap.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@integrations) %>
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.after_transaction(changeset, fn
+    _changeset, {:ok, %{organization_id: organization_id}} = result ->
+      broadcast(organization_id)
+      result
+
+    changeset, :ok ->
+      broadcast(changeset.data.organization_id)
+      :ok
+
+    _changeset, result ->
+      result
+  end)
+end
+
+defp broadcast(organization_id) do
+  Phoenix.PubSub.broadcast(
+    <%= inspect(@pubsub) %>,
+    Integrations.topic(organization_id),
+    :integrations_updated
+  )
+end

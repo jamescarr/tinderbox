@@ -113,6 +113,49 @@ defmodule Tinderbox.InstallSaasTest do
     assert source(igniter, "assets/css/app.css") =~ "/* tinderbox:themepack harbor"
   end
 
+  test "--file-drop adds the file drop, a ClamAV service to start on demand, and its settings" do
+    igniter = install(["--stack", "saas", "--file-drop"])
+
+    assert_creates(igniter, "lib/test/file_drop.ex")
+    refute_creates(igniter, "lib/test/integrations.ex")
+    assert_file_drop_settings(igniter)
+  end
+
+  test "--integrations brings the file drop and its settings with it" do
+    igniter = install(["--stack", "saas", "--integrations"])
+
+    assert_creates(igniter, "lib/test/integrations.ex")
+    assert_creates(igniter, "lib/test/file_drop.ex")
+    assert_file_drop_settings(igniter)
+  end
+
+  test "without either flag there is no file drop, ClamAV or scanner setting", %{
+    igniter: igniter
+  } do
+    refute_creates(igniter, "lib/test/file_drop.ex")
+    refute source(igniter, "docker-compose.yml") =~ "clamav"
+    refute source(igniter, ".env.example") =~ "FILE_DROP_SCANNER"
+    refute source(igniter, ".mise.toml") =~ "FILE_DROP_SCANNER"
+    refute source(igniter, "fly.toml") =~ "FILE_DROP_SCANNER"
+  end
+
+  defp assert_file_drop_settings(igniter) do
+    compose = source(igniter, "docker-compose.yml")
+
+    assert compose =~ "  clamav:\n    image: clamav/clamav-debian:1.5\n    profiles: [\"scan\"]"
+    assert compose =~ ~s|"${CLAMAV_PORT:-3310}:3310"|
+    assert compose =~ "\n  clamav-data:\n"
+
+    # Not started by `docker compose up`, so `ready` does not wait for it.
+    [_services, ready] = String.split(compose, "  ready:", parts: 2)
+    refute ready =~ "clamav:"
+
+    assert source(igniter, ".env.example") =~ "export FILE_DROP_SCANNER=none\n"
+    assert source(igniter, ".mise.toml") =~ ~s(FILE_DROP_SCANNER = "none"\n)
+    # The release refuses to boot without it.
+    assert source(igniter, "fly.toml") =~ ~s(  FILE_DROP_SCANNER = "none"\n)
+  end
+
   defp install(argv) do
     Igniter.compose_task(saas_project(), "tinderbox.install", argv)
   end
