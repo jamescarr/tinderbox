@@ -1,0 +1,15 @@
+# File drop (<%= inspect(@file_drop) %>). FILE_DROP_SCANNER is `none` or `clamav` (clamd at
+# CLAMAV_HOST:CLAMAV_PORT). Production refuses to start without saying which.
+file_drop_scanner =
+  System.get_env("FILE_DROP_SCANNER") ||
+    if config_env() == :prod do
+      raise "environment variable FILE_DROP_SCANNER is missing. Set it to clamav (with CLAMAV_HOST and CLAMAV_PORT) or, to accept files unscanned, to none."
+    else
+      "none"
+    end
+
+config <%= inspect(@app) %>, <%= inspect(@file_drop) %>,
+  scanner: file_drop_scanner,
+  max_bytes: String.to_integer(System.get_env("FILE_DROP_MAX_BYTES", "26214400")),
+  clamav_host: System.get_env("CLAMAV_HOST", "localhost"),
+  clamav_port: String.to_integer(System.get_env("CLAMAV_PORT", "3310"))

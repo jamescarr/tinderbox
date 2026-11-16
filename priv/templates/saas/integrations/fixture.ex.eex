@@ -1,0 +1,14 @@
+@doc """
+A `webhook` integration source of `organization` created by `user`, an owner or
+admin; `attrs` override the name, connector, config… The token is in
+`source.__metadata__.webhook_token`.
+"""
+def source_fixture(organization, user, attrs \\ %{}) do
+  <%= inspect(@integrations) %>.Source
+  |> Ash.Changeset.for_create(
+    :create,
+    Map.merge(%{organization_id: organization.id, connector: "webhook", name: "Webhook"}, attrs),
+    actor: user
+  )
+  |> Ash.create!(actor: user)
+end

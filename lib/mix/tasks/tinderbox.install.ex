@@ -41,6 +41,9 @@ defmodule Mix.Tasks.Tinderbox.Install do
   * `--no-demo` skips the API stack's demo domain and resource (ignored by saas).
   * `--deploy fly|none` (default `fly`): the SaaS stack's Fly.io files, runbook and
     `mise run deploy`; the other stacks ignore it.
+  * `--file-drop` and `--integrations` (SaaS only, off by default): the file drop
+    at `/drop`, and the integrations framework at `/integrations`, which brings
+    the file drop with it. compose gets a ClamAV service in the `scan` profile.
 
   The `ui` stack generates neither `docker-compose.yml` nor `.mise.toml`: it
   only adds the UI kit to the Phoenix project.
@@ -72,7 +75,9 @@ defmodule Mix.Tasks.Tinderbox.Install do
         mise: :boolean,
         demo: :boolean,
         themepack: :string,
-        deploy: :string
+        deploy: :string,
+        file_drop: :boolean,
+        integrations: :boolean
       ],
       defaults: [broker: "sqs", compose: true, mise: true, demo: true, deploy: "fly"],
       required: [:stack],
@@ -109,15 +114,16 @@ defmodule Mix.Tasks.Tinderbox.Install do
 
   defp compose_services(igniter, opts) do
     broker = broker(opts)
+    # The ClamAV service and the FILE_DROP_* variables come with either block.
+    file_drop = if opts[:file_drop] || opts[:integrations], do: ["--file-drop"], else: []
 
     igniter =
       if opts[:compose] do
-        Igniter.compose_task(igniter, "tinderbox.gen.compose", [
-          "--stack",
-          opts[:stack],
-          "--broker",
-          broker
-        ])
+        Igniter.compose_task(
+          igniter,
+          "tinderbox.gen.compose",
+          ["--stack", opts[:stack], "--broker", broker] ++ file_drop
+        )
       else
         igniter
       end
@@ -127,7 +133,7 @@ defmodule Mix.Tasks.Tinderbox.Install do
         igniter,
         "tinderbox.gen.mise",
         ["--stack", opts[:stack], "--broker", broker, "--deploy", opts[:deploy] || "fly"] ++
-          if(opts[:compose], do: [], else: ["--no-compose"])
+          if(opts[:compose], do: [], else: ["--no-compose"]) ++ file_drop
       )
     else
       igniter

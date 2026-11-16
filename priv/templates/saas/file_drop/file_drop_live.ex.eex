@@ -1,0 +1,322 @@
+@moduledoc """
+The current organization's dropped files (`<%= inspect(@file_drop) %>`), at `/drop`.
+
+Everyone in the organization sees the list and downloads processed files.
+Owners and admins drop files (up to ten at a time, each at most
+`<%= inspect(@file_drop) %>.max_bytes/0`), retry failed ones and delete. The list follows
+the files through scanning and handling as it happens (PubSub).
+
+The browser's file picker is limited to `<%= inspect(@file_drop) %>.extensions/0`, but that
+is a convenience: what a file is gets decided by its bytes when it is received.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+import <%= inspect(@web) %>.LiveHelpers
+
+require Ash.Query
+
+alias <%= inspect(@file_drop) %>
+alias <%= inspect(@file_drop) %>.Upload
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_organization}
+
+@max_entries 10
+@list_limit 200
+
+@impl true
+def mount(_params, _session, socket) do
+  organization = socket.assigns.current_organization
+
+  if connected?(socket), do: FileDrop.subscribe(organization.id)
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Files")
+   |> assign(:manager?, manager?(socket.assigns.current_membership))
+   |> assign(:hints, hints(organization))
+   |> assign(:accept, Enum.join(FileDrop.extensions(), ","))
+   # Extensions are checked against the bytes when a file is received
+   # (`<%= inspect(@file_drop) %>.Sniff`); `allow_upload/3` would also insist on MIME types
+   # it knows, which `.ofx`, `.qfx` and `.eml` are not.
+   |> allow_upload(:drop,
+     accept: :any,
+     max_entries: @max_entries,
+     max_file_size: FileDrop.max_bytes()
+   )
+   |> load()}
+end
+
+@impl true
+def handle_event("validate", _params, socket), do: {:noreply, socket}
+
+def handle_event("cancel", %{"ref" => ref}, socket) do
+  {:noreply, cancel_upload(socket, :drop, ref)}
+end
+
+def handle_event("save", params, socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+  hint = blank_to_nil(params["hint"])
+
+  results =
+    consume_uploaded_entries(socket, :drop, fn %{path: path}, entry ->
+      {:ok,
+       {entry.client_name,
+        FileDrop.receive_file(organization, user, %{path: path, filename: entry.client_name},
+          hint: hint
+        )}}
+    end)
+
+  {:noreply, socket |> flash_results(results) |> load()}
+end
+
+def handle_event("retry", %{"id" => id}, socket) do
+  result =
+    with {:ok, upload} <- find(Upload, id, socket) do
+      Ash.update(upload, %{}, action: :retry, actor: socket.assigns.current_user)
+    end
+
+  {:noreply, socket |> flash(result, "The file will be processed again") |> load()}
+end
+
+def handle_event("delete", %{"id" => id}, socket) do
+  result =
+    with {:ok, upload} <- find(Upload, id, socket) do
+      Ash.destroy(upload, actor: socket.assigns.current_user)
+    end
+
+  {:noreply, socket |> flash(result, "File deleted") |> load()}
+end
+
+@impl true
+def handle_info({:upload_updated, _id}, socket), do: {:noreply, load(socket)}
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  files =
+    Upload
+    |> Ash.Query.filter(organization_id == ^organization.id)
+    |> Ash.Query.load(:uploaded_by)
+    |> Ash.Query.sort(inserted_at: :desc)
+    |> Ash.Query.limit(@list_limit)
+    |> Ash.read!(actor: user)
+
+  assign(socket, :files, files)
+end
+
+defp hints(organization) do
+  handler = FileDrop.handler()
+
+  if Code.ensure_loaded?(handler) and function_exported?(handler, :hints, 1),
+    do: handler.hints(organization),
+    else: []
+end
+
+# One flash for the whole batch.
+defp flash_results(socket, []), do: socket
+
+defp flash_results(socket, results) do
+  received = Enum.count(results, &match?({_name, {:ok, _upload}}, &1))
+
+  problems =
+    Enum.flat_map(results, fn
+      {_name, {:ok, _upload}} -> []
+      {name, {:duplicate, _upload}} -> ["#{name} is already here"]
+      {name, {:error, reason}} -> ["#{name}: #{reason_message(reason)}"]
+    end)
+
+  sentences = if received > 0, do: ["#{received} received" | problems], else: problems
+  kind = if Enum.any?(results, &match?({_name, {:error, _}}, &1)), do: :error, else: :info
+
+  put_flash(socket, kind, Enum.join(sentences, ". "))
+end
+
+defp reason_message(reason) when is_exception(reason), do: error_message(reason)
+defp reason_message(reason), do: FileDrop.error_message(reason)
+
+defp flash(socket, :ok, message), do: put_flash(socket, :info, message)
+defp flash(socket, {:ok, _record}, message), do: put_flash(socket, :info, message)
+
+defp flash(socket, {:error, error}, _message),
+  do: put_flash(socket, :error, error_message(error))
+
+defp blank_to_nil(value) when value in [nil, ""], do: nil
+defp blank_to_nil(value), do: value
+
+defp downloadable?(upload), do: upload.scanned_at != nil and upload.status != :infected
+
+defp status_color(:processed), do: "success"
+defp status_color(:pending), do: "warning"
+defp status_color(_failed_or_infected), do: "error"
+
+defp summary(%{error: error}) when is_binary(error) and error != "", do: error
+defp summary(%{result: result}) when result == %{}, do: "—"
+
+defp summary(%{result: result}) do
+  Enum.map_join(result, ", ", fn
+    {key, value} when is_binary(value) or is_number(value) or is_atom(value) ->
+      "#{key}: #{value}"
+
+    {key, value} ->
+      "#{key}: #{inspect(value)}"
+  end)
+end
+
+defp format_bytes(bytes) when bytes < 1_024, do: "#{bytes} B"
+defp format_bytes(bytes) when bytes < 1_048_576, do: "#{Float.round(bytes / 1_024, 1)} KB"
+defp format_bytes(bytes), do: "#{Float.round(bytes / 1_048_576, 1)} MB"
+
+defp upload_error_message(:too_large), do: FileDrop.error_message(:too_large)
+defp upload_error_message(:too_many_files), do: "At most #{@max_entries} files at a time"
+defp upload_error_message(:not_accepted), do: FileDrop.error_message(:unsupported_type)
+defp upload_error_message(error), do: humanize(error)
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+    current_page={:drop}
+    wide
+  >
+    <.page_header>
+      Files
+      <:subtitle>Files dropped in for {@current_organization.name}</:subtitle>
+    </.page_header>
+
+    <div class="space-y-6">
+      <.card :if={@manager?}>
+        <:title>Drop files</:title>
+        <:description>
+          {Enum.join(FileDrop.extensions(), ", ")}, up to {div(FileDrop.max_bytes(), 1_048_576)} MB each.
+        </:description>
+        <form id="drop-form" phx-change="validate" phx-submit="save" class="space-y-4">
+          <label
+            for={@uploads.drop.ref}
+            phx-drop-target={@uploads.drop.ref}
+            class="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-box border-2 border-dashed border-base-300 px-6 py-10 text-center hover:border-primary/60"
+          >
+            <.icon name="hero-arrow-up-tray" class="size-8 text-base-content/50" />
+            <span class="text-sm">Drop files here, or click to choose them</span>
+            <.live_file_input upload={@uploads.drop} accept={@accept} class="sr-only" />
+          </label>
+
+          <p :for={error <- upload_errors(@uploads.drop)} class="text-sm text-error">
+            {upload_error_message(error)}
+          </p>
+
+          <ul :if={@uploads.drop.entries != []} id="drop-entries" class="space-y-2">
+            <li
+              :for={entry <- @uploads.drop.entries}
+              id={"entry-#{entry.ref}"}
+              class="flex items-center justify-between gap-3 rounded-box bg-base-200/60 px-3 py-2 text-sm"
+            >
+              <div class="min-w-0">
+                <p class="truncate font-medium">{entry.client_name}</p>
+                <p :for={error <- upload_errors(@uploads.drop, entry)} class="text-error">
+                  {upload_error_message(error)}
+                </p>
+              </div>
+              <div class="flex shrink-0 items-center gap-2">
+                <progress class="progress w-24" value={entry.progress} max="100" />
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs"
+                  phx-click="cancel"
+                  phx-value-ref={entry.ref}
+                  aria-label={"Remove #{entry.client_name}"}
+                >
+                  <.icon name="hero-x-mark" class="size-4" />
+                </button>
+              </div>
+            </li>
+          </ul>
+
+          <div class="flex flex-wrap items-end justify-end gap-3">
+            <label :if={@hints != []} class="fieldset">
+              <span class="label">What is this?</span>
+              <select name="hint" class="select select-sm">
+                <option :for={{label, value} <- @hints} value={value}>{label}</option>
+              </select>
+            </label>
+            <.button variant="primary" phx-disable-with="Uploading...">Upload</.button>
+          </div>
+        </form>
+      </.card>
+
+      <.card padded={@files == []}>
+        <:title>Files</:title>
+        <div :if={@files != []} class="overflow-x-auto">
+          <table class="table" id="files">
+            <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Kind</th>
+                <th scope="col">Size</th>
+                <th scope="col">Status</th>
+                <th scope="col">Scan</th>
+                <th scope="col">Result</th>
+                <th scope="col">Uploaded by</th>
+                <th scope="col">When</th>
+                <th :if={@manager?} scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={upload <- @files} id={"upload-#{upload.id}"}>
+                <td class="max-w-xs truncate font-medium">
+                  <.link
+                    :if={downloadable?(upload)}
+                    href={~p"/drop/#{upload.id}/download"}
+                    class="link link-primary"
+                  >
+                    {upload.filename}
+                  </.link>
+                  <span :if={!downloadable?(upload)}>{upload.filename}</span>
+                </td>
+                <td>{upload.kind |> to_string() |> String.upcase()}</td>
+                <td class="tabular-nums whitespace-nowrap">{format_bytes(upload.byte_size)}</td>
+                <td>
+                  <.badge color={status_color(upload.status)}>{humanize(upload.status)}</.badge>
+                </td>
+                <td>{upload.scan_result || "—"}</td>
+                <td class="max-w-sm truncate text-sm">{summary(upload)}</td>
+                <td>{upload.uploaded_by && to_string(upload.uploaded_by.email)}</td>
+                <td class="whitespace-nowrap">{format_datetime(upload.inserted_at)}</td>
+                <td :if={@manager?} class="text-right whitespace-nowrap">
+                  <.button
+                    :if={upload.status == :failed}
+                    class="btn btn-ghost btn-sm"
+                    phx-click="retry"
+                    phx-value-id={upload.id}
+                  >
+                    Retry
+                  </.button>
+                  <.button
+                    class="btn btn-ghost btn-sm text-error"
+                    phx-click="delete"
+                    phx-value-id={upload.id}
+                    data-confirm={"Delete #{upload.filename}?"}
+                  >
+                    Delete
+                  </.button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <.empty_state :if={@files == []} icon="hero-arrow-up-tray" title="No files yet">
+          Files dropped in for {@current_organization.name} show up here.
+        </.empty_state>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end

@@ -33,12 +33,15 @@ defmodule Tinderbox.Gen.Compose do
     broker = Broker.parse!(Keyword.get(opts, :broker) || "sqs")
     db? = Keyword.get(opts, :db, true)
     stack = Keyword.get(opts, :stack, "api")
+    file_drop? = Keyword.get(opts, :file_drop, false) == true
 
     assigns = [
       app: app,
       app_dash: Broker.app_dash(app),
       db?: db?,
       stack: stack,
+      # The SaaS file drop's ClamAV daemon, in the `scan` profile.
+      file_drop?: stack == "saas" and file_drop?,
       extra_service: List.first(Broker.compose_services(broker))
     ]
 
@@ -48,7 +51,8 @@ defmodule Tinderbox.Gen.Compose do
         module: module,
         stack: stack,
         broker: broker,
-        db?: db?
+        db?: db?,
+        file_drop?: file_drop?
       )
 
     igniter

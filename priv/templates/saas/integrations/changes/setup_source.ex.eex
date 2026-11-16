@@ -1,0 +1,69 @@
+@moduledoc """
+Sets a new source up from its connector in the catalog: the connector must be
+known, a blank name becomes the connector's, `pull` says whether the `:sync`
+trigger runs it, and a connector that takes webhooks gets a token.
+
+The token is 32 random bytes, URL-safe base64. Only its sha256 is stored
+(`webhook_token_hash`); the token comes back once, as the record's
+`webhook_token` metadata, for the page to show. With `token_only?: true` (the
+`:rotate_token` action) only a new token is issued.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@integrations) %>
+alias <%= inspect(@integrations) %>.Connector
+
+@impl true
+def change(changeset, opts, _context) do
+  key = Ash.Changeset.get_attribute(changeset, :connector)
+
+  case {key, Integrations.connector(key)} do
+    # A missing connector is reported by the required-attribute check.
+    {nil, _error} ->
+      changeset
+
+    {_key, :error} ->
+      Ash.Changeset.add_error(changeset, field: :connector, message: "is not a known connector")
+
+    {_key, {:ok, connector}} ->
+      if opts[:token_only?],
+        do: rotate(changeset, connector),
+        else: setup(changeset, connector)
+  end
+end
+
+defp setup(changeset, connector) do
+  transports = connector.transports()
+
+  changeset
+  |> default_name(connector)
+  |> Ash.Changeset.force_change_attribute(:pull, :api in transports)
+  |> then(&if(:webhook in transports, do: put_token(&1), else: &1))
+end
+
+defp rotate(changeset, connector) do
+  if :webhook in connector.transports(),
+    do: put_token(changeset),
+    else: Ash.Changeset.add_error(changeset, "#{connector.name()} takes no webhooks")
+end
+
+defp default_name(changeset, connector) do
+  case Ash.Changeset.get_attribute(changeset, :name) do
+    blank when blank in [nil, ""] ->
+      Ash.Changeset.force_change_attribute(changeset, :name, connector.name())
+
+    _name ->
+      changeset
+  end
+end
+
+defp put_token(changeset) do
+  token = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+  changeset
+  |> Ash.Changeset.force_change_attribute(:webhook_token_hash, Connector.hash_token(token))
+  |> Ash.Changeset.after_action(fn _changeset, record ->
+    {:ok, Ash.Resource.put_metadata(record, :webhook_token, token)}
+  end)
+end

@@ -1,0 +1,28 @@
+@moduledoc """
+What happens to a dropped file once it is scanned clean: the module named by
+`config <%= inspect(@app) %>, <%= inspect(@file_drop) %>, handler: …` (`<%= inspect(@file_drop) %>.Handlers.Keep`,
+which only keeps it, until the application has its own).
+
+`handle/2` runs in the upload's `:ingest` job, outside any transaction, and
+returns:
+
+  * `{:ok, summary}` - done; the map is stored as the upload's `result` and
+    shown on the page,
+  * `{:reject, message}` - this file will never work (wrong format, nothing in
+    it); the upload is `:failed` with `message`, and is not retried,
+  * `{:error, reason}` - try again later; after the last attempt the upload is
+    `:failed`.
+
+The same bytes are never handed over twice for one organization, but a retry
+hands over the same upload again: be idempotent.
+
+`hints/1`, when defined, is what the page offers in its "What is this?" select;
+the chosen value is the upload's `hint`.
+"""
+
+@callback handle(upload :: <%= inspect(@file_drop) %>.Upload.t(), body :: binary()) ::
+            {:ok, map()} | {:reject, String.t()} | {:error, term()}
+
+@callback hints(organization :: map()) :: [{label :: String.t(), value :: String.t()}]
+
+@optional_callbacks hints: 1

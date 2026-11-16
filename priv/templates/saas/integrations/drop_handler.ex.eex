@@ -1,0 +1,103 @@
+@moduledoc """
+The `<%= inspect(@file_drop) %>.Handler` that hands dropped files to the connectors that
+take files (`:file` in their `transports/0`).
+
+The source a file goes to is, in order:
+
+  1. the source whose id is the upload's `hint` (a connector that posts files
+     through the drop sets it), when it is one of the organization's active
+     sources and its connector takes files,
+  2. the organization's source of the connector whose key is the `hint` (what
+     the page's "What is this?" select sets), created when there is none,
+  3. the source of the first connector in the catalog whose `accepts?/2` says
+     the file is its, created when there is none.
+
+The connector's `parse_file/3` turns the file into records, which are stored
+(`<%= inspect(@integrations) %>.ingest/2`); the upload's result says how many.
+"""
+
+@behaviour <%= inspect(@file_drop) %>.Handler
+
+alias <%= inspect(@integrations) %>
+alias <%= inspect(@integrations) %>.Source
+
+@impl true
+def handle(upload, body) do
+  case source_for(upload, body) do
+    {:ok, source, connector} -> parse(source, connector, upload, body)
+    :none -> {:reject, "No connector recognizes this file"}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+@impl true
+def hints(_organization) do
+  [
+    {"Detect automatically", ""}
+    | Enum.map(file_connectors(), &{&1.name(), &1.key()})
+  ]
+end
+
+defp parse(source, connector, upload, body) do
+  with {:ok, records} <- connector.parse_file(source, upload, body),
+       {:ok, summary} <- Integrations.ingest(source, records) do
+    {:ok,
+     %{
+       "connector" => connector.key(),
+       "source_id" => source.id,
+       "records" => summary.created,
+       "duplicates" => summary.duplicates
+     }}
+  end
+end
+
+defp source_for(upload, body) do
+  with :none <- hinted_source(upload),
+       :none <- hinted_connector(upload) do
+    detected_connector(upload, body)
+  end
+end
+
+defp hinted_source(%{hint: hint, organization_id: organization_id}) when is_binary(hint) do
+  with {:ok, id} <- Ecto.UUID.cast(hint),
+       {:ok, %Source{organization_id: ^organization_id, status: status} = source}
+       when status != :disabled <- Ash.get(Source, id, authorize?: false),
+       {:ok, connector} <- Integrations.connector(source.connector),
+       true <- :file in connector.transports() do
+    {:ok, source, connector}
+  else
+    _other -> :none
+  end
+end
+
+defp hinted_source(_upload), do: :none
+
+defp hinted_connector(%{hint: hint} = upload) when is_binary(hint) and hint != "" do
+  case Integrations.connector(hint) do
+    {:ok, connector} ->
+      if :file in connector.transports(), do: ensure(upload, connector), else: :none
+
+    :error ->
+      :none
+  end
+end
+
+defp hinted_connector(_upload), do: :none
+
+defp detected_connector(upload, body) do
+  case Enum.find(file_connectors(), &accepts?(&1, upload, body)) do
+    nil -> :none
+    connector -> ensure(upload, connector)
+  end
+end
+
+defp accepts?(connector, upload, body),
+  do: Integrations.exports?(connector, :accepts?, 2) and connector.accepts?(upload, body)
+
+defp ensure(upload, connector) do
+  with {:ok, source} <- Integrations.ensure_source(upload.organization_id, connector) do
+    {:ok, source, connector}
+  end
+end
+
+defp file_connectors, do: Enum.filter(Integrations.connectors(), &(:file in &1.transports()))

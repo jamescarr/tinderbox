@@ -1,0 +1,98 @@
+@moduledoc """
+What a dropped file is, from its bytes: the extension says what the file claims
+to be, the first bytes say what it is, and the two have to agree. The browser's
+content type is never used.
+
+The bytes fall into one of three families: PDF (`%PDF-`), ZIP (`PK\\x03\\x04`), or
+text (no NUL byte in the first 8 KB, and UTF-8, with or without a BOM, or
+Latin-1). Anything else is not accepted, whatever its name.
+
+| Extension | Family | Kind | Content type | Also |
+|---|---|---|---|---|
+| `.pdf` | PDF | `:pdf` | `application/pdf` | |
+| `.zip` | ZIP | `:zip` | `application/zip` | |
+| `.csv` | text | `:csv` | `text/csv` | |
+| `.ofx`, `.qfx` | text | `:ofx` | `application/x-ofx` | `OFXHEADER` or `<OFX>` in the first 4 KB |
+| `.eml` | text | `:eml` | `message/rfc822` | the first line is a header (`Name: value`) |
+| `.txt` | text | `:text` | `text/plain` | |
+
+Only the extensions in `<%= inspect(@file_drop) %>.extensions/0` are considered.
+"""
+
+alias <%= inspect(@file_drop) %>
+
+@text_window 8_192
+@ofx_window 4_096
+
+@type kind :: :csv | :ofx | :pdf | :zip | :eml | :text
+
+@doc "The kind and content type of `binary` named `filename`."
+@spec detect(binary(), String.t()) ::
+        {:ok, %{kind: kind(), content_type: String.t()}}
+        | {:error, :unsupported_type | :type_mismatch}
+def detect(binary, filename) when is_binary(binary) and is_binary(filename) do
+  extension = filename |> Path.extname() |> String.downcase()
+
+  with true <- extension in FileDrop.extensions() || {:error, :unsupported_type},
+       {:ok, family} <- family(binary) do
+    match(extension, family, binary)
+  end
+end
+
+defp family("%PDF-" <> _rest), do: {:ok, :pdf}
+defp family("PK\x03\x04" <> _rest), do: {:ok, :zip}
+
+defp family(binary) do
+  if text?(binary), do: {:ok, :text}, else: {:error, :unsupported_type}
+end
+
+defp text?(binary) do
+  head = binary_part(binary, 0, min(byte_size(binary), @text_window))
+
+  not String.contains?(head, <<0>>) and (utf8?(head) or latin1?(head))
+end
+
+# The window may cut a multi-byte character in two: an incomplete last
+# character is still UTF-8.
+defp utf8?(head) do
+  case :unicode.characters_to_binary(strip_bom(head)) do
+    binary when is_binary(binary) -> true
+    {:incomplete, _converted, _rest} -> true
+    {:error, _converted, _rest} -> false
+  end
+end
+
+# Every byte is a Latin-1 (or Windows-1252) character: no C0 control other than
+# tab, line feed, form feed and carriage return.
+defp latin1?(head) do
+  for <<byte <- head>>, reduce: true do
+    false -> false
+    _ok -> byte >= 0x20 or byte in [?\t, ?\n, ?\f, ?\r]
+  end
+end
+
+defp strip_bom(<<0xEF, 0xBB, 0xBF, rest::binary>>), do: rest
+defp strip_bom(binary), do: binary
+
+defp match(".pdf", :pdf, _binary), do: ok(:pdf, "application/pdf")
+defp match(".zip", :zip, _binary), do: ok(:zip, "application/zip")
+defp match(".csv", :text, _binary), do: ok(:csv, "text/csv")
+defp match(".txt", :text, _binary), do: ok(:text, "text/plain")
+
+defp match(extension, :text, binary) when extension in [".ofx", ".qfx"] do
+  head = binary |> binary_part(0, min(byte_size(binary), @ofx_window)) |> String.upcase()
+
+  if String.contains?(head, "OFXHEADER") or String.contains?(head, "<OFX>"),
+    do: ok(:ofx, "application/x-ofx"),
+    else: {:error, :type_mismatch}
+end
+
+defp match(".eml", :text, binary) do
+  if Regex.match?(~r/\A[A-Za-z0-9-]+:\s/, strip_bom(binary)),
+    do: ok(:eml, "message/rfc822"),
+    else: {:error, :type_mismatch}
+end
+
+defp match(_extension, _family, _binary), do: {:error, :type_mismatch}
+
+defp ok(kind, content_type), do: {:ok, %{kind: kind, content_type: content_type}}

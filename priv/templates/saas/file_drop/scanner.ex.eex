@@ -1,0 +1,43 @@
+@moduledoc """
+Malware scanning for dropped files: the behaviour a scanner implements, and
+`scan/1`, which runs the one `FILE_DROP_SCANNER` selects
+(`config <%= inspect(@app) %>, <%= inspect(@file_drop) %>, scanner: …`):
+
+  * `"none"` - no scan; `scan/1` answers `{:ok, :skipped}`. The default outside
+    production, and an explicit choice in it,
+  * `"clamav"` - `<%= inspect(@file_drop) %>.Scanners.ClamAV`, a ClamAV `clamd` at
+    `CLAMAV_HOST:CLAMAV_PORT`,
+  * a module implementing this behaviour (tests use one).
+"""
+
+alias <%= inspect(@file_drop) %>
+
+@doc "Scans `body`: clean, infected with a named signature, or not scanned (an error)."
+@callback scan(body :: binary()) ::
+            {:ok, :clean} | {:ok, {:infected, String.t()}} | {:error, term()}
+
+@doc "Scans `body` with the configured scanner."
+@spec scan(binary()) ::
+        {:ok, :clean | :skipped | {:infected, String.t()}} | {:error, term()}
+def scan(body) when is_binary(body) do
+  case FileDrop.config()[:scanner] do
+    "none" ->
+      {:ok, :skipped}
+
+    "clamav" ->
+      <%= inspect(@file_drop) %>.Scanners.ClamAV.scan(body)
+
+    module when is_atom(module) and not is_nil(module) ->
+      if Code.ensure_loaded?(module) and function_exported?(module, :scan, 1),
+        do: module.scan(body),
+        else: unknown!(module)
+
+    other ->
+      unknown!(other)
+  end
+end
+
+defp unknown!(value) do
+  raise ArgumentError,
+        "unknown FILE_DROP_SCANNER #{inspect(value)}, expected \"none\" or \"clamav\""
+end

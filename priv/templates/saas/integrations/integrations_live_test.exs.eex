@@ -1,0 +1,89 @@
+defmodule <%= inspect(@web) %>.IntegrationsLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@integrations) %>
+  alias <%= inspect(@integrations) %>.Connectors.Webhook
+  alias <%= inspect(@integrations) %>.Record
+
+  setup do
+    previous = Application.get_env(<%= inspect(@app) %>, Integrations, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.merge(previous, connectors: [Webhook])
+    )
+
+    on_exit(fn -> Application.put_env(<%= inspect(@app) %>, Integrations, previous) end)
+
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  test "the owner adds a webhook source and sees its URL and token once", %{
+    conn: conn,
+    owner: owner
+  } do
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations")
+
+    view
+    |> form("#source-form", source: %{connector: "webhook", name: "Zapier"})
+    |> render_submit()
+
+    assert has_element?(view, "#sources", "Zapier")
+    assert has_element?(view, "#new-token", "/webhooks/integrations/")
+    assert render(view) =~ "Copy the token now"
+
+    view |> element("#new-token button", "Done") |> render_click()
+
+    refute has_element?(view, "#new-token")
+  end
+
+  test "the owner sees why records failed and puts them back in line", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    source = source_fixture(organization, owner)
+
+    {:ok, _summary} =
+      Integrations.ingest(source, [%{type: "note", external_id: "n-1", data: %{}}])
+
+    [record] = Ash.read!(Record, authorize?: false)
+
+    Ash.update!(record, %{error: RuntimeError.exception("a note needs a text")},
+      action: :mark_failed,
+      authorize?: false
+    )
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations")
+
+    assert has_element?(view, "#source-#{source.id}", "1 failed")
+    assert has_element?(view, "#source-#{source.id}", "a note needs a text")
+
+    view |> element("#source-#{source.id} button", "Reprocess") |> render_click()
+
+    refute has_element?(view, "#source-#{source.id}", "1 failed")
+    assert Ash.get!(Record, record.id, authorize?: false).status == :pending
+  end
+
+  test "a member sees the sources but cannot add or change one", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    source_fixture(organization, owner, %{name: "From n8n"})
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    {:ok, view, _html} = live(sign_in(conn, member), ~p"/integrations")
+
+    assert has_element?(view, "#sources", "From n8n")
+    refute has_element?(view, "#source-form")
+    refute has_element?(view, "button", "Delete")
+  end
+end

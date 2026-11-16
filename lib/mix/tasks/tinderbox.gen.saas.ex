@@ -23,7 +23,12 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
   * the project's own generators: `mix <app>.gen.concept`, `.gen.resource`,
     `.gen.live` and `.gen.domain`,
   * Fly.io deployment files and a runbook (`--deploy fly`, the default; `--deploy
-    none` leaves them out).
+    none` leaves them out),
+  * opt-in: `--file-drop`, a file drop at `/drop` (type sniffing, deduplication,
+    ClamAV scanning, a handler), and `--integrations`, a connector framework on top
+    of it (sources, a record inbox, webhooks for n8n, Zapier or Make,
+    `/integrations`). `mix tinderbox.gen.file_drop` and
+    `mix tinderbox.gen.integrations` add them to an existing project.
 
   The Ash packages are fetched and their installers are run by igniter, so this
   task must be run through `mix igniter.install`/`mix igniter.new`:
@@ -48,7 +53,9 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
         mise: :boolean,
         auth_strategy: :csv,
         themepack: :string,
-        deploy: :string
+        deploy: :string,
+        file_drop: :boolean,
+        integrations: :boolean
       ],
       defaults: [compose: true, mise: true, deploy: "fly"],
       composes: [

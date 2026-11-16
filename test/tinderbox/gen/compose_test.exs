@@ -115,6 +115,20 @@ defmodule Tinderbox.Gen.ComposeTest do
     end
   end
 
+  test "--file-drop adds ClamAV in the `scan` profile to a saas project, and its variables" do
+    igniter = compose(:nats, stack: "saas", file_drop: true)
+    content = source(igniter, "docker-compose.yml")
+
+    assert content =~ "image: clamav/clamav-debian:1.5"
+    assert content =~ ~s|profiles: ["scan"]|
+    assert content =~ "- clamav-data:/var/lib/clamav"
+    assert content =~ "\n  clamav-data:\n"
+    assert source(igniter, ".env.example") =~ "export CLAMAV_PORT=3310"
+
+    refute compose_content(:nats, stack: "saas") =~ "clamav"
+    refute compose_content(:sqs, stack: "api", file_drop: true) =~ "clamav"
+  end
+
   test "a running service waits for every bootstrap job to complete, so `up --wait` exits 0" do
     # Compose fails `up --wait` when a job container merely exits (even with
     # status 0) unless a running service depends on it completing.

@@ -45,7 +45,8 @@ defmodule Tinderbox.Gen.Mise do
         module: Igniter.Project.Module.module_name_prefix(igniter),
         stack: stack,
         broker: broker,
-        db?: Keyword.get(opts, :db, true)
+        db?: Keyword.get(opts, :db, true),
+        file_drop?: Keyword.get(opts, :file_drop, false) == true
       )
 
     serve = if worker?, do: "mix run --no-halt", else: "mix phx.server"

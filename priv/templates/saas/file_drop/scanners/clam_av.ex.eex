@@ -1,0 +1,94 @@
+@moduledoc """
+A `<%= inspect(@file_drop) %>.Scanner` that streams the file to a ClamAV daemon (`clamd`)
+over TCP with `INSTREAM`: the bytes in chunks of at most 64 KiB, each prefixed
+by its length, then a zero-length chunk. clamd answers `stream: OK` or
+`stream: <signature> FOUND`.
+
+The daemon is at `CLAMAV_HOST:CLAMAV_PORT` (`localhost:3310` by default); its
+`StreamMaxLength` must be at least `FILE_DROP_MAX_BYTES`. Locally:
+`docker compose --profile scan up -d --wait clamav`.
+"""
+
+@behaviour <%= inspect(@file_drop) %>.Scanner
+
+alias <%= inspect(@file_drop) %>
+
+@chunk 65_536
+@connect_timeout 5_000
+@receive_timeout 60_000
+
+@impl true
+def scan(body) when is_binary(body) do
+  config = FileDrop.config()
+  host = config |> Keyword.get(:clamav_host, "localhost") |> to_charlist()
+  port = Keyword.get(config, :clamav_port, 3310)
+
+  case :gen_tcp.connect(host, port, [:binary, active: false, packet: :raw], @connect_timeout) do
+    {:ok, socket} ->
+      try do
+        stream(socket, body)
+      after
+        :gen_tcp.close(socket)
+      end
+
+    {:error, reason} ->
+      {:error, {:clamav, reason}}
+  end
+end
+
+defp stream(socket, body) do
+  with :ok <- :gen_tcp.send(socket, "zINSTREAM\0"),
+       :ok <- send_chunks(socket, body),
+       :ok <- :gen_tcp.send(socket, <<0::32>>),
+       {:ok, reply} <- receive_reply(socket, "") do
+    verdict(reply)
+  else
+    {:error, reason} -> {:error, {:clamav, reason}}
+  end
+end
+
+defp send_chunks(_socket, ""), do: :ok
+
+defp send_chunks(socket, body) do
+  size = min(byte_size(body), @chunk)
+  <<chunk::binary-size(^size), rest::binary>> = body
+
+  case :gen_tcp.send(socket, [<<size::32>>, chunk]) do
+    :ok -> send_chunks(socket, rest)
+    error -> error
+  end
+end
+
+# The reply ends with the NUL of the `z` command prefix.
+defp receive_reply(socket, acc) do
+  case :gen_tcp.recv(socket, 0, @receive_timeout) do
+    {:ok, data} ->
+      acc = acc <> data
+
+      case :binary.split(acc, <<0>>) do
+        [reply, _rest] -> {:ok, reply}
+        [_partial] -> receive_reply(socket, acc)
+      end
+
+    {:error, :closed} when acc != "" ->
+      {:ok, acc}
+
+    {:error, reason} ->
+      {:error, reason}
+  end
+end
+
+defp verdict(reply) do
+  reply = String.trim(reply)
+
+  cond do
+    reply == "stream: OK" ->
+      {:ok, :clean}
+
+    match = Regex.run(~r/\Astream: (.+) FOUND\z/, reply) ->
+      {:ok, {:infected, Enum.at(match, 1)}}
+
+    true ->
+      {:error, {:clamav, reply}}
+  end
+end

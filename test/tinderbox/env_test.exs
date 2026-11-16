@@ -67,6 +67,19 @@ defmodule Tinderbox.EnvTest do
     refute "OAUTH_ISSUER" in names(sections(stack: "api", broker: :sqs))
   end
 
+  test "the file drop's scanner settings come with :file_drop?, for the saas stack only" do
+    saas = sections(stack: "saas", broker: :nats, file_drop?: true)
+    names = names(saas)
+
+    for name <- ~w(FILE_DROP_SCANNER FILE_DROP_MAX_BYTES CLAMAV_HOST CLAMAV_PORT) do
+      assert name in names
+    end
+
+    assert {"FILE_DROP_SCANNER", "none"} in Enum.flat_map(saas, &elem(&1, 1))
+    refute "FILE_DROP_SCANNER" in names(sections(stack: "saas", broker: :nats))
+    refute "FILE_DROP_SCANNER" in names(sections(stack: "api", broker: :sqs, file_drop?: true))
+  end
+
   test "the saas SSO block points at the compose Dex, named after the app" do
     env =
       for {_title, vars} <- sections(stack: "saas", broker: :nats),

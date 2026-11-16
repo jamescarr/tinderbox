@@ -1,0 +1,33 @@
+@moduledoc """
+Tells the organization's `/drop` pages that an upload changed
+(`{:upload_updated, id}` on `<%= inspect(@file_drop) %>.topic/1`), after the transaction
+commits so a page that reloads sees the change.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@file_drop) %>
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.after_transaction(changeset, fn
+    _changeset, {:ok, %{organization_id: organization_id, id: id}} = result ->
+      broadcast(organization_id, id)
+      result
+
+    changeset, :ok ->
+      broadcast(changeset.data.organization_id, changeset.data.id)
+      :ok
+
+    _changeset, result ->
+      result
+  end)
+end
+
+defp broadcast(organization_id, id) do
+  Phoenix.PubSub.broadcast(
+    <%= inspect(@pubsub) %>,
+    FileDrop.topic(organization_id),
+    {:upload_updated, id}
+  )
+end

@@ -42,7 +42,11 @@ kill_signal = "SIGTERM"
   MFA_REQUIRED = "false"
   MFA_SSO = "local"
   OTEL_SERVICE_NAME = "<%= @app %>"
-
+<%= if @opts[:file_drop] || @opts[:integrations] do %>  # The file drop's scanner. No ClamAV is deployed, so files are accepted unscanned:
+  # run clamd (its own Fly app, say) and set clamav, with CLAMAV_HOST and CLAMAV_PORT.
+  # The release refuses to boot without a value.
+  FILE_DROP_SCANNER = "none"
+<% end %>
 # Oban's cron and the NATS consumer need a running node: never stop the machine.
 [http_service]
   internal_port = 8080

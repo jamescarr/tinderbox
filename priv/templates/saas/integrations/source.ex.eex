@@ -1,0 +1,264 @@
+@moduledoc """
+A connector set up for an organization: where its records come from.
+
+`connector` is a key of the catalog (`<%= inspect(@integrations) %>.connectors/0`);
+`config` is the connector's settings, `credentials` its secrets (encrypted at
+rest with `<%= inspect(@vault) %>`; a calculation loaded only by the sync). A connector
+that takes webhooks gets a bearer token at creation and on `:rotate_token`: only
+its hash is stored, and the token itself comes back once, as
+`record.__metadata__.webhook_token`. A connector that pulls (`:api`) is synced
+by the `:sync` trigger every 15 minutes while the source is active.
+
+Members read the organization's sources; owners and admins manage them.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@integrations) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshOban, AshPaperTrail.Resource, AshCloak]
+
+postgres do
+  table "integration_sources"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :organization, on_delete: :delete
+    reference :created_by, on_delete: :nilify
+  end
+
+  custom_indexes do
+    index [:organization_id, :inserted_at]
+  end
+end
+
+oban do
+  triggers do
+    trigger :sync do
+      action :sync
+
+      where expr(
+              status == :active and pull == true and
+                (is_nil(last_synced_at) or last_synced_at < ago(15, :minute))
+            )
+
+      queue :integrations
+      max_attempts 3
+      scheduler_cron "*/5 * * * *"
+      # The connector is called outside a transaction.
+      lock_for_update? false
+      worker_module_name <%= inspect(@integrations) %>.Source.AshOban.Worker.Sync
+      scheduler_module_name <%= inspect(@integrations) %>.Source.AshOban.Scheduler.Sync
+      on_error :mark_sync_failed
+    end
+  end
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+
+  ignore_attributes [
+    :inserted_at,
+    :updated_at,
+    :encrypted_credentials,
+    :webhook_token_hash,
+    :cursor,
+    :last_synced_at,
+    :last_error
+  ]
+
+  ignore_actions [:sync, :mark_sync_failed, :touch]
+  create_version_on_destroy? true
+  reference_source? false
+  attributes_as_attributes [:organization_id]
+<%= if @version_indexes? do %>  mixin <%= inspect(@accounts) %>.VersionIndexes
+<% end %>  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+# `credentials` is stored as `encrypted_credentials`; `credentials` is a
+# calculation that has to be loaded on purpose.
+cloak do
+  vault <%= inspect(@vault) %>
+  attributes [:credentials]
+  decrypt_by_default []
+end
+
+actions do
+  defaults [:read]
+
+  create :create do
+    primary? true
+    accept [:organization_id, :name, :connector, :config, :credentials]
+
+    change relate_actor(:created_by, allow_nil?: true)
+    change <%= inspect(@integrations) %>.Changes.SetupSource
+  end
+
+  update :update do
+    primary? true
+    accept [:name, :config]
+    require_atomic? false
+  end
+
+  update :set_credentials do
+    accept [:credentials]
+    require_atomic? false
+  end
+
+  update :rotate_token do
+    description "A new webhook token; the old one stops working"
+    accept []
+    require_atomic? false
+
+    change {<%= inspect(@integrations) %>.Changes.SetupSource, token_only?: true}
+  end
+
+  update :disable do
+    accept []
+    require_atomic? false
+
+    change set_attribute(:status, :disabled)
+    change set_attribute(:last_error, nil)
+  end
+
+  update :enable do
+    accept []
+    require_atomic? false
+
+    change set_attribute(:status, :active)
+    change set_attribute(:last_error, nil)
+  end
+
+  update :request_sync do
+    description "Syncs now, rather than at the next schedule"
+    accept []
+    require_atomic? false
+
+    validate attribute_does_not_equal(:status, :disabled),
+      message: "enable the source first"
+
+    change set_attribute(:status, :active)
+    change set_attribute(:last_synced_at, nil)
+    change run_oban_trigger(:sync)
+  end
+
+  update :sync do
+    description "Pulls new records from the connector (the :sync trigger)"
+    accept []
+    require_atomic? false
+    # The connector answers with no transaction open.
+    transaction? false
+
+    change <%= inspect(@integrations) %>.Changes.Sync
+  end
+
+  update :mark_sync_failed do
+    accept []
+    require_atomic? false
+    argument :error, :map
+
+    change fn changeset, _context ->
+      error = changeset |> Ash.Changeset.get_argument(:error) |> <%= inspect(@file_drop) %>.error_text()
+
+      changeset
+      |> Ash.Changeset.force_change_attribute(:status, :error)
+      |> Ash.Changeset.force_change_attribute(:last_error, error)
+    end
+  end
+
+  update :touch do
+    description "Records were just delivered"
+    accept []
+    require_atomic? false
+
+    change set_attribute(:last_synced_at, &__MODULE__.now/0)
+    change set_attribute(:last_error, nil)
+  end
+
+  destroy :destroy do
+    description "Deletes the source and its records"
+    primary? true
+    require_atomic? false
+  end
+end
+
+policies do
+  bypass AshOban.Checks.AshObanInteraction do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(exists(organization.memberships, user_id == ^actor(:id)))
+  end
+
+  policy action_type([:create, :update, :destroy]) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+  end
+end
+
+changes do
+  # Not on :touch, which only runs inside `<%= inspect(@integrations) %>.ingest/2`'s
+  # transaction; that function announces the delivery once it has committed.
+  change <%= inspect(@integrations) %>.Changes.Broadcast,
+    on: [:create, :update, :destroy],
+    where: [negate(action_is(:touch))]
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :name, :string, allow_nil?: false, public?: true
+  # A key of the connector catalog.
+  attribute :connector, :string, allow_nil?: false, public?: true
+
+  attribute :status, :atom,
+    allow_nil?: false,
+    public?: true,
+    default: :active,
+    constraints: [one_of: [:active, :error, :disabled]]
+
+  attribute :config, :map, allow_nil?: false, public?: true, default: %{}
+  attribute :credentials, :map, sensitive?: true
+  # Whether the connector pulls (`:api`); set from the catalog.
+  attribute :pull, :boolean, allow_nil?: false, default: false
+  attribute :webhook_token_hash, :string, sensitive?: true
+  attribute :cursor, :map, allow_nil?: false, default: %{}
+  attribute :last_synced_at, :utc_datetime, public?: true
+  attribute :last_error, :string, public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+  belongs_to :created_by, <%= inspect(@user) %>, public?: true
+  has_many :records, <%= inspect(@integrations) %>.Record
+end
+
+aggregates do
+  count :record_count, :records, public?: true
+
+  count :pending_count, :records do
+    public? true
+    filter expr(status == :pending)
+  end
+
+  count :failed_count, :records do
+    public? true
+    filter expr(status == :failed)
+  end
+
+  # Why the latest of its records that failed did.
+  first :latest_failure, :records, :error do
+    public? true
+    filter expr(status == :failed)
+    sort updated_at: :desc
+  end
+end
+
+@doc false
+def now, do: DateTime.utc_now() |> DateTime.truncate(:second)

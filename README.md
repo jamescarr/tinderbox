@@ -111,6 +111,8 @@ mix phx.server                     # or: mix run --no-halt
 | `--no-mise` | both | mise generated | skip `.mise.toml` |
 | `--no-demo` | api | demo generated | skip the demo `Catalog` domain + `Catalog.Item` resource |
 | `--deploy fly\|none` | saas | `fly` | `fly.toml`, `fly/nats/fly.toml`, the README's Fly.io runbook, flyctl and `mise run deploy`; `none` leaves them out |
+| `--file-drop` | saas | off | the file drop at `/drop` (see [SaaS stack](#saas-stack-mix-tinderboxgensaas)), a ClamAV service in compose's `scan` profile, `FILE_DROP_*`/`CLAMAV_*` in `.env.example` and `.mise.toml`, `FILE_DROP_SCANNER = "none"` in `fly.toml` |
+| `--integrations` | saas | off | the integrations framework at `/integrations`; implies `--file-drop` |
 | `--no-db` | `tinderbox.gen.compose`, `tinderbox.gen.mise` | Postgres service | skip the Postgres service and `DATABASE_URL` |
 
 The individual tasks (`tinderbox.gen.api`, `.worker`, `.saas`, `.compose`, `.mise`) can
@@ -246,6 +248,27 @@ Ash packages the other stacks use, then adds:
   `mix tinderbox.gen.mfa` (it adds `nimble_totp`, `eqrcode`, `cloak` and `ash_cloak`
   itself, creates an `add_mfa` migration, and replaces `AuthController` only while it
   is still the installer's).
+* **File drop** (opt-in, `--file-drop`) — owners and admins drop files at `/drop`
+  (CSV, OFX/QFX, PDF, ZIP, EML, TXT, 25 MiB each by default). `<App>.FileDrop.receive_file/4`
+  and `receive_binary/5` check the size, read the type from the bytes (the extension
+  must agree), deduplicate by sha256 per organization and store the file under
+  `drop/<organization id>/…`, a key `FileController` never serves. The upload's
+  `:ingest` AshOban job scans it (`FILE_DROP_SCANNER`: `none`, or `clamav` for a
+  `clamd` reached over `INSTREAM`; production refuses to boot without a value) and
+  hands a clean file to `<App>.FileDrop.Handler` (config `:handler`). Downloads are
+  always attachments. `mix tinderbox.gen.file_drop` adds it to an existing project.
+* **Integrations** (opt-in, `--integrations`, brings the file drop) — a connector
+  framework: `<App>.Integrations.Connector` turns dropped files, webhook deliveries
+  (`POST /webhooks/integrations/<source id>`, bearer token) or scheduled pulls into
+  records; each organization's sources (`/integrations`) keep config, encrypted
+  credentials and a hashed token; every record is stored once per source, type and
+  external id and handed, with retries, to `<App>.Integrations.Handler`, the module
+  the application edits. A record the handler rejects (`{:reject, message}`: a field
+  missing or malformed) fails at once instead of retrying; `/integrations` counts a
+  source's failed records, shows why the latest failed, and puts them back in line.
+  The generic `webhook` connector is what n8n, Zapier or Make post to; no workflow
+  engine is deployed. `mix tinderbox.gen.integrations` adds it (and the file drop)
+  to an existing project.
 * **Organizations** — `<App>.Accounts.Organization`, `Membership` (`owner`, `admin`,
   `member`) and `Invitation` (email, role, token link). The creator becomes the
   owner; the last owner cannot be removed or demoted. Re-inviting an address updates
@@ -763,6 +786,17 @@ Beyond that, generated projects were run end to end against the emulators:
   "Day 1 of 30: 3 of 5 thresholds met". `docker build .` passed; in the image, fly.toml's
   release command migrated and the release answered `/health`. The Fly deployment
   itself was not run. Details: `docs/feedback/studio-demo.md`.
+* **saas file drop and integrations (`itemizer`)** — generated with `--integrations`
+  in 190 s: 118 tests on the untouched scaffold, among them the blocks' seven test
+  files. The slice on top (statements, Amazon's order export and receipt emails become
+  transactions and purchases, matched by amount and date) passed 165; its demo script
+  explained the sample `APPLE.COM/BILL -59.97` as its three items (with the fake model:
+  the run had no Anthropic key). In a browser: `/drop`, `/transactions`, a transaction's
+  items, `/integrations`; the receipt webhook answered 401 without its token and 202
+  with it. With `FILE_DROP_SCANNER=clamav` and the compose ClamAV, the EICAR string ended
+  Infected and its object was deleted. `mix tinderbox.gen.integrations` on a reset
+  scaffold added both blocks in one migration and its 118 tests passed. Details:
+  `docs/feedback/itemizer.md`.
 
 Not exercised: the untrusted-config path of `mise trust`. mise on the machine these
 runs were made on never gated `.mise.toml` (a config with templates and hooks was

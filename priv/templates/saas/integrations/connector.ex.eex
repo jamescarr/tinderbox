@@ -1,0 +1,77 @@
+@moduledoc """
+The behaviour of a connector: one kind of source, and how what it sends becomes
+records. Add a connector to `config <%= inspect(@app) %>, <%= inspect(@integrations) %>, connectors: [...]`.
+
+`transports/0` says how data arrives, and which callbacks are implemented:
+
+  * `:file` - `accepts?/2` (is this dropped file mine?) and `parse_file/3`,
+  * `:webhook` - `handle_webhook/2`, given the request's headers, raw body and
+    decoded JSON. Check the caller first: `authorized?/2` checks the source's
+    bearer token, and the raw body is there for a provider's own signature,
+  * `:api` - `sync/1`, run every few minutes for each active source
+    (`source.credentials` is loaded; `source.cursor` is what the last sync
+    returned).
+
+Every callback returns records: `type` and `external_id` identify one within its
+source (a record is stored once; deliver it again and it is a duplicate),
+`data` is what the application's `<%= inspect(@integrations) %>.Handler` reads. A record
+is never updated in place: a change to something already delivered needs a new
+`external_id`.
+
+`{:reject, message}` means "this will never work" (the input is malformed);
+`{:error, reason}` means "try again later".
+"""
+
+@type entry :: %{
+        required(:type) => String.t(),
+        required(:external_id) => String.t(),
+        required(:data) => map(),
+        optional(:occurred_at) => DateTime.t() | nil
+      }
+
+@doc "Stable identifier, stored on sources."
+@callback key() :: String.t()
+@callback name() :: String.t()
+@callback description() :: String.t()
+@callback transports() :: [:file | :webhook | :api]
+
+@callback accepts?(upload :: map(), body :: binary()) :: boolean()
+
+@callback parse_file(source :: map(), upload :: map(), body :: binary()) ::
+            {:ok, [entry()]} | {:reject, String.t()} | {:error, term()}
+
+@callback handle_webhook(source :: map(), %{
+            headers: [{String.t(), String.t()}],
+            raw_body: binary(),
+            params: map()
+          }) ::
+            {:ok, [entry()]}
+            | {:reject, String.t()}
+            | {:error, :unauthorized}
+            | {:error, term()}
+
+@callback sync(source :: map()) :: {:ok, [entry()], cursor :: map()} | {:error, term()}
+
+@optional_callbacks accepts?: 2, parse_file: 3, handle_webhook: 2, sync: 1
+
+@doc """
+Whether the request carries `source`'s webhook token as
+`authorization: Bearer <token>`. Only the token's hash is stored, and it is
+compared in constant time.
+"""
+@spec authorized?(map(), [{String.t(), String.t()}]) :: boolean()
+def authorized?(%{webhook_token_hash: hash}, headers) when is_binary(hash) do
+  case List.keyfind(headers, "authorization", 0) do
+    {_name, "Bearer " <> token} when token != "" ->
+      Plug.Crypto.secure_compare(hash_token(token), hash)
+
+    _missing ->
+      false
+  end
+end
+
+def authorized?(_source, _headers), do: false
+
+@doc false
+@spec hash_token(String.t()) :: String.t()
+def hash_token(token), do: :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)

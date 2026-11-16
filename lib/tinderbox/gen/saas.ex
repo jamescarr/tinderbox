@@ -29,6 +29,8 @@ defmodule Tinderbox.Gen.Saas do
   | `#{inspect(__MODULE__)}.Admin` | `/admin` (UI kit) and `/admin/flags` (FunWithFlags) |
   | `#{inspect(__MODULE__)}.Validation` | first-party analytics, the waitlist, `/admin/validation` (the funnel against the thresholds) and `/admin/waitlist` |
   | `#{inspect(__MODULE__)}.Mfa` | two-factor authentication (TOTP, or the SSO provider's MFA), `/settings/security`, `/admin/security` |
+  | `#{inspect(__MODULE__)}.FileDrop` | opt-in (`--file-drop`, implied by `--integrations`): files dropped at `/drop`, sniffed, deduplicated, scanned (ClamAV) and handed to a handler |
+  | `#{inspect(__MODULE__)}.Integrations` | opt-in (`--integrations`): connectors (files, webhooks, scheduled pulls), sources, the record inbox, `/integrations` |
   | `#{inspect(__MODULE__)}.Ops` | health, PromEx, OpenTelemetry, mail, release, CI |
   | `#{inspect(__MODULE__)}.Generators` | the project's own generators: `mix <app>.gen.domain`, `.gen.resource`, `.gen.live`, `.gen.concept` |
   | `#{inspect(__MODULE__)}.Deploy` | Fly.io (`--deploy fly`, the default): `fly.toml`, the NATS app, `mise run deploy` |
@@ -48,8 +50,10 @@ defmodule Tinderbox.Gen.Saas do
   alias Tinderbox.Gen.Saas.Connections
   alias Tinderbox.Gen.Saas.Deploy
   alias Tinderbox.Gen.Saas.Events
+  alias Tinderbox.Gen.Saas.FileDrop
   alias Tinderbox.Gen.Saas.Flags
   alias Tinderbox.Gen.Saas.Generators
+  alias Tinderbox.Gen.Saas.Integrations
   alias Tinderbox.Gen.Saas.Mfa
   alias Tinderbox.Gen.Saas.Notifications
   alias Tinderbox.Gen.Saas.Ops
@@ -104,6 +108,9 @@ defmodule Tinderbox.Gen.Saas do
     |> Admin.apply(assigns)
     |> Validation.apply(assigns)
     |> Mfa.apply(assigns)
+    # The opt-in blocks; integrations encrypt credentials with the vault Mfa made.
+    |> apply_if(file_drop?(assigns[:opts]), &FileDrop.apply(&1, assigns))
+    |> apply_if(integrations?(assigns[:opts]), &Integrations.apply(&1, assigns))
     |> Ops.apply(assigns)
     |> Generators.apply(assigns)
     |> Deploy.apply(assigns)
@@ -115,6 +122,13 @@ defmodule Tinderbox.Gen.Saas do
     |> Igniter.add_task("format", ["priv/repo/migrations/*add_saas_resources.exs"])
     |> Igniter.add_notice(Gen.next_steps(:saas, assigns[:opts], assigns[:app]))
   end
+
+  # `--integrations` brings the file drop: dropped files are how most connectors get data.
+  defp file_drop?(opts), do: opts[:file_drop] == true or integrations?(opts)
+  defp integrations?(opts), do: opts[:integrations] == true
+
+  defp apply_if(igniter, true, fun), do: fun.(igniter)
+  defp apply_if(igniter, false, _fun), do: igniter
 
   @doc """
   The assigns every sub-step is rendered with. Selects the Phoenix router (the

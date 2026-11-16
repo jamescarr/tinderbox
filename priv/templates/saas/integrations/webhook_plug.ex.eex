@@ -1,0 +1,127 @@
+@moduledoc """
+Webhook deliveries for integration sources: `POST <at>/<source id>`, handed to
+`<%= inspect(@integrations) %>.deliver/2`, which calls the source's connector.
+
+Mounted in the endpoint before `Plug.Parsers`, so the connector gets the raw
+body (to check a provider's signature) as well as the decoded JSON:
+
+    plug <%= inspect(@web) %>.Plugs.IntegrationWebhook, at: "/webhooks/integrations"
+
+Every other request passes through. Bodies are capped at
+`config <%= inspect(@app) %>, <%= inspect(@integrations) %>, webhook_max_bytes: …`. Answers are JSON:
+
+| Case | Status |
+|---|---|
+| accepted | 202 `{"accepted": n, "duplicates": n}` |
+| body over the limit | 413 |
+| no such source, a disabled one, or its connector takes no webhooks | 404 |
+| not the source's token (or signature) | 401 |
+| malformed JSON, or not what the connector expects | 422 |
+| anything else | 500, logged |
+"""
+
+@behaviour Plug
+
+import Plug.Conn
+
+require Logger
+
+alias <%= inspect(@integrations) %>
+alias <%= inspect(@integrations) %>.Source
+
+@default_max_bytes 5_000_000
+
+@impl true
+def init(opts), do: opts |> Keyword.fetch!(:at) |> String.split("/", trim: true)
+
+@impl true
+def call(%Plug.Conn{method: "POST", path_info: path_info} = conn, prefix) do
+  case Enum.split(path_info, length(prefix)) do
+    {^prefix, [id]} -> conn |> deliver(id) |> halt()
+    _other -> conn
+  end
+end
+
+def call(conn, _prefix), do: conn
+
+defp deliver(conn, id) do
+  with {:ok, body, conn} <- read(conn),
+       {:ok, source} <- source(id),
+       {:ok, params} <- params(conn, body) do
+    payload = %{headers: conn.req_headers, raw_body: body, params: params}
+    answer(conn, Integrations.deliver(source, payload))
+  else
+    {:too_large, conn} -> json(conn, 413, %{error: "too_large"})
+    :not_found -> json(conn, 404, %{error: "not_found"})
+    :invalid_json -> json(conn, 422, %{error: "invalid JSON"})
+    {:error, reason} -> failed(conn, reason)
+  end
+end
+
+defp read(conn) do
+  max = Integrations.config()[:webhook_max_bytes] || @default_max_bytes
+
+  case read_body(conn, length: max) do
+    {:ok, body, conn} -> {:ok, body, conn}
+    {:more, _partial, conn} -> {:too_large, conn}
+    {:error, reason} -> {:error, reason}
+  end
+end
+
+defp source(id) do
+  with {:ok, id} <- Ecto.UUID.cast(id),
+       {:ok, %Source{status: status} = source} when status != :disabled <-
+         Ash.get(Source, id, authorize?: false) do
+    {:ok, source}
+  else
+    _missing -> :not_found
+  end
+end
+
+defp params(conn, body) do
+  if json?(conn) do
+    case Jason.decode(body) do
+      {:ok, %{} = params} -> {:ok, params}
+      {:ok, other} -> {:ok, %{"_json" => other}}
+      {:error, _error} -> :invalid_json
+    end
+  else
+    {:ok, %{}}
+  end
+end
+
+defp json?(conn) do
+  case get_req_header(conn, "content-type") do
+    [type | _] ->
+      type = type |> String.split(";") |> hd() |> String.trim() |> String.downcase()
+      type == "application/json" or String.ends_with?(type, "+json")
+
+    [] ->
+      false
+  end
+end
+
+defp answer(conn, {:ok, %{created: created, duplicates: duplicates}}),
+  do: json(conn, 202, %{accepted: created, duplicates: duplicates})
+
+defp answer(conn, {:reject, message}), do: json(conn, 422, %{error: message})
+
+defp answer(conn, {:error, :unauthorized}) do
+  conn
+  |> put_resp_header("www-authenticate", "Bearer")
+  |> json(401, %{error: "unauthorized"})
+end
+
+defp answer(conn, {:error, :not_found}), do: json(conn, 404, %{error: "not_found"})
+defp answer(conn, {:error, reason}), do: failed(conn, reason)
+
+defp failed(conn, reason) do
+  Logger.error("integration webhook #{conn.request_path} failed: #{inspect(reason)}")
+  json(conn, 500, %{error: "failed"})
+end
+
+defp json(conn, status, body) do
+  conn
+  |> put_resp_content_type("application/json")
+  |> send_resp(status, Jason.encode!(body))
+end

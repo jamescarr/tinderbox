@@ -1,0 +1,74 @@
+@moduledoc """
+The generic connector: records posted as JSON, from n8n, Zapier, Make or your
+own code, to the source's webhook URL with its bearer token.
+
+    curl -X POST https://…/webhooks/integrations/<source id> \\
+      -H 'authorization: Bearer <token>' -H 'content-type: application/json' \\
+      -d '{"records":[{"type":"order","external_id":"1042","data":{"total":"12.50"}}]}'
+
+1 to 500 records per request, each with a string `type` and `external_id`, a
+`data` object, and optionally `occurred_at` (ISO 8601).
+"""
+
+@behaviour <%= inspect(@integrations) %>.Connector
+
+alias <%= inspect(@integrations) %>.Connector
+
+@max_records 500
+@shape ~s|expected {"records": [{type, external_id, data}]}|
+
+@impl true
+def key, do: "webhook"
+
+@impl true
+def name, do: "Webhook"
+
+@impl true
+def description, do: "Post records as JSON from n8n, Zapier, Make or your own code"
+
+@impl true
+def transports, do: [:webhook]
+
+@impl true
+def handle_webhook(source, %{headers: headers, params: params}) do
+  if Connector.authorized?(source, headers), do: records(params), else: {:error, :unauthorized}
+end
+
+defp records(%{"records" => [_ | _] = records}) when length(records) <= @max_records do
+  records
+  |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
+    case record(entry) do
+      {:ok, record} -> {:cont, {:ok, [record | acc]}}
+      :error -> {:halt, {:reject, @shape}}
+    end
+  end)
+  |> case do
+    {:ok, records} -> {:ok, Enum.reverse(records)}
+    reject -> reject
+  end
+end
+
+defp records(_params), do: {:reject, @shape}
+
+defp record(%{"type" => type, "external_id" => external_id, "data" => data} = entry)
+     when is_binary(type) and is_binary(external_id) and is_map(data) do
+  with true <- String.trim(type) != "" and String.trim(external_id) != "",
+       {:ok, occurred_at} <- occurred_at(entry["occurred_at"]) do
+    {:ok, %{type: type, external_id: external_id, data: data, occurred_at: occurred_at}}
+  else
+    _invalid -> :error
+  end
+end
+
+defp record(_entry), do: :error
+
+defp occurred_at(nil), do: {:ok, nil}
+
+defp occurred_at(value) when is_binary(value) do
+  case DateTime.from_iso8601(value) do
+    {:ok, datetime, _offset} -> {:ok, datetime}
+    {:error, _reason} -> :error
+  end
+end
+
+defp occurred_at(_value), do: :error

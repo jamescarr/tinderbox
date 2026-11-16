@@ -1,0 +1,276 @@
+defmodule <%= inspect(@prefix) %>.FileDropTest do
+  # Files go to the compose object storage (Floci), as in FileControllerTest.
+  use <%= inspect(@prefix) %>.DataCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+
+  require Ash.Query
+
+  alias <%= inspect(@file_drop) %>
+  alias <%= inspect(@file_drop) %>.Upload
+  alias <%= inspect(@prefix) %>.Storage
+
+  @extensions [".csv", ".ofx", ".qfx", ".pdf", ".zip", ".eml", ".txt"]
+
+  defmodule Infected do
+    @behaviour <%= inspect(@file_drop) %>.Scanner
+
+    @impl true
+    def scan(_body), do: {:ok, {:infected, "Eicar-Test-Signature"}}
+  end
+
+  # Tells the test process (where the queue is drained) that it was called.
+  defmodule Spy do
+    @behaviour <%= inspect(@file_drop) %>.Handler
+
+    @impl true
+    def handle(upload, _body) do
+      send(self(), {:handled, upload.id})
+      {:ok, %{"rows" => 2}}
+    end
+  end
+
+  defmodule Rejects do
+    @behaviour <%= inspect(@file_drop) %>.Handler
+
+    @impl true
+    def handle(_upload, _body), do: {:reject, "nope"}
+  end
+
+  defmodule Fails do
+    @behaviour <%= inspect(@file_drop) %>.Handler
+
+    @impl true
+    def handle(_upload, _body), do: {:error, :boom}
+  end
+
+  # What this file depends on, whatever the application configured.
+  setup do
+    previous = Application.get_env(<%= inspect(@app) %>, FileDrop, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      FileDrop,
+      Keyword.merge(previous,
+        handler: FileDrop.Handlers.Keep,
+        scanner: "none",
+        extensions: @extensions
+      )
+    )
+
+    on_exit(fn -> Application.put_env(<%= inspect(@app) %>, FileDrop, previous) end)
+
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  defp configure(overrides) do
+    Application.put_env(
+      <%= inspect(@app) %>,
+      FileDrop,
+      Keyword.merge(Application.get_env(<%= inspect(@app) %>, FileDrop, []), overrides)
+    )
+  end
+
+  # Drops `body` and deletes whatever it stored once the test is done.
+  defp drop(organization, user, body, filename, opts \\ []) do
+    result = FileDrop.receive_binary(organization, user, body, filename, opts)
+
+    with {:ok, upload} <- result do
+      on_exit(fn -> Storage.delete(upload.storage_key) end)
+    end
+
+    result
+  end
+
+  defp csv, do: "date,amount\n2026-01-01,#{System.unique_integer([:positive])}\n"
+
+  defp ingest, do: AshOban.Test.schedule_and_run_triggers({Upload, :ingest})
+
+  defp reload(upload), do: Ash.get!(Upload, upload.id, authorize?: false)
+
+  # The keys stored under a prefix, from whichever backend Storage uses.
+  defp objects_under(prefix) do
+    config = Application.fetch_env!(<%= inspect(@app) %>, :storage)
+
+    case config[:backend] do
+      "s3" ->
+        {:ok, %{body: %{contents: contents}}} =
+          config[:s3_bucket] |> ExAws.S3.list_objects_v2(prefix: prefix) |> ExAws.request()
+
+        Enum.map(contents, & &1.key)
+
+      "gcs" ->
+        {:ok, %{status: 200, body: body}} =
+          Req.get("#{config[:gcs_endpoint]}/storage/v1/b/#{config[:gcs_bucket]}/o",
+            params: [prefix: prefix],
+            headers: [authorization: "Bearer #{config[:gcs_token]}"]
+          )
+
+        body |> Map.get("items", []) |> Enum.map(& &1["name"])
+    end
+  end
+
+  test "a CSV is stored, recorded pending, then processed", %{
+    owner: owner,
+    organization: organization
+  } do
+    body = csv()
+
+    assert {:ok, upload} = drop(organization, owner, body, "Card statement.csv")
+
+    assert upload.status == :pending
+    assert upload.kind == :csv
+    assert upload.content_type == "text/csv"
+    assert upload.filename == "Card statement.csv"
+    assert upload.byte_size == byte_size(body)
+    assert upload.sha256 == :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+    assert String.starts_with?(upload.storage_key, "drop/#{organization.id}/")
+    assert String.ends_with?(upload.storage_key, "/Card_statement.csv")
+    assert upload.uploaded_by_id == owner.id
+    assert Storage.get(upload.storage_key) == {:ok, body}
+
+    ingest()
+
+    upload = reload(upload)
+    assert upload.status == :processed
+    assert upload.scan_result == "skipped"
+    assert upload.scanned_at
+    assert upload.result == %{}
+  end
+
+  test "the same bytes twice are one upload", %{owner: owner, organization: organization} do
+    body = csv()
+    {:ok, upload} = drop(organization, owner, body, "a.csv")
+
+    assert {:duplicate, duplicate} = drop(organization, owner, body, "b.csv")
+    assert duplicate.id == upload.id
+
+    assert [_one] =
+             Upload
+             |> Ash.Query.filter(organization_id == ^organization.id)
+             |> Ash.read!(authorize?: false)
+  end
+
+  test "what a file is comes from its bytes", %{owner: owner, organization: organization} do
+    assert drop(organization, owner, "just text", "invoice.pdf") == {:error, :type_mismatch}
+
+    assert drop(organization, owner, "MZ" <> <<0, 0, 1>>, "setup.exe") ==
+             {:error, :unsupported_type}
+
+    assert drop(organization, owner, "%PDF-1.7\n", "notes.csv") == {:error, :type_mismatch}
+    assert drop(organization, owner, "no header here\n", "mail.eml") == {:error, :type_mismatch}
+    assert drop(organization, owner, "date,amount\n", "bank.ofx") == {:error, :type_mismatch}
+
+    assert {:ok, %{kind: :ofx, content_type: "application/x-ofx"}} =
+             drop(organization, owner, "OFXHEADER:100\n<OFX></OFX>\n", "bank.QFX")
+
+    assert {:ok, %{kind: :eml, content_type: "message/rfc822"}} =
+             drop(organization, owner, "From: a@example.com\nSubject: hi\n\nbody\n", "mail.eml")
+
+    assert {:ok, %{kind: :pdf}} = drop(organization, owner, "%PDF-1.7\n%%EOF\n", "real.pdf")
+  end
+
+  test "an empty file and one over the limit are refused", %{
+    owner: owner,
+    organization: organization
+  } do
+    configure(max_bytes: 16)
+
+    assert drop(organization, owner, "", "empty.csv") == {:error, :empty}
+    assert drop(organization, owner, String.duplicate("a", 17), "big.csv") == {:error, :too_large}
+  end
+
+  test "an infected file is deleted and never handled", %{
+    owner: owner,
+    organization: organization
+  } do
+    configure(scanner: Infected, handler: Spy)
+    {:ok, upload} = drop(organization, owner, csv(), "eicar.csv")
+
+    ingest()
+
+    upload = reload(upload)
+    assert upload.status == :infected
+    assert upload.scan_result == "Eicar-Test-Signature"
+    assert upload.scanned_at
+    assert Storage.get(upload.storage_key) == {:error, :not_found}
+    refute_received {:handled, _id}
+  end
+
+  test "a clean file goes to the handler, whose summary is kept", %{
+    owner: owner,
+    organization: organization
+  } do
+    configure(handler: Spy)
+    {:ok, upload} = drop(organization, owner, csv(), "rows.csv")
+
+    ingest()
+
+    assert_received {:handled, id} when id == upload.id
+    assert %{status: :processed, result: %{"rows" => 2}} = reload(upload)
+  end
+
+  test "a rejected file fails for good, and a manager puts it back in line", %{
+    owner: owner,
+    organization: organization
+  } do
+    configure(handler: Rejects)
+    {:ok, upload} = drop(organization, owner, csv(), "bad.csv")
+
+    ingest()
+
+    upload = reload(upload)
+    assert upload.status == :failed
+    assert upload.error == "nope"
+
+    assert {:ok, retried} = Ash.update(upload, %{}, action: :retry, actor: owner)
+    assert retried.status == :pending
+    assert retried.error == nil
+
+    assert {:error, _not_failed} = Ash.update(retried, %{}, action: :retry, actor: owner)
+  end
+
+  # AshOban logs the failed attempt.
+  @tag :capture_log
+  test "a handler error leaves the file pending for the next attempt", %{
+    owner: owner,
+    organization: organization
+  } do
+    configure(handler: Fails)
+    {:ok, upload} = drop(organization, owner, csv(), "flaky.csv")
+
+    ingest()
+
+    assert %{status: :pending, error: nil} = reload(upload)
+  end
+
+  test "a plain member cannot drop a file, and nothing is left in storage", %{
+    organization: organization
+  } do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    assert {:error, %Ash.Error.Forbidden{}} = drop(organization, member, csv(), "nope.csv")
+    assert objects_under("drop/#{organization.id}/") == []
+  end
+
+  test "somebody from another organization reads nothing", %{
+    owner: owner,
+    organization: organization
+  } do
+    {:ok, _upload} = drop(organization, owner, csv(), "mine.csv")
+    stranger = user_fixture()
+    organization_fixture(stranger, %{name: "Elsewhere"})
+
+    assert Ash.read!(Upload, actor: stranger) == []
+  end
+
+  test "deleting an upload deletes its object", %{owner: owner, organization: organization} do
+    {:ok, upload} = drop(organization, owner, csv(), "gone.csv")
+
+    assert :ok = Ash.destroy(upload, actor: owner)
+
+    assert Storage.get(upload.storage_key) == {:error, :not_found}
+  end
+end

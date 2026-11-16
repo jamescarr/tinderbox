@@ -22,8 +22,9 @@ defmodule Tinderbox.Env do
   The env sections for a generated project.
 
   Options: `:app`, `:module` (base module, used in a comment), `:broker`, and
-  optionally `:stack` (`"api"` | `"worker"` | `"saas"`, default `"api"`) and
-  `:db?` (default `true`).
+  optionally `:stack` (`"api"` | `"worker"` | `"saas"`, default `"api"`), `:db?`
+  (default `true`) and `:file_drop?` (the SaaS file drop's variables, default
+  `false`).
   """
   @spec sections(keyword()) :: [section()]
   def sections(opts) do
@@ -75,7 +76,7 @@ defmodule Tinderbox.Env do
         []
       end
 
-    (postgres ++ shared ++ worker ++ saas(stack, app, app_dash))
+    (postgres ++ shared ++ worker ++ saas(stack, app, app_dash) ++ file_drop(stack, opts))
     |> drop_repeated_names()
     |> validate!()
   end
@@ -129,6 +130,25 @@ defmodule Tinderbox.Env do
   end
 
   defp saas(_stack, _app, _app_dash), do: []
+
+  # The file drop's scanner and limits (`--file-drop`, or `--integrations`).
+  defp file_drop("saas", opts) do
+    if Keyword.get(opts, :file_drop?, false) do
+      [
+        {"File drop: FILE_DROP_SCANNER is none or clamav; clamd is the compose service of the `scan` profile (docker compose --profile scan up -d --wait clamav)",
+         [
+           {"FILE_DROP_SCANNER", "none"},
+           {"FILE_DROP_MAX_BYTES", "26214400"},
+           {"CLAMAV_HOST", "localhost"},
+           {"CLAMAV_PORT", "3310"}
+         ]}
+      ]
+    else
+      []
+    end
+  end
+
+  defp file_drop(_stack, _opts), do: []
 
   @doc """
   Renders sections as `.env.example`: every assignment is an `export`.

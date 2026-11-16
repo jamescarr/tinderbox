@@ -1,0 +1,44 @@
+@moduledoc """
+The work of the `:sync` trigger, in a `before_action` hook of an action that runs
+outside a transaction: the connector's `sync/1` is given the source with its
+credentials, what it returns is stored (`<%= inspect(@integrations) %>.ingest/2`), and
+the source keeps the cursor for next time. Any error fails the action, so the
+job retries; after the last attempt `:mark_sync_failed` puts the source in
+`:error`.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@integrations) %>
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_action(changeset, &sync/1)
+end
+
+defp sync(changeset) do
+  with {:ok, connector} <- pulling_connector(changeset.data),
+       {:ok, source} <- Ash.load(changeset.data, :credentials, authorize?: false),
+       {:ok, records, cursor} <- connector.sync(source),
+       {:ok, _summary} <- Integrations.ingest(source, records) do
+    changeset
+    |> Ash.Changeset.force_change_attribute(:cursor, cursor)
+    |> Ash.Changeset.force_change_attribute(:last_synced_at, now())
+    |> Ash.Changeset.force_change_attribute(:last_error, nil)
+    |> Ash.Changeset.force_change_attribute(:status, :active)
+  else
+    {:error, reason} ->
+      Ash.Changeset.add_error(changeset, "the sync failed: #{<%= inspect(@file_drop) %>.error_text(reason)}")
+  end
+end
+
+defp pulling_connector(source) do
+  with {:ok, connector} <- Integrations.connector(source.connector),
+       true <- Integrations.exports?(connector, :sync, 1) do
+    {:ok, connector}
+  else
+    _missing -> {:error, {:no_sync, source.connector}}
+  end
+end
+
+defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)

@@ -1,0 +1,223 @@
+@moduledoc """
+A file an organization dropped in, and what became of it.
+
+`<%= inspect(@file_drop) %>.receive_binary/5` stores the file and records it `:pending`
+(`:receive`). The `:ingest` AshOban trigger (queue `file_drop`, three attempts)
+then scans it and hands it to the handler
+(`<%= inspect(@file_drop) %>.Changes.Ingest`), ending in one of:
+
+  * `:processed` - the handler took it; `result` is its summary,
+  * `:failed` - the file was missing or altered, the handler rejected it
+    (`error` says why), or every attempt failed (`:mark_failed`). Owners and
+    admins can `:retry` it,
+  * `:infected` - the scanner found `scan_result`; the object is deleted.
+
+`storage_key` is chosen by the server (`drop/<organization id>/<uuid>/<name>`)
+and is not public; `content_type` and `kind` come from the bytes
+(`<%= inspect(@file_drop) %>.Sniff`), never from the browser. Destroying an upload deletes
+its object. Versions feed `/activity`: who dropped a file and who deleted it,
+not every status change.
+"""
+
+use Ash.Resource,
+  otp_app: <%= inspect(@app) %>,
+  domain: <%= inspect(@file_drop) %>,
+  data_layer: AshPostgres.DataLayer,
+  authorizers: [Ash.Policy.Authorizer],
+  notifiers: [<%= inspect(@prefix) %>.Events.AshNotifier],
+  extensions: [AshOban, AshPaperTrail.Resource]
+
+postgres do
+  table "file_drop_uploads"
+  repo <%= inspect(@repo) %>
+
+  references do
+    reference :organization, on_delete: :delete
+    reference :uploaded_by, on_delete: :nilify
+  end
+
+  custom_indexes do
+    index [:organization_id, :inserted_at]
+    # The :ingest scheduler's query, every minute: pending uploads only, by id.
+    index [:id], name: "file_drop_uploads_pending_index", where: "status = 'pending'"
+  end
+end
+
+oban do
+  triggers do
+    trigger :ingest do
+      action :ingest
+      where expr(status == :pending)
+      queue :file_drop
+      max_attempts 3
+      scheduler_cron "* * * * *"
+      # The action reads the object and calls the scanner and the handler outside
+      # a transaction, so there is no transaction to lock the row in.
+      lock_for_update? false
+      # Named explicitly (as `mix ash_oban.set_default_module_names` would):
+      # renaming the trigger later must not orphan jobs already enqueued.
+      worker_module_name <%= inspect(@file_drop) %>.Upload.AshOban.Worker.Ingest
+      scheduler_module_name <%= inspect(@file_drop) %>.Upload.AshOban.Scheduler.Ingest
+      # After the last attempt, so a file is never handled unscanned.
+      on_error :mark_failed
+    end
+  end
+end
+
+paper_trail do
+  change_tracking_mode :changes_only
+  store_action_name? true
+  ignore_attributes [:inserted_at, :updated_at]
+  # Who dropped and who deleted a file, not every status change.
+  ignore_actions [:ingest, :mark_failed]
+  create_version_on_destroy? true
+  reference_source? false
+  attributes_as_attributes [:organization_id]
+<%= if @version_indexes? do %>  mixin <%= inspect(@accounts) %>.VersionIndexes
+<% end %>  belongs_to_actor :user, <%= inspect(@user) %>, domain: <%= inspect(@accounts) %>
+end
+
+actions do
+  defaults [:read]
+
+  create :receive do
+    description "Records a file <%= inspect(@file_drop) %> has stored; use <%= inspect(@file_drop) %>.receive_binary/5"
+
+    accept [
+      :organization_id,
+      :filename,
+      :content_type,
+      :kind,
+      :byte_size,
+      :sha256,
+      :storage_key,
+      :hint
+    ]
+
+    change relate_actor(:uploaded_by, allow_nil?: true)
+
+    validate fn changeset, _context ->
+      organization_id = Ash.Changeset.get_attribute(changeset, :organization_id)
+      key = Ash.Changeset.get_attribute(changeset, :storage_key)
+
+      cond do
+        is_nil(organization_id) or is_nil(key) ->
+          :ok
+
+        String.starts_with?(key, "drop/#{organization_id}/") ->
+          :ok
+
+        true ->
+          {:error, field: :storage_key, message: "is not in this organization's drop"}
+      end
+    end
+
+    change run_oban_trigger(:ingest)
+  end
+
+  update :ingest do
+    description "Scans the file and hands it to the handler (the :ingest trigger)"
+    accept []
+    require_atomic? false
+    # The scanner and the handler run with no transaction open.
+    transaction? false
+
+    change <%= inspect(@file_drop) %>.Changes.Ingest
+  end
+
+  update :mark_failed do
+    accept []
+    require_atomic? false
+    argument :error, :map
+
+    change fn changeset, _context ->
+      error = changeset |> Ash.Changeset.get_argument(:error) |> <%= inspect(@file_drop) %>.error_text()
+
+      changeset
+      |> Ash.Changeset.force_change_attribute(:status, :failed)
+      |> Ash.Changeset.force_change_attribute(:error, error)
+    end
+  end
+
+  update :retry do
+    description "Puts a failed file back in line"
+    accept []
+    require_atomic? false
+
+    # Before the changes below, so it sees the stored status.
+    validate attribute_equals(:status, :failed), message: "only a failed file can be retried"
+
+    change set_attribute(:status, :pending)
+    change set_attribute(:error, nil)
+    change run_oban_trigger(:ingest)
+  end
+
+  destroy :destroy do
+    description "Deletes the upload and its object"
+    primary? true
+    require_atomic? false
+
+    change <%= inspect(@file_drop) %>.Changes.DeleteObject
+  end
+end
+
+policies do
+  bypass AshOban.Checks.AshObanInteraction do
+    authorize_if always()
+  end
+
+  policy action_type(:read) do
+    authorize_if expr(exists(organization.memberships, user_id == ^actor(:id)))
+  end
+
+  policy action([:receive, :retry, :destroy]) do
+    authorize_if {<%= inspect(@accounts) %>.Checks.ActorManagesOrganization, field: :organization_id}
+  end
+end
+
+changes do
+  change <%= inspect(@file_drop) %>.Changes.Broadcast, on: [:create, :update, :destroy]
+end
+
+attributes do
+  uuid_primary_key :id
+
+  attribute :filename, :string, allow_nil?: false, public?: true, constraints: [max_length: 255]
+  # Sniffed from the bytes, never the browser's.
+  attribute :content_type, :string, allow_nil?: false, public?: true
+
+  attribute :kind, :atom,
+    allow_nil?: false,
+    public?: true,
+    constraints: [one_of: [:csv, :ofx, :pdf, :zip, :eml, :text]]
+
+  attribute :byte_size, :integer, allow_nil?: false, public?: true, constraints: [min: 1]
+  attribute :sha256, :string, allow_nil?: false, public?: true
+  attribute :storage_key, :string, allow_nil?: false
+  attribute :hint, :string, public?: true
+
+  attribute :status, :atom,
+    allow_nil?: false,
+    public?: true,
+    default: :pending,
+    constraints: [one_of: [:pending, :processed, :failed, :infected]]
+
+  # "clean", "skipped" (no scanner), or the signature found.
+  attribute :scan_result, :string, public?: true
+  attribute :scanned_at, :utc_datetime, public?: true
+  # The handler's summary.
+  attribute :result, :map, allow_nil?: false, public?: true, default: %{}
+  attribute :error, :string, public?: true
+
+  create_timestamp :inserted_at
+  update_timestamp :updated_at
+end
+
+relationships do
+  belongs_to :organization, <%= inspect(@accounts) %>.Organization, allow_nil?: false, public?: true
+  belongs_to :uploaded_by, <%= inspect(@user) %>, public?: true
+end
+
+identities do
+  identity :unique_content, [:organization_id, :sha256]
+end
