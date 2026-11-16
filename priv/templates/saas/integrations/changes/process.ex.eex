@@ -25,7 +25,7 @@ defp process(changeset) do
       done(changeset, :skipped)
 
     {:error, reason} ->
-      Ash.Changeset.add_error(changeset, "the handler failed: #{inspect(reason)}")
+      Ash.Changeset.add_error(changeset, "the handler failed: #{<%= inspect(@file_drop) %>.error_text(reason)}")
   end
 end
 

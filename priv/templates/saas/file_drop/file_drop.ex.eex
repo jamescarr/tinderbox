@@ -217,3 +217,17 @@ def error_message(:unsupported_type), do: "This kind of file is not accepted"
 def error_message(:type_mismatch), do: "The file's content does not match its extension"
 def error_message({:storage, _reason}), do: "The file could not be stored, try again"
 def error_message(_error), do: "The file could not be saved"
+
+@doc """
+What went wrong, for a person, at most 2 000 characters: the messages of an Ash
+error, an exception's message, or the term. Failed uploads, sources and records
+keep it as their error.
+"""
+@spec error_text(term()) :: String.t()
+def error_text(%{errors: [_ | _] = errors}),
+  do: errors |> Enum.map(&error_text/1) |> Enum.uniq() |> Enum.join(", ") |> limit()
+
+def error_text(error) when is_exception(error), do: error |> Exception.message() |> limit()
+def error_text(error), do: error |> inspect() |> limit()
+
+defp limit(text), do: String.slice(text, 0, 2_000)

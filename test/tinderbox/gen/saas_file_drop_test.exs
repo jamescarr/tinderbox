@@ -138,5 +138,18 @@ defmodule Tinderbox.Gen.SaasFileDropTest do
       assert {"format", ["priv/repo/migrations/*add_file_drop.exs"]} in igniter.tasks
       assert_has_notice(igniter, &(&1 =~ "FILE_DROP_SCANNER"))
     end
+
+    test "a project generated before the activity feed gets versions without its index mixin" do
+      # A SaaS project as far as the task can tell, with no Accounts.VersionIndexes.
+      organization = "defmodule TestWeb.LiveOrganization do\nend\n"
+
+      igniter =
+        saas_project(files: [{"lib/test_web/live_organization.ex", organization}])
+        |> Igniter.compose_task(Mix.Tasks.Tinderbox.Gen.FileDrop, [])
+
+      upload = source(igniter, "lib/test/file_drop/upload.ex")
+      assert_has(upload, "attributes_as_attributes [:organization_id]")
+      refute_has(upload, "VersionIndexes")
+    end
   end
 end

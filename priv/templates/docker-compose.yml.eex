@@ -235,8 +235,9 @@ services:
   # ClamAV daemon for the file drop's scanner (FILE_DROP_SCANNER=clamav). It is in
   # the `scan` profile, so `docker compose up` leaves it out; start it with
   #   docker compose --profile scan up -d --wait clamav
-  # The first start downloads the signature database and takes minutes. The image
-  # ships its own healthcheck.
+  # (under `mise exec --` when CLAMAV_PORT is moved in .mise.local.toml) and stop it
+  # alone with `docker compose stop clamav`. The first start downloads the signature
+  # database and takes minutes. The image ships its own healthcheck.
   clamav:
     image: clamav/clamav-debian:1.5
     profiles: ["scan"]

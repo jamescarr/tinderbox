@@ -28,7 +28,7 @@ defp sync(changeset) do
     |> Ash.Changeset.force_change_attribute(:status, :active)
   else
     {:error, reason} ->
-      Ash.Changeset.add_error(changeset, "the sync failed: #{inspect(reason)}")
+      Ash.Changeset.add_error(changeset, "the sync failed: #{<%= inspect(@file_drop) %>.error_text(reason)}")
   end
 end
 

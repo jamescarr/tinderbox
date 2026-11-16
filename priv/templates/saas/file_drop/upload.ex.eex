@@ -129,8 +129,7 @@ actions do
     argument :error, :map
 
     change fn changeset, _context ->
-      error =
-        changeset |> Ash.Changeset.get_argument(:error) |> inspect() |> String.slice(0, 2_000)
+      error = changeset |> Ash.Changeset.get_argument(:error) |> <%= inspect(@file_drop) %>.error_text()
 
       changeset
       |> Ash.Changeset.force_change_attribute(:status, :failed)
