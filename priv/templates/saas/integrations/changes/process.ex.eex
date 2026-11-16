@@ -1,8 +1,10 @@
 @moduledoc """
 The work of the `:process` trigger: `<%= inspect(@integrations) %>.Handler.handle/1`, in a
 `before_action` hook, so it runs inside the record's transaction. `:ok` is
-`:processed`, `:skip` is `:skipped`; `{:error, reason}` fails the action (and
-rolls back whatever the handler wrote), so the job retries.
+`:processed`, `:skip` is `:skipped`, `{:reject, message}` is `:failed` with the
+message at once (the record will never work as it is, so it is not retried);
+`{:error, reason}` fails the action (and rolls back whatever the handler wrote), so
+the job retries, and `:mark_failed` records the reason after the last attempt.
 """
 
 use Ash.Resource.Change
@@ -23,6 +25,11 @@ defp process(changeset) do
 
     :skip ->
       done(changeset, :skipped)
+
+    {:reject, message} ->
+      changeset
+      |> done(:failed)
+      |> Ash.Changeset.force_change_attribute(:error, <%= inspect(@file_drop) %>.error_text(message))
 
     {:error, reason} ->
       Ash.Changeset.add_error(changeset, "the handler failed: #{<%= inspect(@file_drop) %>.error_text(reason)}")

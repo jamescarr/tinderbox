@@ -219,11 +219,13 @@ def error_message({:storage, _reason}), do: "The file could not be stored, try a
 def error_message(_error), do: "The file could not be saved"
 
 @doc """
-What went wrong, for a person, at most 2 000 characters: the messages of an Ash
-error, an exception's message, or the term. Failed uploads, sources and records
-keep it as their error.
+What went wrong, for a person, at most 2 000 characters: a message as it is, the
+messages of an Ash error, an exception's message, or the term. Failed uploads,
+sources and records keep it as their error.
 """
 @spec error_text(term()) :: String.t()
+def error_text(text) when is_binary(text), do: limit(text)
+
 def error_text(%{errors: [_ | _] = errors}),
   do: errors |> Enum.map(&error_text/1) |> Enum.uniq() |> Enum.join(", ") |> limit()
 

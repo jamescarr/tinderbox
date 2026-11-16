@@ -6,16 +6,21 @@ Where records from integrations become this application's rows.
 
   * `:ok` - handled; the record is `:processed`,
   * `:skip` - not something this application uses; the record is `:skipped`,
-  * `{:error, reason}` - failed; the record is retried, and `:failed` after the
-    last attempt.
+  * `{:reject, message}` - this record will never work as it is (a field is
+    missing or malformed); it is `:failed` with `message` at once, not retried,
+    and `/integrations` shows it, with a button to put it back in line once the
+    cause is fixed,
+  * `{:error, reason}` - failed, perhaps for now; the record is retried, and
+    `:failed` after the last attempt.
 
 Pattern-match on `type`:
 
-    def handle(%{type: "order"} = record) do
+    def handle(%{type: "order", data: %{"total" => total}} = record) do
       # … create or update a row from record.data, as the system (authorize?: false)
       :ok
     end
 
+    def handle(%{type: "order"}), do: {:reject, "an order needs a total"}
     def handle(_record), do: :skip
 
 Delivery is at-least-once (a retry runs the same record again), so be
@@ -26,7 +31,8 @@ the record's status. Keep network calls out of it.
 
 require Logger
 
-@spec handle(<%= inspect(@integrations) %>.Record.t()) :: :ok | :skip | {:error, term()}
+@spec handle(<%= inspect(@integrations) %>.Record.t()) ::
+        :ok | :skip | {:reject, String.t()} | {:error, term()}
 def handle(%{type: type, external_id: external_id}) do
   Logger.info("integration record #{type} (#{external_id}) skipped: nothing handles it")
   :skip

@@ -1,13 +1,13 @@
 @moduledoc """
 The current organization's integration sources (`<%= inspect(@integrations) %>`), at
-`/integrations`: where its data comes from, how much of it is waiting, and what
-went wrong last.
+`/integrations`: where its data comes from, how much of it is waiting or failed,
+and what went wrong last.
 
 Everyone in the organization sees the list. Owners and admins add a source from
-the connector catalog, sync a pulling one now, issue a new webhook token,
-disable, enable and delete. A webhook token is shown once, with the URL and a
-`curl` to try it, until it is dismissed. The list follows deliveries as they
-happen, reloading at most twice a second.
+the connector catalog, sync a pulling one now, issue a new webhook token, put its
+failed records back in line, disable, enable and delete. A webhook token is shown
+once, with the URL and a `curl` to try it, until it is dismissed. The list follows
+deliveries as they happen, reloading at most twice a second.
 """
 
 use <%= inspect(@web) %>, :live_view
@@ -108,6 +108,15 @@ def handle_event("delete", %{"id" => id}, socket) do
   {:noreply, socket |> flash(result, "Source deleted") |> load()}
 end
 
+def handle_event("reprocess", %{"id" => id}, socket) do
+  result =
+    with {:ok, source} <- find(Source, id, socket) do
+      Integrations.reprocess_failed(source, socket.assigns.current_user)
+    end
+
+  {:noreply, socket |> flash(result, "Failed records put back in line") |> load()}
+end
+
 def handle_event("dismiss", _params, socket), do: {:noreply, assign(socket, :new_token, nil)}
 
 @impl true
@@ -140,7 +149,13 @@ defp load(socket) do
   sources =
     Source
     |> Ash.Query.filter(organization_id == ^organization.id)
-    |> Ash.Query.load([:created_by, :record_count, :pending_count])
+    |> Ash.Query.load([
+      :created_by,
+      :record_count,
+      :pending_count,
+      :failed_count,
+      :latest_failure
+    ])
     |> Ash.Query.sort(:inserted_at)
     |> Ash.read!(actor: user)
 
@@ -268,8 +283,29 @@ def render(assigns) do
                   <.badge color={status_color(source.status)}>{humanize(source.status)}</.badge>
                 </td>
                 <td>{relative_time(source.last_synced_at)}</td>
-                <td class="tabular-nums">{source.pending_count} of {source.record_count}</td>
-                <td class="max-w-xs truncate text-sm text-error">{source.last_error}</td>
+                <td class="tabular-nums">
+                  {source.pending_count} of {source.record_count}
+                  <div :if={source.failed_count > 0}>
+                    <.badge color="error">{source.failed_count} failed</.badge>
+                  </div>
+                </td>
+                <td class="text-sm">
+                  <div
+                    class="max-w-xs line-clamp-3 wrap-anywhere text-error"
+                    title={source.last_error || source.latest_failure}
+                  >
+                    {source.last_error || source.latest_failure}
+                  </div>
+                  <.button
+                    :if={@manager? and source.failed_count > 0}
+                    class="btn btn-ghost btn-xs mt-1"
+                    phx-click="reprocess"
+                    phx-value-id={source.id}
+                    title="Put the failed records back in line"
+                  >
+                    Reprocess
+                  </.button>
+                </td>
                 <td :if={@manager?} class="text-right whitespace-nowrap">
                   <.button
                     :if={

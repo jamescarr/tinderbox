@@ -188,6 +188,27 @@ defp webhook_connector(source) do
   end
 end
 
+@doc """
+Puts `source`'s failed records back in line (each record's `:reprocess`), as
+`actor`, an owner or admin of its organization: once the cause is fixed, in the
+handler or upstream.
+"""
+@spec reprocess_failed(Source.t(), map()) :: :ok | {:error, term()}
+def reprocess_failed(source, actor) do
+  Record
+  |> Ash.Query.filter(source_id == ^source.id and status == :failed)
+  |> Ash.bulk_update(:reprocess, %{},
+    actor: actor,
+    authorize?: true,
+    strategy: [:stream],
+    return_errors?: true
+  )
+  |> case do
+    %Ash.BulkResult{status: :success} -> :ok
+    %Ash.BulkResult{errors: errors} -> {:error, Ash.Error.to_error_class(errors)}
+  end
+end
+
 @doc false
 def exports?(module, function, arity),
   do: Code.ensure_loaded?(module) and function_exported?(module, function, arity)

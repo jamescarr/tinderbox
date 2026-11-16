@@ -7,6 +7,7 @@ defmodule <%= inspect(@web) %>.IntegrationsLiveTest do
 
   alias <%= inspect(@integrations) %>
   alias <%= inspect(@integrations) %>.Connectors.Webhook
+  alias <%= inspect(@integrations) %>.Record
 
   setup do
     previous = Application.get_env(<%= inspect(@app) %>, Integrations, [])
@@ -40,6 +41,34 @@ defmodule <%= inspect(@web) %>.IntegrationsLiveTest do
     view |> element("#new-token button", "Done") |> render_click()
 
     refute has_element?(view, "#new-token")
+  end
+
+  test "the owner sees why records failed and puts them back in line", %{
+    conn: conn,
+    owner: owner,
+    organization: organization
+  } do
+    source = source_fixture(organization, owner)
+
+    {:ok, _summary} =
+      Integrations.ingest(source, [%{type: "note", external_id: "n-1", data: %{}}])
+
+    [record] = Ash.read!(Record, authorize?: false)
+
+    Ash.update!(record, %{error: RuntimeError.exception("a note needs a text")},
+      action: :mark_failed,
+      authorize?: false
+    )
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations")
+
+    assert has_element?(view, "#source-#{source.id}", "1 failed")
+    assert has_element?(view, "#source-#{source.id}", "a note needs a text")
+
+    view |> element("#source-#{source.id} button", "Reprocess") |> render_click()
+
+    refute has_element?(view, "#source-#{source.id}", "1 failed")
+    assert Ash.get!(Record, record.id, authorize?: false).status == :pending
   end
 
   test "a member sees the sources but cannot add or change one", %{

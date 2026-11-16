@@ -87,9 +87,11 @@ In itemizer, on top of the generated blocks:
   charge was" card, an Explained column, a purchase's items.
 * `priv/samples/` (the card statement, the Apple receipt, the Amazon export as CSV and
   ZIP, an OFX statement) and `priv/samples/demo.exs`.
-* 162 tests: the scaffold's 118, the generated resource pages' tests, and the slice's own
-  (parsers, connectors, the matcher's rule and its runs against the database, handler,
-  the end-to-end `explain_charge_test.exs`, the receipt webhook, the transaction page).
+* 165 tests: the scaffold's 118, two the integrations templates gained since (failed
+  records on a source and on `/integrations`), the generated resource pages' tests, and
+  the slice's own (parsers, connectors, the matcher's rule and its runs against the
+  database, handler, the end-to-end `explain_charge_test.exs`, the receipt webhook, the
+  transaction page).
 
 ### Where the code departs from the plan
 
@@ -201,6 +203,35 @@ In itemizer, on top of the generated blocks:
     `file_drop_uploads_pending_index`) make it 5, also once the prepared statement's plan
     is cached (measured with `EXPLAIN (ANALYZE, BUFFERS)` in itemizer's dev database).
     Records are still never pruned.
+17. **A record that can never work was retried, then hidden** (found in review, fixed in
+    the templates). A Zap posting a `transaction` without `amount` got 202 (the generic
+    `webhook` connector checks only `type`, `external_id` and `data`); the handler's
+    `{:error, {:invalid_record, "amount"}}` failed the same way on every attempt, and
+    `/integrations` showed "0 of N" pending, with no error and no way to reprocess.
+    The Handler contract now has `{:reject, message}`: `:failed` with the message at
+    once, no retry (`FileDrop.error_text/1` passes text through). `Source` has
+    `failed_count` and `latest_failure` (a `first` aggregate on the newest failed
+    record's error); the page shows "N failed" under the pending count, the error
+    beside it (three lines at most, the rest in its `title`), and for owners and
+    admins a Reprocess button that runs `Integrations.reprocess_failed/2` (the records'
+    `:reprocess`, as the user). The button sits under the error, not with the row's
+    other actions: there, at 1400 px, it widened the table by 294 px and scrolled out
+    of sight on the one row that needs it. itemizer's handler rejects a missing or
+    unreadable field with "the <field> field is missing or unreadable"; its test
+    (ingest, one `:process` run, `:failed` with that message) left the record
+    `:pending` with no error under the old handler.
+18. **Two matcher runs could explain one charge twice** (found in review, fixed). The
+    worker's uniqueness covers waiting jobs only, so a run can start while another is
+    executing; a run that read a charge before the other committed its match still
+    saw it unexplained and could link it to a second purchase that fits (same-price
+    subscriptions), taking the purchase from its own charge. `Match`'s identity only
+    stops a purchase being used twice. `Matcher.link/3` now locks the charge's row
+    (`Ash.Query.lock(:for_update)`, which holds under PgBouncer's transaction pooling;
+    a session advisory lock would not), checks it for a match, and only then inserts
+    the set, in purchase-id order; notifications and `charge.explained` go out after
+    the commit. The test calls `link/3` as a second run would; the race itself cannot
+    be staged under the SQL sandbox, whose processes share one connection. The worker
+    stays on `:default`: a `matching: 1` queue would only stop overlap on one node.
 
 ## Verified
 
@@ -213,9 +244,14 @@ In itemizer, on top of the generated blocks:
    with the token answered 202 `{"accepted":2,"duplicates":0}`, without it 401.
 3. **Fresh generation**: the scaffold's 118 tests; `grep -c 'clamav:' docker-compose.yml`
    is 1; `FILE_DROP_SCANNER` is in `.mise.toml` and `fly.toml`.
-4. **The slice**: `mise run check` in itemizer passed, 162 tests. An unfiltered demo run on
+4. **The slice**: `mise run check` in itemizer passed, 165 tests. An unfiltered demo run on
    a fresh dev database logged no "ongoing transaction" and no "Missed … notifications"
-   warning (only JetStream's start-up one) and recorded three `charge.explained` events.
+   warning (only JetStream's start-up one) and recorded three `charge.explained` events,
+   one match per charge. In a browser on the dev server: a webhook source, a posted
+   `transaction` without `amount` (202), and after the next scheduler run the row read
+   "0 of 1", "1 failed", "the amount field is missing or unreadable", within the table's
+   width; Reprocess flashed "Failed records put back in line" and the row read "1 of 1".
+   The dev log had no warning but JetStream's.
 5. **Demo** (`mise run setup`, `mise exec -- mix run priv/samples/demo.exs`, fake model):
 
    ```text

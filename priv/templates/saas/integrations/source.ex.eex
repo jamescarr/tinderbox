@@ -246,6 +246,18 @@ aggregates do
     public? true
     filter expr(status == :pending)
   end
+
+  count :failed_count, :records do
+    public? true
+    filter expr(status == :failed)
+  end
+
+  # Why the latest of its records that failed did.
+  first :latest_failure, :records, :error do
+    public? true
+    filter expr(status == :failed)
+    sort updated_at: :desc
+  end
 end
 
 @doc false

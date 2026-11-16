@@ -264,6 +264,33 @@ defmodule <%= inspect(@prefix) %>.IntegrationsTest do
            }
   end
 
+  test "a source counts its failed records, keeps why, and owners put them back in line", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source_fixture(organization, owner)
+    token = source.__metadata__.webhook_token
+    {:ok, _summary} = Integrations.deliver(source, delivery(token, notes()))
+    [failed, _pending] = records(source)
+
+    # What the :process trigger records when a handler rejects a record.
+    Ash.update!(failed, %{error: RuntimeError.exception("a note needs a text")},
+      action: :mark_failed,
+      authorize?: false
+    )
+
+    source = Ash.load!(source, [:failed_count, :latest_failure], authorize?: false)
+    assert source.failed_count == 1
+    assert source.latest_failure == "a note needs a text"
+
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+    assert {:error, %Ash.Error.Forbidden{}} = Integrations.reprocess_failed(source, member)
+
+    assert Integrations.reprocess_failed(source, owner) == :ok
+    assert %{status: :pending, error: nil} = Ash.get!(Record, failed.id, authorize?: false)
+  end
+
   test "a plain member cannot add a source", %{organization: organization} do
     member = user_fixture()
     membership_fixture(organization, member, :member)

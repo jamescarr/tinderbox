@@ -263,9 +263,12 @@ Ash packages the other stacks use, then adds:
   records; each organization's sources (`/integrations`) keep config, encrypted
   credentials and a hashed token; every record is stored once per source, type and
   external id and handed, with retries, to `<App>.Integrations.Handler`, the module
-  the application edits. The generic `webhook` connector is what n8n, Zapier or Make
-  post to; no workflow engine is deployed. `mix tinderbox.gen.integrations` adds it
-  (and the file drop) to an existing project.
+  the application edits. A record the handler rejects (`{:reject, message}`: a field
+  missing or malformed) fails at once instead of retrying; `/integrations` counts a
+  source's failed records, shows why the latest failed, and puts them back in line.
+  The generic `webhook` connector is what n8n, Zapier or Make post to; no workflow
+  engine is deployed. `mix tinderbox.gen.integrations` adds it (and the file drop)
+  to an existing project.
 * **Organizations** — `<App>.Accounts.Organization`, `Membership` (`owner`, `admin`,
   `member`) and `Invitation` (email, role, token link). The creator becomes the
   owner; the last owner cannot be removed or demoted. Re-inviting an address updates
@@ -786,7 +789,7 @@ Beyond that, generated projects were run end to end against the emulators:
 * **saas file drop and integrations (`itemizer`)** — generated with `--integrations`
   in 190 s: 118 tests on the untouched scaffold, among them the blocks' seven test
   files. The slice on top (statements, Amazon's order export and receipt emails become
-  transactions and purchases, matched by amount and date) passed 162; its demo script
+  transactions and purchases, matched by amount and date) passed 165; its demo script
   explained the sample `APPLE.COM/BILL -59.97` as its three items (with the fake model:
   the run had no Anthropic key). In a browser: `/drop`, `/transactions`, a transaction's
   items, `/integrations`; the receipt webhook answered 401 without its token and 202
