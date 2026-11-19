@@ -32,7 +32,7 @@ services:
   floci:
     image: floci/floci:latest
     ports:
-      - "4566:4566"
+      - "${FLOCI_PORT:-4566}:4566"
     environment:
       FLOCI_DEFAULT_REGION: us-east-1
       FLOCI_STORAGE_MODE: persistent
@@ -44,7 +44,7 @@ services:
   floci-gcp:
     image: floci/floci-gcp:latest
     ports:
-      - "4588:4588"
+      - "${FLOCI_GCP_PORT:-4588}:4588"
     environment:
       FLOCI_GCP_DEFAULT_PROJECT_ID: floci-local
       FLOCI_GCP_STORAGE_MODE: hybrid
@@ -133,8 +133,8 @@ services:
     image: nats:2.15-alpine
     command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
     ports:
-      - "4222:4222"
-      - "8222:8222"  # monitoring, http://localhost:8222
+      - "${NATS_PORT:-4222}:4222"
+      - "${NATS_MONITOR_PORT:-8222}:8222"  # monitoring, http://localhost:8222
     volumes:
       - nats-data:/data
     healthcheck:
@@ -164,9 +164,9 @@ services:
     image: dexidp/dex:v2.46.0
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     ports:
-      - "5556:5556"
+      - "${DEX_PORT:-5556}:5556"
     volumes:
-      - ./docker/dex/config.yaml:/etc/dex/config.yaml:ro
+      - ${DEX_CONFIG:-./docker/dex/config.yaml}:/etc/dex/config.yaml:ro
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:5556/dex/healthz"]
       interval: 2s
@@ -186,12 +186,12 @@ services:
       hydra-migrate:
         condition: service_completed_successfully
     ports:
-      - "4444:4444"
-      - "4445:4445"
+      - "${HYDRA_PUBLIC_PORT:-4444}:4444"
+      - "${HYDRA_ADMIN_PORT:-4445}:4445"
     environment:
       DSN: postgres://postgres:postgres@postgres:5432/hydra?sslmode=disable
       SECRETS_SYSTEM: <%= @app_dash %>-dev-system-secret-not-for-production
-      URLS_SELF_ISSUER: http://localhost:4444/
+      URLS_SELF_ISSUER: http://localhost:${HYDRA_PUBLIC_PORT:-4444}/
       STRATEGIES_ACCESS_TOKEN: jwt
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:4445/health/ready"]
