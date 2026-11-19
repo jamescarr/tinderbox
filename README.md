@@ -142,20 +142,25 @@ Generated projects carry a `.mise.toml` (skip it with `--no-mise`):
   package was verified with, `1.20.4-otp-29` and `29.1`, and the generator prints a
   notice. The Kafka worker also pins CMake, because `brod`'s `crc32cer` NIF is built
   from source.
-* **`[env]`** — the local environment: `PGPORT` (the host port compose publishes for
-  Postgres, read by `config/dev.exs` and `config/test.exs`), the emulator endpoints,
-  `STORAGE_BACKEND`, and for the worker `HEALTH_PORT` plus the broker's variables.
-  `.env.example` is rendered from the same data, so the two cannot drift.
+* **`[env]`** — the local environment, and every host port compose publishes:
+  `PGPORT` (read by `config/dev.exs` and `config/test.exs`), `PORT` (the app,
+  `config/runtime.exs`), `FLOCI_PORT`, `FLOCI_GCP_PORT`, `NATS_PORT`,
+  `NATS_MONITOR_PORT`, `DEX_PORT`, `HYDRA_PUBLIC_PORT`, `HYDRA_ADMIN_PORT`,
+  `SMTP_PORT`, `MAILPIT_UI_PORT`, `CLAMAV_PORT`, plus the emulator endpoints,
+  `STORAGE_BACKEND` and, for the worker, `HEALTH_PORT` and the broker's variables.
+  `.env.example` is rendered from the same data, so the two cannot drift. Because
+  no published port is a literal, one `.mise.local.toml` moves the whole stack.
 * **`[tasks.*]`**:
 
 | Task | Does |
 |---|---|
 | `mise run up` | `docker compose up -d --wait` — returns once Postgres, the emulators and the bootstrap jobs are done |
 | `mise run down` | `docker compose down` |
+| `mise run worktree:down` | `docker compose down -v --remove-orphans` — stop this checkout's services and delete their volumes, before removing a worktree |
 | `mise run setup` | `up`, then `mix deps.get` and `mix ash.setup` |
 | `mise run dev` | `setup`, then the app |
 | `mise run test` | `up`, then `mix test` |
-| `mise run check` | `up`, then `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test` |
+| `mise run check` | `up`, then `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix deps.unlock --check-unused`, `mix test --warnings-as-errors`, `mix ash.setup --quiet` and `mix run -e 'IO.puts(:boot_ok)'` — the last two boot the app in `dev` against the compose stack, where boot-time configuration errors live. This is the gate: it is what CI runs and what `AGENTS.md` points at |
 | `mise run health` | worker only: `curl` the health endpoint on `$HEALTH_PORT` |
 | `mise run stripe` | SaaS only: `stripe listen --forward-to localhost:4000/webhooks/stripe`; copy the printed `whsec_…` into `.mise.local.toml` as `STRIPE_WEBHOOK_SECRET` |
 
@@ -173,6 +178,24 @@ over `.mise.toml`). For example, when something else owns the default ports:
 HEALTH_PORT = "4022"   # the worker reads it in config/runtime.exs
 PORT = "4111"          # phx.new's runtime.exs reads it for the API
 ```
+
+In a git worktree, let `bin/worktree-env` write that file instead of copying one
+from the main checkout:
+
+```bash
+sh bin/worktree-env   # then: mise trust
+```
+
+It picks a free block of 12 consecutive ports (20000–27999, from a checksum of the
+checkout's path), probes each with `nc -z`, and writes `.mise.local.toml` with those
+ports, `AWS_ENDPOINT_URL`/`STORAGE_EMULATOR_HOST` pointing at them, a
+`COMPOSE_PROJECT_NAME` naming the checkout, and — on the SaaS stack — the SSO,
+OAuth and Dex settings that have to agree with them, plus a
+`docker/dex/config.local.yaml` derived from `docker/dex/config.yaml`. Two
+worktrees then run their compose stacks, migrations and tests at the same time
+without sharing a port or a database. It refuses to overwrite a
+`.mise.local.toml` it did not write (`--force` overrides that) and says
+`already configured` if it has already run.
 
 `DATABASE_URL` and `POOL_SIZE` are read by `MIX_ENV=prod` runs only; dev and test
 take their Postgres settings from `config/dev.exs` and `config/test.exs`.
@@ -494,7 +517,17 @@ colors and radii, so a pack restyles all of them, in light and dark.
 * `.env.example` — the same variables as `[env]`, every line `export`ed.
 * `.mise.toml` — see above.
 * `config/dev.exs`, `config/test.exs` — the repo's `port:` reads `PGPORT`.
-* `.gitignore` — gains `.env`, `docker-compose.override.yml` and `.mise.local.toml`.
+* `.gitignore` — gains `.env`, `docker-compose.override.yml`, `.mise.local.toml`
+  and `docker/dex/config.local.yaml`.
+* `bin/worktree-env` — the per-worktree port block above (with `--no-compose` there
+  is no compose file, so it is not generated).
+* `AGENTS.md` — a tinderbox map at the top (`<!-- tinderbox:map:start -->` …
+  `<!-- tinderbox:map:end -->`), above Phoenix's own guidelines: the gate, running
+  through mise, the generators, `docs/plans/` and `docs/product/taste.md`, and the
+  worktree setup/teardown. Phoenix's `mix precommit` line is replaced by
+  `mise run check`; on the SaaS stack its "write your own tailwind components"
+  line is removed, because the stack is built on daisyUI. Re-running replaces the
+  block instead of stacking a second one.
 * `config/runtime.exs` — appended, *outside* the `if config_env() == :prod` block, so
   it applies in every environment: `:ex_aws` (with the `AWS_ENDPOINT_URL` host/port
   override and `ExAws.Request.Req` as the HTTP client, which keeps hackney out),
@@ -534,7 +567,7 @@ Notes per broker:
 ## Tests
 
 ```bash
-mise run check    # format, warnings-as-errors compile, tests
+mise run check    # the gate: format, warnings-as-errors compile, deps, tests, a dev boot
 ```
 
 The generators are exercised through `Igniter.Test.test_project/1` against the
@@ -814,7 +847,8 @@ requests follow the Management API's documented shapes only), and Hydra as hoste
 Network (`HYDRA_ADMIN_TOKEN`).
 
 If something else already owns 5432, 1025 or 8025 on your machine, set `PGPORT`,
-`SMTP_PORT` or `MAILPIT_UI_PORT` in `.mise.local.toml`: compose publishes
+`SMTP_PORT` or `MAILPIT_UI_PORT` in `.mise.local.toml` — or let `sh bin/worktree-env`
+pick a whole block for the checkout: compose publishes
 `${PGPORT:-5432}:5432` and friends, and `config/dev.exs` and `config/test.exs` read
 `PGPORT`. To move the app off 4000, set `PORT` and `SSO_REDIRECT_URI` there and add
 the new `…/auth/user/sso/callback` to `redirectURIs` in `docker/dex/config.yaml`,

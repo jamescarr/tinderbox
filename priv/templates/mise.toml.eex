@@ -13,10 +13,12 @@
 elixir = "<%= @elixir %>"
 erlang = "<%= @erlang %>"
 <%= if @saas? do %># Stripe CLI for `mise run stripe` (or: brew install stripe/stripe-cli/stripe).
-# Released as a tarball holding a binary called `stripe`, hence `exe`.
-"github:stripe/stripe-cli" = { version = "latest", exe = "stripe" }
+# The github backend finds the `stripe` binary in the release tarball itself (mise
+# 2026.11 rejects the old `exe` option).
+"github:stripe/stripe-cli" = "latest"
 <% end %><%= if @fly? do %># flyctl for `mise run deploy` and the README's Fly.io runbook (or: brew install flyctl).
-"github:superfly/flyctl" = { version = "latest", exe = "flyctl" }
+# Same tarball-with-a-binary shape as the Stripe CLI: no `exe` option (mise 2026.11 rejects it).
+"github:superfly/flyctl" = "latest"
 <% end %><%= if @cmake? do %># broadway_kafka builds brod's crc32cer NIF from source, which needs CMake >= 3.16.
 cmake = "<%= @cmake %>"
 <% end %>
@@ -29,6 +31,10 @@ run = "docker compose up -d --wait"
 [tasks.down]
 description = "Stop the backing services"
 run = "docker compose down"
+
+[tasks."worktree:down"]
+description = "Stop this checkout's backing services and delete their volumes (run before removing a worktree)"
+run = "docker compose down -v --remove-orphans"
 
 <% end %>[tasks.setup]
 description = "Fetch dependencies, then create and migrate the database"
@@ -46,9 +52,9 @@ description = "Run the test suite"
 <% end %>run = "mix test"
 
 [tasks.check]
-description = "What CI should run: formatting, warnings-as-errors compile, tests"
+description = "What CI runs: formatting, warnings-as-errors compile, unused dependencies, tests, and a dev boot"
 <%= if @compose? do %>depends = ["up"]
-<% end %>run = ["mix format --check-formatted", "mix compile --warnings-as-errors", "mix test"]
+<% end %>run = ["mix format --check-formatted", "mix compile --warnings-as-errors", "mix deps.unlock --check-unused", "mix test --warnings-as-errors", "mix ash.setup --quiet", "mix run -e 'IO.puts(:boot_ok)'"]
 <%= if @worker? do %>
 [tasks.health]
 description = "Check the worker's health endpoint"

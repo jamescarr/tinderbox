@@ -14,11 +14,14 @@ defmodule Tinderbox.Gen.Compose do
 
   The compose file is rendered from `priv/templates`; `.env.example` comes from
   `Tinderbox.Env`, the same data `Tinderbox.Gen.Mise` puts in `.mise.toml`.
-  Compose publishes the host ports from the environment (`PGPORT`, and for the
-  SaaS stack `SMTP_PORT`/`MAILPIT_UI_PORT`), and `config/dev.exs` and
-  `config/test.exs` read `PGPORT` for the repo, so moving Postgres is one line in
-  `.mise.local.toml`. `.env` and `docker-compose.override.yml` are added to
-  `.gitignore`: they are the copies developers edit.
+  Every host port compose publishes is a variable with the compose default
+  (`PGPORT`, `FLOCI_PORT`, `NATS_PORT`, `DEX_PORT`, `HYDRA_PUBLIC_PORT`, …), and
+  `config/dev.exs` and `config/test.exs` read `PGPORT` for the repo, so moving
+  services is one line in `.mise.local.toml`. `bin/worktree-env` writes that file
+  for a checkout, picking a free block of 12 ports and its own compose project
+  name, so several worktrees run side by side. `.env` and
+  `docker-compose.override.yml` are added to `.gitignore`: they are the copies
+  developers edit, as is the `docker/dex/config.local.yaml` worktree-env derives.
   Called by `mix tinderbox.gen.compose`.
   """
 
@@ -62,9 +65,13 @@ defmodule Tinderbox.Gen.Compose do
       assigns
     )
     |> add_dex_config(stack, assigns, module)
+    |> Igniter.create_new_file(
+      "bin/worktree-env",
+      Gen.render_template("worktree-env.sh.eex", assigns)
+    )
     |> Igniter.create_new_file(".env.example", Env.dotenv(env))
     |> configure_repo_port(app, module, db?)
-    |> Gen.ignore([".env", "docker-compose.override.yml"])
+    |> Gen.ignore([".env", "docker-compose.override.yml", "docker/dex/config.local.yaml"])
   end
 
   # Ecto's Postgres pool defaults the port to 5432 itself (only `mix ecto.create`

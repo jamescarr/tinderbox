@@ -49,9 +49,12 @@ defmodule Tinderbox.Env do
         []
       end
 
+    # Every host port compose publishes is a variable, so a second checkout can
+    # move the whole stack with `.mise.local.toml` alone (`bin/worktree-env`).
     shared = [
-      {"Floci (AWS emulator): S3 + SQS",
+      {"Floci (AWS emulator): S3 + SQS; FLOCI_PORT is the host port compose publishes",
        [
+         {"FLOCI_PORT", "4566"},
          {"AWS_ENDPOINT_URL", "http://localhost:4566"},
          {"AWS_REGION", "us-east-1"},
          {"AWS_DEFAULT_REGION", "us-east-1"},
@@ -59,8 +62,9 @@ defmodule Tinderbox.Env do
          {"AWS_SECRET_ACCESS_KEY", "test"},
          {"S3_BUCKET", "#{app_dash}-local"}
        ]},
-      {"floci-gcp (GCP emulator): GCS + Pub/Sub",
+      {"floci-gcp (GCP emulator): GCS + Pub/Sub; FLOCI_GCP_PORT is the host port compose publishes",
        [
+         {"FLOCI_GCP_PORT", "4588"},
          {"STORAGE_EMULATOR_HOST", "http://localhost:4588"},
          {"GCP_PROJECT_ID", "floci-local"},
          {"GCS_BUCKET", "#{app_dash}-local"}
@@ -76,19 +80,33 @@ defmodule Tinderbox.Env do
         []
       end
 
-    (postgres ++ shared ++ worker ++ saas(stack, app, app_dash) ++ file_drop(stack, opts))
+    (postgres ++
+       shared ++ web(stack) ++ worker ++ saas(stack, app, app_dash) ++ file_drop(stack, opts))
     |> drop_repeated_names()
     |> validate!()
   end
+
+  # The app listens on PORT (config/runtime.exs), in dev and in production.
+  defp web(stack) when stack in ["api", "saas"] do
+    [{"Web: PORT is the port the app listens on (config/runtime.exs)", [{"PORT", "4000"}]}]
+  end
+
+  defp web(_stack), do: []
 
   # The SaaS stack's own variables. The broker is *not* consulted: the stack's
   # event bus is always NATS, and the worker's stream/consumer names (which
   # `Broker.env_vars(:nats, _)` would add) mean nothing here.
   defp saas("saas", app, app_dash) do
     [
-      {"NATS (JetStream)", [{"NATS_HOST", "localhost"}, {"NATS_PORT", "4222"}]},
-      {"SSO: Dex OIDC emulator (any OIDC issuer works: Google, Microsoft, Okta, Auth0)",
+      {"NATS (JetStream): NATS_PORT is the host port compose publishes",
        [
+         {"NATS_HOST", "localhost"},
+         {"NATS_PORT", "4222"},
+         {"NATS_MONITOR_PORT", "8222"}
+       ]},
+      {"SSO: Dex OIDC emulator (any OIDC issuer works: Google, Microsoft, Okta, Auth0); DEX_PORT is the host port compose publishes",
+       [
+         {"DEX_PORT", "5556"},
          {"SSO_BASE_URL", "http://localhost:5556/dex"},
          {"SSO_CLIENT_ID", app_dash},
          {"SSO_CLIENT_SECRET", "#{app_dash}-dev-secret"},
@@ -96,9 +114,11 @@ defmodule Tinderbox.Env do
        ]},
       {"MFA: MFA_REQUIRED=true makes everyone set up a second factor at their next sign-in; MFA_SSO=idp accepts the SSO provider's MFA (see config/runtime.exs)",
        [{"MFA_REQUIRED", "false"}, {"MFA_SSO", "local"}]},
-      {"OAuth2 API connections: Ory Hydra locally; OAUTH_PROVIDER auth0 uses the AUTH0_* values (replace in .mise.local.toml)",
+      {"OAuth2 API connections: Ory Hydra locally; OAUTH_PROVIDER auth0 uses the AUTH0_* values (replace in .mise.local.toml); HYDRA_PUBLIC_PORT and HYDRA_ADMIN_PORT are the host ports compose publishes",
        [
          {"OAUTH_PROVIDER", "hydra"},
+         {"HYDRA_PUBLIC_PORT", "4444"},
+         {"HYDRA_ADMIN_PORT", "4445"},
          {"OAUTH_ISSUER", "http://localhost:4444/"},
          {"OAUTH_AUDIENCE", "http://localhost:4000/api"},
          {"HYDRA_ADMIN_URL", "http://localhost:4445"},

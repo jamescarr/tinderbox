@@ -80,12 +80,48 @@ defmodule Tinderbox.EnvTest do
     refute "FILE_DROP_SCANNER" in names(sections(stack: "api", broker: :sqs, file_drop?: true))
   end
 
+  test "every host port docker-compose.yml publishes is a variable" do
+    # One `.mise.local.toml` (written by `bin/worktree-env`) has to be able to move
+    # the whole stack, so no published port may be a literal.
+    saas = values(sections(stack: "saas", broker: :nats, file_drop?: true))
+
+    for name <-
+          ~w(PORT PGPORT FLOCI_PORT FLOCI_GCP_PORT NATS_PORT NATS_MONITOR_PORT DEX_PORT HYDRA_PUBLIC_PORT HYDRA_ADMIN_PORT SMTP_PORT MAILPIT_UI_PORT CLAMAV_PORT) do
+      assert Map.has_key?(saas, name), "saas: #{name} is missing"
+    end
+
+    # The defaults are the ports docker-compose.yml publishes when nothing is set.
+    assert saas["PORT"] == "4000"
+    assert saas["PGPORT"] == "5432"
+    assert saas["FLOCI_PORT"] == "4566"
+    assert saas["FLOCI_GCP_PORT"] == "4588"
+    assert saas["NATS_PORT"] == "4222"
+    assert saas["NATS_MONITOR_PORT"] == "8222"
+    assert saas["DEX_PORT"] == "5556"
+    assert saas["HYDRA_PUBLIC_PORT"] == "4444"
+    assert saas["HYDRA_ADMIN_PORT"] == "4445"
+    assert saas["CLAMAV_PORT"] == "3310"
+
+    # The emulators come with every stack; the api and saas app listen on PORT,
+    # the worker on HEALTH_PORT.
+    for stack <- @stacks do
+      names = names(sections(stack: stack, broker: :sqs))
+      assert "FLOCI_PORT" in names, "#{stack}: FLOCI_PORT is missing"
+      assert "FLOCI_GCP_PORT" in names, "#{stack}: FLOCI_GCP_PORT is missing"
+    end
+
+    assert "PORT" in names(sections(stack: "api", broker: :sqs))
+    assert "PORT" in names(sections(stack: "saas", broker: :nats))
+    refute "PORT" in names(sections(stack: "worker", broker: :sqs))
+    assert "HEALTH_PORT" in names(sections(stack: "worker", broker: :sqs))
+
+    # Dex and Hydra are the SaaS stack's services.
+    refute "DEX_PORT" in names(sections(stack: "api", broker: :sqs))
+    refute "HYDRA_PUBLIC_PORT" in names(sections(stack: "worker", broker: :nats))
+  end
+
   test "the saas SSO block points at the compose Dex, named after the app" do
-    env =
-      for {_title, vars} <- sections(stack: "saas", broker: :nats),
-          {name, value} <- vars,
-          into: %{},
-          do: {name, value}
+    env = values(sections(stack: "saas", broker: :nats))
 
     assert env["SSO_BASE_URL"] == "http://localhost:5556/dex"
     assert env["SSO_CLIENT_ID"] == "demo-worker"
@@ -166,6 +202,10 @@ defmodule Tinderbox.EnvTest do
     assert_raise ArgumentError, ~r/needs quoting/, fn ->
       Env.validate!([{"title", [{"BAD", ~s(say "hi")}]}])
     end
+  end
+
+  defp values(sections) do
+    for {_title, vars} <- sections, {name, value} <- vars, into: %{}, do: {name, value}
   end
 
   defp sections(opts \\ []) do

@@ -8,14 +8,19 @@ defmodule Tinderbox.Gen.Mise do
     dependency builds a NIF from source, the Stripe CLI for the SaaS stack, and
     flyctl when it deploys to Fly.io (`deploy: "fly"`, its default).
   * `[env]` — the same values as `.env.example`; both come from `Tinderbox.Env`.
-  * `[tasks.*]` — `up`, `down`, `setup`, `dev`, `test`, `check`, `health` for
-    the worker, `stripe` and `deploy` (Fly.io) for the SaaS stack. They are
+  * `[tasks.*]` — `up`, `down`, `worktree:down`, `setup`, `dev`, `test`, `check`,
+    `health` for the worker, `stripe` and `deploy` (Fly.io) for the SaaS stack. They are
     inline tables rather than `.mise/tasks/*` files because a
     file task has to be executable, which the files an igniter writes are not,
     and mise does not list a non-executable file task until it is first run.
 
   `.mise.local.toml` is added to `.gitignore`: it is where machine-specific
-  overrides go, and mise layers it over `.mise.toml`.
+  overrides go, and mise layers it over `.mise.toml` (`bin/worktree-env` writes
+  it, with a port block and compose project of the checkout's own).
+
+  The task also writes the agent map at the top of `AGENTS.md`
+  (`Tinderbox.Gen.Agents`), and `[tasks.check]` is the gate `AGENTS.md` points
+  at.
 
   Called by `mix tinderbox.gen.mise`.
   """
@@ -23,6 +28,7 @@ defmodule Tinderbox.Gen.Mise do
   alias Tinderbox.Broker
   alias Tinderbox.Env
   alias Tinderbox.Gen
+  alias Tinderbox.Gen.Agents
   alias Tinderbox.Toolchain
 
   @spec apply(Igniter.t(), Keyword.t()) :: Igniter.t()
@@ -73,10 +79,19 @@ defmodule Tinderbox.Gen.Mise do
       |> String.trim_trailing()
       |> Kernel.<>("\n")
 
-    igniter
-    |> Igniter.create_new_file(".mise.toml", content)
-    |> Gen.ignore([".mise.local.toml"])
-    |> add_fallback_notice(source, vm, pins)
+    igniter =
+      igniter
+      |> Igniter.create_new_file(".mise.toml", content)
+      |> Gen.ignore([".mise.local.toml"])
+      |> add_fallback_notice(source, vm, pins)
+
+    Agents.apply(igniter,
+      app: app,
+      module: Igniter.Project.Module.module_name_prefix(igniter),
+      stack: stack,
+      compose?: compose?,
+      saas?: saas?
+    )
   end
 
   defp add_fallback_notice(igniter, :running, _vm, _pins), do: igniter
