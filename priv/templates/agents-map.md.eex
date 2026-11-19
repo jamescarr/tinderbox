@@ -1,0 +1,18 @@
+<!-- tinderbox:map:start -->
+# <%= inspect(@module) %> agent map
+
+Read this block first. The framework guidelines below it are reference.
+
+- **Gate:** `mise run check` is the definition of done and is what CI runs. `mix precommit` is not the gate.
+- **Run through mise:** `mise run <task>` or `mise exec -- mix <task>`, so ports and env match the compose stack.
+<%= if @saas? do %>- **Product definition:** `concept.exs`; apply changes with `mix <%= @app %>.gen.concept`.
+- **Generators:** `mix <%= @app %>.gen.domain`, `.gen.resource`, `.gen.live`; templates in `priv/templates/<%= @app %>.gen/`.
+<% end %>- **Plans:** checklists for `/plan-loop` live in `docs/plans/`.
+- **Product taste:** `docs/product/taste.md`. Read it before UI or copy work; if it is missing, say so instead of guessing.
+<%= if @compose? do %>
+## Worktrees
+
+- Setup, once per new worktree: `sh bin/worktree-env && mise trust`
+- Teardown, before removing a worktree: `mise run worktree:down`
+- Checks are worktree-isolated: yes
+<% end %><!-- tinderbox:map:end -->

@@ -11,6 +11,20 @@ defmodule Tinderbox.Gen.MiseTest do
   @newer %{elixir: "1.21.0", otp_release: "30", otp_version: "30.0"}
   @dev %{elixir: "1.21.0-dev", otp_release: "30", otp_version: nil}
 
+  # phx.new's AGENTS.md, cut down to the lines the agent map rewrites.
+  @stock_agents """
+  This is a web application written using the Phoenix web framework.
+
+  ## Project guidelines
+
+  - Use `mix precommit` alias when you are done with all changes and fix any pending issues
+  - Use the already included and available `:req` (`Req`) library for HTTP requests
+
+  ### Phoenix v1.8 guidelines
+
+  - **Always** manually write your own tailwind-based components instead of using daisyUI for a unique, world-class design
+  """
+
   test "creates .mise.toml" do
     assert_creates(mise(), ".mise.toml")
   end
@@ -269,6 +283,88 @@ defmodule Tinderbox.Gen.MiseTest do
     assert_raise Mix.Error, ~r/Unknown --broker fog/, fn ->
       Mise.apply(test_project(), stack: "worker", broker: "fog")
     end
+  end
+
+  test "writes AGENTS.md when the project has none" do
+    agents = content(mise(), "AGENTS.md")
+
+    assert agents =~ "<!-- tinderbox:map:start -->"
+    assert agents =~ "<!-- tinderbox:map:end -->"
+    assert String.ends_with?(agents, "<!-- tinderbox:map:end -->\n")
+    assert agents =~ "# Test agent map"
+    assert agents =~ "`mise run check` is the definition of done"
+    assert agents =~ "Checks are worktree-isolated: yes"
+    assert agents =~ "sh bin/worktree-env && mise trust"
+    # The SaaS blocks are the SaaS stack's.
+    refute agents =~ "concept.exs"
+    refute agents =~ "gen.domain"
+  end
+
+  test "the saas map names the product definition and the generators" do
+    agents = content(mise(stack: "saas", broker: :nats), "AGENTS.md")
+
+    assert agents =~ "apply changes with `mix test.gen.concept`"
+    assert agents =~ "`mix test.gen.domain`, `.gen.resource`, `.gen.live`"
+  end
+
+  test "--no-compose leaves the Worktrees section out of the map" do
+    agents = content(mise(compose: false), "AGENTS.md")
+
+    refute agents =~ "## Worktrees"
+    refute agents =~ "Checks are worktree-isolated: yes"
+    assert agents =~ "<!-- tinderbox:map:end -->"
+  end
+
+  test "with a stock AGENTS.md the map goes first, and the contradicting lines are fixed" do
+    igniter =
+      Mise.apply(test_project(files: %{"AGENTS.md" => @stock_agents}),
+        stack: "saas",
+        broker: :nats
+      )
+
+    agents = content(igniter, "AGENTS.md")
+
+    assert String.starts_with?(agents, "<!-- tinderbox:map:start -->")
+    assert agents =~ "This is a web application written using the Phoenix web framework."
+    assert agents =~ "it is the gate CI runs"
+    refute agents =~ "`mix precommit` alias"
+    refute agents =~ "manually write your own tailwind-based components"
+    refute Enum.any?(igniter.notices, &(&1 =~ "AGENTS.md has no stock line"))
+  end
+
+  test "the api stack keeps Phoenix's daisyUI line, which the saas stack removes" do
+    api =
+      content(
+        Mise.apply(test_project(files: %{"AGENTS.md" => @stock_agents}), stack: "api"),
+        "AGENTS.md"
+      )
+
+    assert api =~ "manually write your own tailwind-based components"
+    assert api =~ "it is the gate CI runs"
+    refute api =~ "concept.exs"
+  end
+
+  test "applying the generator twice leaves one map block" do
+    igniter = Mise.apply(test_project(files: %{"AGENTS.md" => @stock_agents}), stack: "saas")
+    agents = content(Mise.apply(igniter, stack: "saas"), "AGENTS.md")
+
+    assert length(Regex.scan(~r/<!-- tinderbox:map:start -->/, agents)) == 1
+    assert length(Regex.scan(~r/<!-- tinderbox:map:end -->/, agents)) == 1
+    # The map's own mention is the only one left (`grep -c "mix precommit"` = 1).
+    assert length(Regex.scan(~r/mix precommit/, agents)) == 1
+  end
+
+  test "a stock line it cannot find is reported, and the rest is still written" do
+    igniter =
+      Mise.apply(test_project(files: %{"AGENTS.md" => "# Custom\n\nNo stock lines here.\n"}),
+        stack: "saas"
+      )
+
+    agents = content(igniter, "AGENTS.md")
+
+    assert String.starts_with?(agents, "<!-- tinderbox:map:start -->")
+    assert agents =~ "No stock lines here."
+    assert_has_notice(igniter, &(&1 =~ "AGENTS.md has no stock line"))
   end
 
   defp mise(opts \\ []), do: Mise.apply(test_project(), opts)
