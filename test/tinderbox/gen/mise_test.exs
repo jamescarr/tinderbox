@@ -128,7 +128,8 @@ defmodule Tinderbox.Gen.MiseTest do
     toml = content(mise(stack: "saas", broker: :nats))
 
     assert toml =~ ~s(run = "mix phx.server")
-    assert toml =~ ~s("github:stripe/stripe-cli" = { version = "latest", exe = "stripe" })
+    assert toml =~ ~s("github:stripe/stripe-cli" = "latest")
+    assert toml =~ "The github backend finds the `stripe` binary in the release tarball itself"
 
     assert task(toml, "stripe") =~
              ~s(run = "stripe listen --forward-to localhost:4000/webhooks/stripe")
@@ -157,7 +158,7 @@ defmodule Tinderbox.Gen.MiseTest do
   test "saas deploys to Fly.io by default: flyctl and a deploy task" do
     toml = content(mise(stack: "saas", broker: :nats))
 
-    assert toml =~ ~s("github:superfly/flyctl" = { version = "latest", exe = "flyctl" })
+    assert toml =~ ~s("github:superfly/flyctl" = "latest")
     assert task(toml, "deploy") =~ ~s(run = "flyctl deploy")
   end
 
@@ -197,9 +198,38 @@ defmodule Tinderbox.Gen.MiseTest do
   test "check is what CI should run" do
     check = task(content(mise()), "check")
 
-    assert check =~ "mix format --check-formatted"
-    assert check =~ "mix compile --warnings-as-errors"
-    assert check =~ "mix test"
+    for command <- [
+          "mix format --check-formatted",
+          "mix compile --warnings-as-errors",
+          "mix deps.unlock --check-unused",
+          "mix test --warnings-as-errors",
+          "mix ash.setup --quiet",
+          "mix run -e 'IO.puts(:boot_ok)'"
+        ] do
+      assert check =~ command, "check does not run #{command}"
+    end
+
+    # The last two boot the app in dev against the compose stack, which is where
+    # boot-time configuration errors live.
+    assert check =~ ~s(depends = ["up"])
+    refute task(content(mise(compose: false)), "check") =~ "depends ="
+  end
+
+  test "a worktree can be torn down from the task list, volumes included" do
+    toml = content(mise())
+
+    assert task(toml, ~s("worktree:down")) =~
+             ~s(run = "docker compose down -v --remove-orphans")
+
+    refute content(mise(compose: false)) =~ "worktree:down"
+  end
+
+  test "no tool pin uses the `exe` option, which current mise rejects" do
+    for opts <- [[], [stack: "worker", broker: :kafka], [stack: "saas", broker: :nats]] do
+      toml = content(mise(opts))
+
+      refute toml =~ "exe = ", "the tool pin for #{inspect(opts)} still uses exe ="
+    end
   end
 
   test "--no-compose leaves out up/down and every dependency on them" do
