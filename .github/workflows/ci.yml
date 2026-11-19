@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v4
+      # mise's Elixir ships without Hex, and `mise run check` does not fetch deps.
+      - run: mix local.hex --force && mix local.rebar --force
+      - run: mix deps.get
+      # What a generated project runs, minus the compose services: formatting, a
+      # warnings-as-errors compile and the tests.
+      - run: mise run check
