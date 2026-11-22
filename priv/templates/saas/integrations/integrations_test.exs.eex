@@ -83,6 +83,67 @@ defmodule <%= inspect(@prefix) %>.IntegrationsTest do
     def sync(_source), do: {:error, :api_down}
   end
 
+  # Set up on a page of its own, like Plaid: never through the generic form.
+  defmodule Elsewhere do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_elsewhere"
+    @impl true
+    def name, do: "Elsewhere"
+    @impl true
+    def description, do: "A test connector with a setup page"
+    @impl true
+    def transports, do: [:api]
+    @impl true
+    def setup_path, do: "/integrations/elsewhere"
+
+    @impl true
+    def sync(_source), do: {:ok, [], %{}}
+  end
+
+  # Revokes its token at the provider, and tells the test with which credentials.
+  defmodule Revocable do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_revocable"
+    @impl true
+    def name, do: "Revocable"
+    @impl true
+    def description, do: "A test connector that disconnects"
+    @impl true
+    def transports, do: [:api]
+
+    @impl true
+    def sync(_source), do: {:ok, [], %{}}
+
+    @impl true
+    def disconnect(source) do
+      send(self(), {:disconnected, source.credentials})
+      :ok
+    end
+  end
+
+  defmodule Stuck do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_stuck"
+    @impl true
+    def name, do: "Stuck"
+    @impl true
+    def description, do: "A test connector whose provider cannot disconnect"
+    @impl true
+    def transports, do: [:api]
+
+    @impl true
+    def sync(_source), do: {:ok, [], %{}}
+
+    @impl true
+    def disconnect(_source), do: {:error, :provider_down}
+  end
+
   # What this file depends on, whatever the application configured.
   setup do
     integrations = Application.get_env(<%= inspect(@app) %>, Integrations, [])
@@ -91,7 +152,9 @@ defmodule <%= inspect(@prefix) %>.IntegrationsTest do
     Application.put_env(
       <%= inspect(@app) %>,
       Integrations,
-      Keyword.merge(integrations, connectors: [Webhook, Notes, Puller, Down])
+      Keyword.merge(integrations,
+        connectors: [Webhook, Notes, Puller, Down, Elsewhere, Revocable, Stuck]
+      )
     )
 
     Application.put_env(
@@ -308,6 +371,47 @@ defmodule <%= inspect(@prefix) %>.IntegrationsTest do
              )
 
     assert Exception.message(error) =~ "is not a known connector"
+  end
+
+  test "a connector set up on its own page refuses a source without credentials", %{
+    owner: owner,
+    organization: organization
+  } do
+    assert {:error, %Ash.Error.Invalid{} = error} =
+             Ash.create(Source, %{organization_id: organization.id, connector: "test_elsewhere"},
+               actor: owner
+             )
+
+    assert Exception.message(error) =~ "is set up at /integrations/elsewhere"
+
+    assert {:ok, _source} =
+             Ash.create(
+               Source,
+               %{
+                 organization_id: organization.id,
+                 connector: "test_elsewhere",
+                 credentials: %{"token" => "t"}
+               },
+               actor: owner
+             )
+  end
+
+  test "deleting a source lets its connector disconnect first, and a provider error keeps it", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = source(organization, owner, "test_revocable", %{credentials: %{"token" => "t"}})
+
+    assert Ash.destroy(source, actor: owner) == :ok
+    assert_received {:disconnected, %{"token" => "t"}}
+    assert {:error, _not_found} = Ash.get(Source, source.id, authorize?: false)
+
+    stuck = source(organization, owner, "test_stuck")
+
+    assert {:error, error} = Ash.destroy(stuck, actor: owner)
+    assert Exception.message(error) =~ "could not disconnect"
+    assert Exception.message(error) =~ "provider_down"
+    assert {:ok, _source} = Ash.get(Source, stuck.id, authorize?: false)
   end
 
   test "somebody from another organization reads none of its sources", %{

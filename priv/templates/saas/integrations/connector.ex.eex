@@ -12,6 +12,16 @@ records. Add a connector to `config <%= inspect(@app) %>, <%= inspect(@integrati
     (`source.credentials` is loaded; `source.cursor` is what the last sync
     returned).
 
+A connector whose credentials come from a browser handshake (Plaid Link, OAuth)
+implements `setup_path/0`, the page where a source of it is set up: the form at
+`/integrations` leaves it out and links there, and a source of it is refused
+without credentials. A connector that holds something elsewhere (an access
+token, a provider's Item) implements `disconnect/1`: it is called, with the
+credentials loaded, before the source is deleted, and an error stops the delete.
+`handle_webhook/2` may be implemented without `:webhook` in `transports/0`, for a
+provider's own notifications that the connector verifies itself: no bearer token
+is issued and no token button is shown.
+
 Every callback returns records: `type` and `external_id` identify one within its
 source (a record is stored once; deliver it again and it is a duplicate),
 `data` is what the application's `<%= inspect(@integrations) %>.Handler` reads. A record
@@ -52,7 +62,18 @@ is never updated in place: a change to something already delivered needs a new
 
 @callback sync(source :: map()) :: {:ok, [entry()], cursor :: map()} | {:error, term()}
 
-@optional_callbacks accepts?: 2, parse_file: 3, handle_webhook: 2, sync: 1
+@doc "Where a source of this connector is set up when the generic form cannot (see the module doc)."
+@callback setup_path() :: String.t()
+
+@doc "Revokes what the connector holds elsewhere for `source` (its credentials are loaded) before the source is deleted."
+@callback disconnect(source :: map()) :: :ok | {:error, term()}
+
+@optional_callbacks accepts?: 2,
+                    parse_file: 3,
+                    handle_webhook: 2,
+                    sync: 1,
+                    setup_path: 0,
+                    disconnect: 1
 
 @doc """
 Whether the request carries `source`'s webhook token as

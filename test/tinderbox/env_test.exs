@@ -7,11 +7,14 @@ defmodule Tinderbox.EnvTest do
   @stacks ["api", "worker", "saas"]
 
   test "no variable is defined twice, for every stack, broker and db choice" do
-    for stack <- @stacks, broker <- @brokers, db? <- [true, false] do
-      names = names(sections(stack: stack, broker: broker, db?: db?))
+    for stack <- @stacks, broker <- @brokers, db? <- [true, false], blocks? <- [false, true] do
+      names =
+        names(
+          sections(stack: stack, broker: broker, db?: db?, file_drop?: blocks?, plaid?: blocks?)
+        )
 
       assert names == Enum.uniq(names),
-             "#{stack}/#{broker}/db=#{db?} repeats #{inspect(names -- Enum.uniq(names))}"
+             "#{stack}/#{broker}/db=#{db?}/blocks=#{blocks?} repeats #{inspect(names -- Enum.uniq(names))}"
     end
   end
 
@@ -78,6 +81,21 @@ defmodule Tinderbox.EnvTest do
     assert {"FILE_DROP_SCANNER", "none"} in Enum.flat_map(saas, &elem(&1, 1))
     refute "FILE_DROP_SCANNER" in names(sections(stack: "saas", broker: :nats))
     refute "FILE_DROP_SCANNER" in names(sections(stack: "api", broker: :sqs, file_drop?: true))
+  end
+
+  test "the Plaid keys come with :plaid?, for the saas stack only" do
+    saas = sections(stack: "saas", broker: :nats, plaid?: true)
+    names = names(saas)
+
+    for name <- ~w(PLAID_ENV PLAID_CLIENT_ID PLAID_SECRET PLAID_COUNTRY_CODES) do
+      assert name in names
+    end
+
+    values = Enum.flat_map(saas, &elem(&1, 1))
+    assert {"PLAID_ENV", "sandbox"} in values
+    assert {"PLAID_CLIENT_ID", "replace_me"} in values
+    refute "PLAID_ENV" in names(sections(stack: "saas", broker: :nats))
+    refute "PLAID_ENV" in names(sections(stack: "api", broker: :sqs, plaid?: true))
   end
 
   test "the saas SSO block points at the compose Dex, named after the app" do

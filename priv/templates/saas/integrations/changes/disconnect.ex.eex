@@ -1,0 +1,45 @@
+@moduledoc """
+Before a source is deleted, its connector's `disconnect/1` (when it has one) revokes
+what it holds elsewhere: an access token, a provider's Item. It runs before the
+transaction opens, with the credentials loaded. An error stops the delete, so nothing
+is left orphaned: disable the source instead until the provider answers.
+"""
+
+use Ash.Resource.Change
+
+alias <%= inspect(@integrations) %>
+
+@impl true
+def change(changeset, _opts, _context) do
+  Ash.Changeset.before_transaction(changeset, &disconnect/1)
+end
+
+defp disconnect(changeset) do
+  source = changeset.data
+
+  with {:ok, connector} <- Integrations.connector(source.connector),
+       true <- Integrations.exports?(connector, :disconnect, 1) do
+    case Ash.load(source, :credentials, authorize?: false) do
+      {:ok, loaded} ->
+        case connector.disconnect(loaded) do
+          :ok ->
+            changeset
+
+          {:error, reason} ->
+            Ash.Changeset.add_error(
+              changeset,
+              "could not disconnect: #{<%= inspect(@file_drop) %>.error_text(reason)}"
+            )
+        end
+
+      {:error, error} ->
+        Ash.Changeset.add_error(
+          changeset,
+          "could not load the credentials: #{<%= inspect(@file_drop) %>.error_text(error)}"
+        )
+    end
+  else
+    # No connector in the catalog, or one with nothing to revoke: delete as before.
+    _nothing_to_do -> changeset
+  end
+end

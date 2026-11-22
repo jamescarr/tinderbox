@@ -1,0 +1,121 @@
+@moduledoc """
+Whether a webhook comes from Plaid. Its `plaid-verification` header is an ES256 JWT
+whose header names the key (`kid`) and whose claims are `iat` (refused when more
+than five minutes away) and `request_body_sha256` (the hex sha256 of the raw body).
+The key comes from Plaid's `/webhook_verification_key/get` and is cached in
+`:persistent_term`, no process involved; a key Plaid has expired is refused, and
+an unknown key id is asked for at most once a minute.
+"""
+
+require Logger
+
+alias <%= inspect(@plaid) %>
+
+@max_age 300
+@refetch_after 60
+
+@doc "`:ok` when `raw_body` was signed by Plaid, else why not."
+@spec verify([{String.t(), String.t()}], binary()) :: :ok | {:error, atom()}
+def verify(headers, raw_body) do
+  with {:ok, token} <- header(headers),
+       {:ok, kid} <- peek_kid(token),
+       {:ok, jwk} <- key(kid),
+       {:ok, claims} <- check_signature(jwk, token),
+       :ok <- fresh(claims["iat"]) do
+    body_matches(claims["request_body_sha256"], raw_body)
+  end
+end
+
+@doc "The lowercase hex sha256 of `body`, as Plaid puts it in `request_body_sha256`."
+@spec sha256_hex(binary()) :: String.t()
+def sha256_hex(body), do: :crypto.hash(:sha256, body) |> Base.encode16(case: :lower)
+
+defp header(headers) do
+  case List.keyfind(headers, "plaid-verification", 0) do
+    {_name, token} when token != "" -> {:ok, token}
+    _missing -> {:error, :unsigned}
+  end
+end
+
+defp peek_kid(token) do
+  {_meta, header} = token |> JOSE.JWT.peek_protected() |> JOSE.JWS.to_map()
+
+  case header do
+    %{"alg" => "ES256", "kid" => kid} when is_binary(kid) -> {:ok, kid}
+    _other -> {:error, :invalid_algorithm}
+  end
+rescue
+  _error -> {:error, :malformed}
+end
+
+defp check_signature(jwk, token) do
+  case JOSE.JWT.verify_strict(jwk, ["ES256"], token) do
+    {true, jwt, _jws} ->
+      {_meta, claims} = JOSE.JWT.to_map(jwt)
+      {:ok, claims}
+
+    _invalid ->
+      {:error, :invalid_signature}
+  end
+rescue
+  _error -> {:error, :invalid_signature}
+end
+
+defp fresh(iat) when is_integer(iat) do
+  if abs(System.os_time(:second) - iat) <= @max_age, do: :ok, else: {:error, :stale}
+end
+
+defp fresh(_iat), do: {:error, :stale}
+
+defp body_matches(claim, raw_body) when is_binary(claim) do
+  if Plug.Crypto.secure_compare(sha256_hex(raw_body), claim),
+    do: :ok,
+    else: {:error, :body_mismatch}
+end
+
+defp body_matches(_claim, _raw_body), do: {:error, :body_mismatch}
+
+# -- keys -------------------------------------------------------------------
+
+defp key(kid) do
+  case :persistent_term.get({__MODULE__, kid}, nil) do
+    nil -> fetch(kid)
+    jwk -> {:ok, jwk}
+  end
+end
+
+# Any key id is asked for at most once a minute: a forged header cannot make this
+# call Plaid on every request.
+defp fetch(kid) do
+  if recently_fetched?() do
+    {:error, :unknown_key}
+  else
+    :persistent_term.put({__MODULE__, :fetched_at}, now())
+
+    case Plaid.Client.post("/webhook_verification_key/get", %{"key_id" => kid}) do
+      {:ok, %{"key" => %{"expired_at" => nil} = key}} ->
+        jwk = key |> Map.drop(["created_at", "expired_at"]) |> JOSE.JWK.from_map()
+        :persistent_term.put({__MODULE__, kid}, jwk)
+        {:ok, jwk}
+
+      {:ok, %{"key" => %{}}} ->
+        {:error, :expired_key}
+
+      {:ok, _other} ->
+        {:error, :unknown_key}
+
+      {:error, error} ->
+        Logger.warning("could not fetch Plaid's webhook key #{kid}: #{Exception.message(error)}")
+        {:error, :unknown_key}
+    end
+  end
+end
+
+defp recently_fetched? do
+  case :persistent_term.get({__MODULE__, :fetched_at}, nil) do
+    nil -> false
+    fetched_at -> now() - fetched_at < @refetch_after
+  end
+end
+
+defp now, do: System.monotonic_time(:second)

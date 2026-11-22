@@ -159,8 +159,9 @@ end
 @doc """
 A webhook delivery for `source` (what `<%= inspect(@web) %>.Plugs.IntegrationWebhook`
 calls): the connector's `handle_webhook/2`, then `ingest/2` of what it returned.
-`{:error, :not_found}` when the source's connector is not in the catalog or
-takes no webhooks.
+No records (a provider's notification the connector acted on itself) leaves the
+source as it is. `{:error, :not_found}` when the source's connector is not in the
+catalog or takes no webhooks.
 """
 @spec deliver(Source.t(), %{
         headers: [{String.t(), String.t()}],
@@ -173,6 +174,8 @@ takes no webhooks.
 def deliver(source, payload) do
   with {:ok, connector} <- webhook_connector(source) do
     case connector.handle_webhook(source, payload) do
+      # Not a delivery: `:touch` would mark the source synced just now.
+      {:ok, []} -> {:ok, %{created: 0, duplicates: 0}}
       {:ok, records} -> ingest(source, records)
       other -> other
     end

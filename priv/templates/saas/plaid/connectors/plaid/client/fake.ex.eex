@@ -1,0 +1,180 @@
+@moduledoc """
+The Plaid client of the tests (`config/runtime.exs` picks it in `:test`): a pure
+function of what it is sent, so nothing reaches plaid.com. Every call also sends
+`{:plaid, path, body}` to the calling process, for a test to assert on.
+
+What it answers, by the token it is given:
+
+  * `public-sandbox-<x>` exchanges for `access-sandbox-<x>` and `item-<x>`;
+    `public-sandbox-bad` is refused (`INVALID_PUBLIC_TOKEN`),
+  * `/transactions/sync` from no cursor: two pages (three transactions added, one
+    modified, one removed) ending at cursor `fake-2`, then nothing new;
+    `access-sandbox-login-required` fails with `ITEM_LOGIN_REQUIRED`,
+  * `/item/remove`: `access-sandbox-stuck` fails (`API_ERROR`),
+    `access-sandbox-gone` is already removed (`ITEM_NOT_FOUND`).
+
+`sign_webhook/2` signs a webhook body the way Plaid does, with a key pair this
+module makes once and serves as key `fake-kid` from `/webhook_verification_key/get`.
+"""
+
+@behaviour <%= inspect(@plaid) %>.Client
+
+alias <%= inspect(@plaid) %>.Error
+alias <%= inspect(@plaid) %>.Webhook
+
+@checking %{
+  "account_id" => "acc-1",
+  "name" => "Plaid Checking",
+  "official_name" => "Plaid Gold Standard 0% Interest Checking",
+  "mask" => "0000",
+  "type" => "depository",
+  "subtype" => "checking",
+  "balances" => %{"available" => 100.0, "current" => 110.0, "iso_currency_code" => "USD"}
+}
+
+@impl true
+def post(path, body) do
+  send(self(), {:plaid, path, body})
+  answer(path, body)
+end
+
+defp answer("/link/token/create", _body),
+  do: {:ok, %{"link_token" => "link-sandbox-fake", "expiration" => "2030-01-01T00:00:00Z"}}
+
+defp answer("/item/public_token/exchange", %{"public_token" => "public-sandbox-bad"}),
+  do: invalid_public_token()
+
+defp answer("/item/public_token/exchange", %{"public_token" => "public-sandbox-" <> suffix}),
+  do: {:ok, %{"access_token" => "access-sandbox-" <> suffix, "item_id" => "item-" <> suffix}}
+
+defp answer("/item/public_token/exchange", _body), do: invalid_public_token()
+
+defp answer("/item/webhook/update", body),
+  do: {:ok, %{"item" => %{"webhook" => body["webhook"]}}}
+
+defp answer("/accounts/get", _body), do: {:ok, %{"accounts" => [@checking]}}
+
+defp answer("/transactions/sync", %{"access_token" => "access-sandbox-login-required"}) do
+  {:error,
+   %Error{code: "ITEM_LOGIN_REQUIRED", message: "the login details of this item have changed"}}
+end
+
+defp answer("/transactions/sync", body), do: {:ok, sync_page(body["cursor"])}
+
+defp answer("/item/remove", %{"access_token" => "access-sandbox-stuck"}),
+  do: {:error, %Error{code: "API_ERROR", message: "Plaid is having trouble"}}
+
+defp answer("/item/remove", %{"access_token" => "access-sandbox-gone"}),
+  do: {:error, %Error{code: "ITEM_NOT_FOUND", message: "the item was already removed"}}
+
+defp answer("/item/remove", _body), do: {:ok, %{"request_id" => "fake"}}
+
+defp answer("/webhook_verification_key/get", %{"key_id" => "fake-kid"}),
+  do: {:ok, %{"key" => public_webhook_key()}}
+
+defp answer("/webhook_verification_key/get", _body),
+  do: {:error, %Error{code: "INVALID_INPUT", message: "unknown key"}}
+
+defp answer(path, _body),
+  do: {:error, %Error{code: "INVALID_REQUEST", message: "the fake client does not know #{path}"}}
+
+defp invalid_public_token,
+  do: {:error, %Error{code: "INVALID_PUBLIC_TOKEN", message: "the public token is invalid"}}
+
+defp sync_page(cursor) when cursor in [nil, ""] do
+  page(
+    [tx("tx-1", "2026-01-05", 12.5, "Coffee"), tx("tx-2", "2026-01-06", 40.0, "Groceries")],
+    [],
+    [],
+    true,
+    "fake-1"
+  )
+end
+
+defp sync_page("fake-1") do
+  page(
+    [tx("tx-3", "2026-01-07", 9.99, "Music") |> Map.put("datetime", "2026-01-07T10:00:00Z")],
+    [tx("tx-1", "2026-01-05", 13.0, "Coffee")],
+    [%{"transaction_id" => "tx-2", "account_id" => "acc-1"}],
+    false,
+    "fake-2"
+  )
+end
+
+defp sync_page(cursor), do: page([], [], [], false, cursor)
+
+defp page(added, modified, removed, has_more, next_cursor) do
+  %{
+    "added" => added,
+    "modified" => modified,
+    "removed" => removed,
+    "has_more" => has_more,
+    "next_cursor" => next_cursor,
+    "accounts" => [@checking],
+    "transactions_update_status" => "HISTORICAL_UPDATE_COMPLETE"
+  }
+end
+
+defp tx(id, date, amount, name) do
+  %{
+    "transaction_id" => id,
+    "account_id" => "acc-1",
+    "date" => date,
+    "amount" => amount,
+    "name" => name,
+    "merchant_name" => name,
+    "iso_currency_code" => "USD",
+    "pending" => false,
+    "datetime" => nil,
+    "authorized_datetime" => nil,
+    "payment_channel" => "in store",
+    "personal_finance_category" => %{"primary" => "FOOD_AND_DRINK"}
+  }
+end
+
+# -- webhook signing --------------------------------------------------------------
+
+@doc "The ES256 key pair the fake signs webhooks with, made once per VM."
+@spec webhook_key() :: %JOSE.JWK{}
+def webhook_key do
+  case :persistent_term.get({__MODULE__, :webhook_key}, nil) do
+    nil ->
+      key = JOSE.JWK.generate_key({:ec, "P-256"})
+      :persistent_term.put({__MODULE__, :webhook_key}, key)
+      key
+
+    key ->
+      key
+  end
+end
+
+@doc "The public half of `webhook_key/0`, as `/webhook_verification_key/get` returns it."
+@spec public_webhook_key() :: map()
+def public_webhook_key do
+  {_meta, key} = webhook_key() |> JOSE.JWK.to_public_map()
+
+  Map.merge(key, %{
+    "kid" => "fake-kid",
+    "alg" => "ES256",
+    "use" => "sig",
+    "created_at" => 1_700_000_000,
+    "expired_at" => nil
+  })
+end
+
+@doc """
+The `plaid-verification` header Plaid would send with `raw_body`: an ES256 JWT of
+its sha256, issued now. `kid:` and `iat:` override the key id and the issue time.
+"""
+@spec sign_webhook(binary(), keyword()) :: [{String.t(), String.t()}]
+def sign_webhook(raw_body, opts \\ []) do
+  header = %{"alg" => "ES256", "kid" => Keyword.get(opts, :kid, "fake-kid")}
+
+  claims = %{
+    "iat" => Keyword.get(opts, :iat, System.os_time(:second)),
+    "request_body_sha256" => Webhook.sha256_hex(raw_body)
+  }
+
+  {_meta, jwt} = webhook_key() |> JOSE.JWT.sign(header, claims) |> JOSE.JWS.compact()
+  [{"plaid-verification", jwt}]
+end

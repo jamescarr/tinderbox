@@ -31,6 +31,7 @@ defmodule Tinderbox.Gen.Saas do
   | `#{inspect(__MODULE__)}.Mfa` | two-factor authentication (TOTP, or the SSO provider's MFA), `/settings/security`, `/admin/security` |
   | `#{inspect(__MODULE__)}.FileDrop` | opt-in (`--file-drop`, implied by `--integrations`): files dropped at `/drop`, sniffed, deduplicated, scanned (ClamAV) and handed to a handler |
   | `#{inspect(__MODULE__)}.Integrations` | opt-in (`--integrations`): connectors (files, webhooks, scheduled pulls), sources, the record inbox, `/integrations` |
+  | `#{inspect(__MODULE__)}.Plaid` | opt-in (`--plaid`, brings `--integrations`): the Plaid connector, Link at `/integrations/plaid`, transaction sync, Plaid webhooks |
   | `#{inspect(__MODULE__)}.Ops` | health, PromEx, OpenTelemetry, mail, release, CI |
   | `#{inspect(__MODULE__)}.Generators` | the project's own generators: `mix <app>.gen.domain`, `.gen.resource`, `.gen.live`, `.gen.concept` |
   | `#{inspect(__MODULE__)}.Deploy` | Fly.io (`--deploy fly`, the default): `fly.toml`, the NATS app, `mise run deploy` |
@@ -57,6 +58,7 @@ defmodule Tinderbox.Gen.Saas do
   alias Tinderbox.Gen.Saas.Mfa
   alias Tinderbox.Gen.Saas.Notifications
   alias Tinderbox.Gen.Saas.Ops
+  alias Tinderbox.Gen.Saas.Plaid
   alias Tinderbox.Gen.Saas.Validation
   alias Tinderbox.Gen.Saas.Web
   alias Tinderbox.Gen.Storage
@@ -111,6 +113,7 @@ defmodule Tinderbox.Gen.Saas do
     # The opt-in blocks; integrations encrypt credentials with the vault Mfa made.
     |> apply_if(file_drop?(assigns[:opts]), &FileDrop.apply(&1, assigns))
     |> apply_if(integrations?(assigns[:opts]), &Integrations.apply(&1, assigns))
+    |> apply_if(plaid?(assigns[:opts]), &Plaid.apply(&1, assigns))
     |> Ops.apply(assigns)
     |> Generators.apply(assigns)
     |> Deploy.apply(assigns)
@@ -124,8 +127,10 @@ defmodule Tinderbox.Gen.Saas do
   end
 
   # `--integrations` brings the file drop: dropped files are how most connectors get data.
+  # `--plaid` brings integrations: Plaid is one of their connectors.
   defp file_drop?(opts), do: opts[:file_drop] == true or integrations?(opts)
-  defp integrations?(opts), do: opts[:integrations] == true
+  defp integrations?(opts), do: opts[:integrations] == true or plaid?(opts)
+  defp plaid?(opts), do: opts[:plaid] == true
 
   defp apply_if(igniter, true, fun), do: fun.(igniter)
   defp apply_if(igniter, false, _fun), do: igniter

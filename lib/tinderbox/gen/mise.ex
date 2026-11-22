@@ -46,7 +46,8 @@ defmodule Tinderbox.Gen.Mise do
         stack: stack,
         broker: broker,
         db?: Keyword.get(opts, :db, true),
-        file_drop?: Keyword.get(opts, :file_drop, false) == true
+        file_drop?: Keyword.get(opts, :file_drop, false) == true,
+        plaid?: Keyword.get(opts, :plaid, false) == true
       )
 
     serve = if worker?, do: "mix run --no-halt", else: "mix phx.server"

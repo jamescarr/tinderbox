@@ -82,7 +82,7 @@ With `SMTP_USERNAME` (and `SMTP_PASSWORD`) set, mail is authenticated and upgrad
 with verified STARTTLS. Behind PgBouncer set `DATABASE_POOLER=pgbouncer`. On an
 IPv6-only private network (Fly) set `NATS_INET6=true`. `/health` is exempt from
 `force_ssl`, so a platform's plain-HTTP health check is not redirected.
-<%= if @opts[:file_drop] || @opts[:integrations] do %>
+<%= if @opts[:file_drop] || @opts[:integrations] || @opts[:plaid] do %>
 Files dropped at `/drop` (`<%= inspect(@prefix) %>.FileDrop`) are scanned before the handler sees
 them when `FILE_DROP_SCANNER=clamav`: a ClamAV daemon at `CLAMAV_HOST:CLAMAV_PORT`.
 Locally it is the compose service of the `scan` profile, left out of `mise run up`:
@@ -92,7 +92,7 @@ moved in `.mise.local.toml` applies), and `docker compose stop clamav` stops it 
 Outside production the default is `none`,
 no scan; production refuses to start until `FILE_DROP_SCANNER` says which.
 `FILE_DROP_MAX_BYTES` caps a file (25 MiB).
-<% end %><%= if @opts[:integrations] do %>
+<% end %><%= if @opts[:integrations] || @opts[:plaid] do %>
 Integrations (`/integrations`, `<%= inspect(@prefix) %>.Integrations`) turn dropped files, webhook
 deliveries and scheduled pulls into records, each handed once to
 `<%= inspect(@prefix) %>.Integrations.Handler`: that module is where records become this
@@ -100,6 +100,22 @@ application's rows. Connectors are listed in `config :<%= @app %>, <%= inspect(@
 connectors: [...]`. n8n, Zapier or Make post to a `webhook` source at
 `/webhooks/integrations/<source id>` with its bearer token, shown once when the
 source is added.
+<% end %><%= if @opts[:plaid] do %>
+Plaid (`/integrations/plaid`, `<%= inspect(@prefix) %>.Integrations.Connectors.Plaid`) links a bank
+through Plaid Link and pulls its transactions every 15 minutes (`Sync now` and Plaid's
+`SYNC_UPDATES_AVAILABLE` webhook, verified with Plaid's signature, run it sooner).
+Records reach `<%= inspect(@prefix) %>.Integrations.Handler` as `account`, `transaction`,
+`transaction.modified` (a new record per revision; `data["transaction_id"]` is the key
+to update by) and `transaction.removed`. `PLAID_ENV` is `sandbox` or `production`;
+`PLAID_CLIENT_ID` and `PLAID_SECRET` come from https://dashboard.plaid.com/developers/keys
+and go in `.mise.local.toml` (production refuses to start without them);
+`PLAID_COUNTRY_CODES` is a comma-separated list (`US`). In the sandbox, Link accepts
+any institution with `user_good` / `pass_good`. Plaid posts webhooks to
+`/webhooks/integrations/<source id>`, so locally they need a public URL (a tunnel) or
+they simply do not arrive, and the schedule still syncs. Disconnecting a bank (or
+deleting its source on `/integrations`) calls `/item/remove`, which ends Plaid's
+billing for it. If the app sets a Content-Security-Policy, allow `https://cdn.plaid.com`
+for scripts and frames.
 <% end %>
 ## Validation
 
@@ -194,7 +210,8 @@ the private network only). Once, from the project directory (flyctl comes with
      CLOAK_KEY="$(openssl rand -base64 32)" \
      SMTP_PASSWORD=<Resend API key> ADMIN_EMAILS=<you@example.com> \
      SSO_BASE_URL=<issuer> SSO_CLIENT_ID=<id> SSO_CLIENT_SECRET=<secret> \
-     STRIPE_SECRET_KEY=<sk_live_…> STRIPE_WEBHOOK_SECRET=<whsec_…> \
+<%= if @opts[:plaid] do %>     PLAID_CLIENT_ID=<client id> PLAID_SECRET=<production or sandbox secret> \
+<% end %>     STRIPE_SECRET_KEY=<sk_live_…> STRIPE_WEBHOOK_SECRET=<whsec_…> \
      STRIPE_PRICE_STARTER=<price_…> STRIPE_PRICE_PRO=<price_…>
    ```
 

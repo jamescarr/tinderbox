@@ -1,0 +1,103 @@
+defmodule <%= inspect(@web) %>.PlaidLiveTest do
+  use <%= inspect(@web) %>.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import <%= inspect(@prefix) %>.Fixtures
+  import <%= inspect(@web) %>.LiveTestHelpers
+
+  alias <%= inspect(@integrations) %>
+  alias <%= inspect(@integrations) %>.Source
+  alias <%= inspect(@plaid) %>
+
+  # Plaid is never reached: `<%= inspect(@plaid) %>.Client.Fake` answers.
+  setup do
+    integrations = Application.get_env(<%= inspect(@app) %>, Integrations, [])
+    plaid = Application.get_env(<%= inspect(@app) %>, Plaid, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.merge(integrations, connectors: [Integrations.Connectors.Webhook, Plaid])
+    )
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Plaid,
+      Keyword.merge(plaid,
+        client_id: "test-id",
+        secret: "test-secret",
+        client: Plaid.Client.Fake,
+        env: "sandbox",
+        country_codes: ["US"]
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(<%= inspect(@app) %>, Integrations, integrations)
+      Application.put_env(<%= inspect(@app) %>, Plaid, plaid)
+    end)
+
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  defp metadata do
+    %{
+      "institution" => %{"name" => "First Platypus Bank", "institution_id" => "ins_109508"},
+      "accounts" => [
+        %{
+          "id" => "acc-1",
+          "name" => "Plaid Checking",
+          "mask" => "0000",
+          "type" => "depository",
+          "subtype" => "checking"
+        }
+      ]
+    }
+  end
+
+  test "the owner connects a bank through Link and sees it listed", %{conn: conn, owner: owner} do
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations/plaid")
+
+    view |> element("#plaid-connect") |> render_click()
+    assert_push_event(view, "plaid:open", %{token: "link-sandbox-fake"})
+
+    # What the hook pushes once Link's onSuccess has run.
+    render_hook(view, "linked", %{"public_token" => "public-sandbox-abc", "metadata" => metadata()})
+
+    assert has_element?(view, "#plaid-sources", "First Platypus Bank")
+    assert has_element?(view, "#plaid-sources", "Plaid Checking ••0000")
+    assert render(view) =~ "connected"
+  end
+
+  test "without keys the page says Plaid is not configured", %{conn: conn, owner: owner} do
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Plaid,
+      Keyword.put(Application.get_env(<%= inspect(@app) %>, Plaid), :client_id, "replace_me")
+    )
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations/plaid")
+
+    assert render(view) =~ "Plaid is not configured"
+    assert has_element?(view, "#plaid-connect[disabled]")
+  end
+
+  test "disconnecting removes the bank", %{conn: conn, owner: owner, organization: organization} do
+    source = plaid_source_fixture(organization, owner)
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations/plaid")
+
+    view |> element("#plaid-source-#{source.id} button", "Disconnect") |> render_click()
+
+    refute has_element?(view, "#plaid-source-#{source.id}")
+    assert {:error, _not_found} = Ash.get(Source, source.id, authorize?: false)
+  end
+
+  test "a member is sent to the dashboard", %{conn: conn, organization: organization} do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    assert {:error, {:redirect, %{to: "/dashboard"}}} =
+             live(sign_in(conn, member), ~p"/integrations/plaid")
+  end
+end

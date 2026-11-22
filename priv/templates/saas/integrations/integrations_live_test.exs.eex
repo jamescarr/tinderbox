@@ -9,6 +9,25 @@ defmodule <%= inspect(@web) %>.IntegrationsLiveTest do
   alias <%= inspect(@integrations) %>.Connectors.Webhook
   alias <%= inspect(@integrations) %>.Record
 
+  # Set up on a page of its own, like Plaid.
+  defmodule Elsewhere do
+    @behaviour <%= inspect(@integrations) %>.Connector
+
+    @impl true
+    def key, do: "test_elsewhere"
+    @impl true
+    def name, do: "Elsewhere"
+    @impl true
+    def description, do: "A test connector with a setup page"
+    @impl true
+    def transports, do: [:api]
+    @impl true
+    def setup_path, do: "/integrations/elsewhere"
+
+    @impl true
+    def sync(_source), do: {:ok, [], %{}}
+  end
+
   setup do
     previous = Application.get_env(<%= inspect(@app) %>, Integrations, [])
 
@@ -41,6 +60,21 @@ defmodule <%= inspect(@web) %>.IntegrationsLiveTest do
     view |> element("#new-token button", "Done") |> render_click()
 
     refute has_element?(view, "#new-token")
+  end
+
+  test "a connector set up on its own page is linked, not offered", %{conn: conn, owner: owner} do
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.merge(Application.get_env(<%= inspect(@app) %>, Integrations, []),
+        connectors: [Webhook, Elsewhere]
+      )
+    )
+
+    {:ok, view, _html} = live(sign_in(conn, owner), ~p"/integrations")
+
+    refute has_element?(view, "#source-form option[value=test_elsewhere]")
+    assert has_element?(view, "#source-form a[href='/integrations/elsewhere']", "Set up")
   end
 
   test "the owner sees why records failed and puts them back in line", %{

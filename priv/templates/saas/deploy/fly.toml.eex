@@ -4,7 +4,7 @@
 # Secrets (flyctl secrets set), not here: DATABASE_URL (flyctl mpg attach),
 # DIRECT_DATABASE_URL, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (flyctl storage
 # create), SECRET_KEY_BASE, TOKEN_SIGNING_SECRET, CLOAK_KEY, SMTP_PASSWORD,
-# ADMIN_EMAILS, SSO_BASE_URL, SSO_CLIENT_ID, SSO_CLIENT_SECRET and the STRIPE_* keys.
+# ADMIN_EMAILS, SSO_BASE_URL, SSO_CLIENT_ID, SSO_CLIENT_SECRET<%= if @opts[:plaid] do %>, PLAID_CLIENT_ID, PLAID_SECRET<% end %> and the STRIPE_* keys.
 app = "<%= @app_dash %>"
 primary_region = "iad"
 kill_signal = "SIGTERM"
@@ -42,10 +42,14 @@ kill_signal = "SIGTERM"
   MFA_REQUIRED = "false"
   MFA_SSO = "local"
   OTEL_SERVICE_NAME = "<%= @app %>"
-<%= if @opts[:file_drop] || @opts[:integrations] do %>  # The file drop's scanner. No ClamAV is deployed, so files are accepted unscanned:
+<%= if @opts[:file_drop] || @opts[:integrations] || @opts[:plaid] do %>  # The file drop's scanner. No ClamAV is deployed, so files are accepted unscanned:
   # run clamd (its own Fly app, say) and set clamav, with CLAMAV_HOST and CLAMAV_PORT.
   # The release refuses to boot without a value.
   FILE_DROP_SCANNER = "none"
+<% end %><%= if @opts[:plaid] do %>  # Plaid: sandbox until Plaid grants production access. PLAID_CLIENT_ID and
+  # PLAID_SECRET are secrets; the release refuses to boot without them.
+  PLAID_ENV = "sandbox"
+  PLAID_COUNTRY_CODES = "US"
 <% end %>
 # Oban's cron and the NATS consumer need a running node: never stop the machine.
 [http_service]

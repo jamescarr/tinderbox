@@ -1,7 +1,8 @@
 @moduledoc """
 Sets a new source up from its connector in the catalog: the connector must be
-known, a blank name becomes the connector's, `pull` says whether the `:sync`
-trigger runs it, and a connector that takes webhooks gets a token.
+known, a blank name becomes the connector's, a connector with a setup page is
+refused without credentials, `pull` says whether the `:sync` trigger runs it, and
+a connector that takes webhooks gets a token.
 
 The token is 32 random bytes, URL-safe base64. Only its sha256 is stored
 (`webhook_token_hash`); the token comes back once, as the record's
@@ -38,6 +39,7 @@ defp setup(changeset, connector) do
 
   changeset
   |> default_name(connector)
+  |> require_setup(connector)
   |> Ash.Changeset.force_change_attribute(:pull, :api in transports)
   |> then(&if(:webhook in transports, do: put_token(&1), else: &1))
 end
@@ -55,6 +57,27 @@ defp default_name(changeset, connector) do
 
     _name ->
       changeset
+  end
+end
+
+# A connector set up on its own page (Plaid Link) needs the credentials that page obtains;
+# the generic form never sends any. AshCloak turns `credentials` into an action argument
+# (its `Encrypt` change reads it with `fetch_argument/2` in a before_action), so that is
+# where a provided value is at this point.
+defp require_setup(changeset, connector) do
+  provided? =
+    match?(
+      {:ok, %{} = credentials} when map_size(credentials) > 0,
+      Ash.Changeset.fetch_argument(changeset, :credentials)
+    )
+
+  if Integrations.exports?(connector, :setup_path, 0) and not provided? do
+    Ash.Changeset.add_error(changeset,
+      field: :connector,
+      message: "is set up at #{connector.setup_path()}"
+    )
+  else
+    changeset
   end
 end
 

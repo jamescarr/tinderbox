@@ -179,9 +179,11 @@ actions do
   end
 
   destroy :destroy do
-    description "Deletes the source and its records"
+    description "Deletes the source and its records, once its connector disconnected it"
     primary? true
     require_atomic? false
+
+    change <%= inspect(@integrations) %>.Changes.Disconnect
   end
 end
 
