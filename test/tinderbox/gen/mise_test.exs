@@ -154,6 +154,14 @@ defmodule Tinderbox.Gen.MiseTest do
     refute content(mise(stack: "saas", broker: :nats)) =~ "FILE_DROP_SCANNER"
   end
 
+  test "--plaid puts the Plaid keys in [env]" do
+    toml = content(mise(stack: "saas", broker: :nats, plaid: true))
+
+    assert toml =~ ~s(PLAID_ENV = "sandbox")
+    assert toml =~ ~s(PLAID_SECRET = "replace_me")
+    refute content(mise(stack: "saas", broker: :nats)) =~ "PLAID_"
+  end
+
   test "saas deploys to Fly.io by default: flyctl and a deploy task" do
     toml = content(mise(stack: "saas", broker: :nats))
 

@@ -7,7 +7,8 @@ Everyone in the organization sees the list. Owners and admins add a source from
 the connector catalog, sync a pulling one now, issue a new webhook token, put its
 failed records back in line, disable, enable and delete. A webhook token is shown
 once, with the URL and a `curl` to try it, until it is dismissed. The list follows
-deliveries as they happen, reloading at most twice a second.
+deliveries as they happen, reloading at most twice a second. A connector with a
+setup page of its own (Plaid) is linked from the form rather than offered in it.
 """
 
 use <%= inspect(@web) %>, :live_view
@@ -32,15 +33,17 @@ def mount(_params, _session, socket) do
   if connected?(socket), do: Integrations.subscribe(organization.id)
 
   connectors = Integrations.connectors()
+  addable = Enum.reject(connectors, &Integrations.exports?(&1, :setup_path, 0))
 
   {:ok,
    socket
    |> assign(:page_title, "Integrations")
    |> assign(:manager?, manager?(socket.assigns.current_membership))
    |> assign(:connectors, connectors)
+   |> assign(:addable, addable)
    |> assign(:new_token, nil)
    |> assign(:reload_pending?, false)
-   |> assign(:form, new_form(connectors))
+   |> assign(:form, new_form(addable))
    |> load()}
 end
 
@@ -65,7 +68,7 @@ def handle_event("create", %{"source" => params}, socket) do
        socket
        |> put_flash(:info, "#{source.name} added")
        |> assign(:new_token, token_for(source))
-       |> assign(:form, new_form(socket.assigns.connectors))
+       |> assign(:form, new_form(socket.assigns.addable))
        |> load()}
 
     {:error, error} ->
@@ -369,12 +372,19 @@ def render(assigns) do
             field={@form[:connector]}
             type="select"
             label="Connector"
-            options={Enum.map(@connectors, &{&1.name(), &1.key()})}
+            options={Enum.map(@addable, &{&1.name(), &1.key()})}
           />
           <.input field={@form[:name]} type="text" label="Name (optional)" />
           <ul class="mt-2 space-y-1 text-sm text-base-content/70">
             <li :for={connector <- @connectors}>
               <span class="font-medium">{connector.name()}</span>: {connector.description()}
+              <.link
+                :if={Integrations.exports?(connector, :setup_path, 0)}
+                navigate={connector.setup_path()}
+                class="link link-primary ml-1"
+              >
+                Set up
+              </.link>
             </li>
           </ul>
           <div class="mt-2 flex justify-end">

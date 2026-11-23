@@ -52,7 +52,8 @@ defmodule Tinderbox.Gen.Compose do
         stack: stack,
         broker: broker,
         db?: db?,
-        file_drop?: file_drop?
+        file_drop?: file_drop?,
+        plaid?: Keyword.get(opts, :plaid, false) == true
       )
 
     igniter

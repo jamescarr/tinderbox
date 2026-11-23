@@ -119,6 +119,7 @@ defmodule Tinderbox.Gen.Saas.Integrations do
       {Module.concat([integrations, "Changes", "Sync"]), "changes/sync.ex.eex"},
       {Module.concat([integrations, "Changes", "Process"]), "changes/process.ex.eex"},
       {Module.concat([integrations, "Changes", "Broadcast"]), "changes/broadcast.ex.eex"},
+      {Module.concat([integrations, "Changes", "Disconnect"]), "changes/disconnect.ex.eex"},
       {Module.concat([web, "Plugs", "IntegrationWebhook"]), "webhook_plug.ex.eex"},
       {Module.concat(web, "IntegrationsLive"), "integrations_live.ex.eex"}
     ]

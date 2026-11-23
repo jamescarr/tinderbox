@@ -35,6 +35,7 @@ defmodule Tinderbox.Gen.SaasIntegrationsTest do
           lib/test/integrations/changes/sync.ex
           lib/test/integrations/changes/process.ex
           lib/test/integrations/changes/broadcast.ex
+          lib/test/integrations/changes/disconnect.ex
           lib/test_web/plugs/integration_webhook.ex
           lib/test_web/integrations_live.ex
           test/test/integrations_test.exs

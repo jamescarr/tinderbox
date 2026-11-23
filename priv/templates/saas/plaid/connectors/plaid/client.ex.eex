@@ -1,0 +1,14 @@
+@moduledoc """
+How the Plaid connector talks to Plaid: `post/2` sends a JSON body to an endpoint and
+returns the decoded response. `config <%= inspect(@app) %>, <%= inspect(@plaid) %>, client: …`
+picks the module: `.Client.HTTP` (Req, against `PLAID_ENV`'s host) or `.Client.Fake`
+(tests).
+"""
+
+alias <%= inspect(@plaid) %>
+
+@callback post(path :: String.t(), body :: map()) :: {:ok, map()} | {:error, Plaid.Error.t()}
+
+@doc ~S|Posts `body` to `path` (`"/transactions/sync"`) with the configured client.|
+@spec post(String.t(), map()) :: {:ok, map()} | {:error, Plaid.Error.t()}
+def post(path, body), do: (Plaid.config()[:client] || __MODULE__.HTTP).post(path, body)

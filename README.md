@@ -113,6 +113,7 @@ mix phx.server                     # or: mix run --no-halt
 | `--deploy fly\|none` | saas | `fly` | `fly.toml`, `fly/nats/fly.toml`, the README's Fly.io runbook, flyctl and `mise run deploy`; `none` leaves them out |
 | `--file-drop` | saas | off | the file drop at `/drop` (see [SaaS stack](#saas-stack-mix-tinderboxgensaas)), a ClamAV service in compose's `scan` profile, `FILE_DROP_*`/`CLAMAV_*` in `.env.example` and `.mise.toml`, `FILE_DROP_SCANNER = "none"` in `fly.toml` |
 | `--integrations` | saas | off | the integrations framework at `/integrations`; implies `--file-drop` |
+| `--plaid` | saas (also `tinderbox.gen.compose`, `.gen.mise`) | off | the Plaid connector: bank links at `/integrations/plaid`, transaction sync, Plaid webhooks; implies `--integrations`; `PLAID_*` in `.env.example`, `.mise.toml` and `fly.toml` |
 | `--no-db` | `tinderbox.gen.compose`, `tinderbox.gen.mise` | Postgres service | skip the Postgres service and `DATABASE_URL` |
 
 The individual tasks (`tinderbox.gen.api`, `.worker`, `.saas`, `.compose`, `.mise`) can
@@ -269,6 +270,19 @@ Ash packages the other stacks use, then adds:
   The generic `webhook` connector is what n8n, Zapier or Make post to; no workflow
   engine is deployed. `mix tinderbox.gen.integrations` adds it (and the file drop)
   to an existing project.
+* **Plaid** (opt-in, `--plaid`, brings integrations) — `<App>.Integrations.Connectors.Plaid`:
+  owners and admins link a bank through Plaid Link at `/integrations/plaid` (the
+  `/integrations` form links there instead of offering it); the access token is kept
+  in the source's encrypted credentials. The 15-minute `:sync` trigger pulls
+  `/transactions/sync` from the cursor kept on the source, and Plaid's
+  `SYNC_UPDATES_AVAILABLE` webhook (an ES256 JWT over the body's sha256, checked
+  against Plaid's key) asks for a sync at once. Records reach the handler as `account`,
+  `transaction`, `transaction.modified` (one record per revision) and
+  `transaction.removed`. Deleting a source calls `/item/remove` first (the
+  connector's `disconnect/1`; an error keeps the source). Tests run against
+  `Plaid.Client.Fake`, never plaid.com; production refuses to boot without
+  `PLAID_CLIENT_ID` and `PLAID_SECRET`. `mix tinderbox.gen.plaid` adds it (with
+  integrations and the file drop when missing) to an existing project.
 * **Organizations** — `<App>.Accounts.Organization`, `Membership` (`owner`, `admin`,
   `member`) and `Invitation` (email, role, token link). The creator becomes the
   owner; the last owner cannot be removed or demoted. Re-inviting an address updates
@@ -422,8 +436,9 @@ In production (the release image) the application refuses to start without
 `DATABASE_URL`, `SECRET_KEY_BASE` and `TOKEN_SIGNING_SECRET` (AshAuthentication's;
 `runtime.exs` raises when it is missing) and `CLOAK_KEY` (`openssl rand -base64 32`;
 encrypts the two-factor secrets, so keep it). Also set `PHX_HOST`, `PHX_SERVER=true`, the
-`NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`, `MFA_*`, `OAUTH_*` (and `HYDRA_*` or `AUTH0_*`) and
-`ADMIN_EMAILS` values of `.mise.toml`.
+`NATS_*`, `SMTP_*`, `STRIPE_*`, `SSO_*`, `MFA_*`, `OAUTH_*` (and `HYDRA_*` or `AUTH0_*`),
+`PLAID_*` (with `--plaid`; the keys are required) and `ADMIN_EMAILS` values of
+`.mise.toml`.
 Run migrations with the release's `bin/migrate`. With `SMTP_USERNAME` (and
 `SMTP_PASSWORD`) set, mail is authenticated and upgraded with verified STARTTLS;
 behind PgBouncer set `DATABASE_POOLER=pgbouncer` (unnamed prepared statements and

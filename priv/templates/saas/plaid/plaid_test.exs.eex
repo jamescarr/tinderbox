@@ -1,0 +1,279 @@
+defmodule <%= inspect(@integrations) %>.PlaidTest do
+  # The connector catalog and Plaid's settings are application env, which is global.
+  use <%= inspect(@prefix) %>.DataCase, async: false
+
+  import <%= inspect(@prefix) %>.Fixtures
+
+  require Ash.Query
+
+  alias <%= inspect(@integrations) %>
+  alias <%= inspect(@integrations) %>.Record
+  alias <%= inspect(@integrations) %>.Source
+  alias <%= inspect(@plaid) %>
+  alias <%= inspect(@plaid) %>.Client.Fake
+  alias <%= inspect(@plaid) %>.Error
+
+  # Plaid is never reached: the fake client answers (see its module doc).
+  setup do
+    integrations = Application.get_env(<%= inspect(@app) %>, Integrations, [])
+    plaid = Application.get_env(<%= inspect(@app) %>, Plaid, [])
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Integrations,
+      Keyword.merge(integrations, connectors: [Integrations.Connectors.Webhook, Plaid])
+    )
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Plaid,
+      Keyword.merge(plaid,
+        client_id: "test-id",
+        secret: "test-secret",
+        client: Fake,
+        env: "sandbox",
+        country_codes: ["US"]
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(<%= inspect(@app) %>, Integrations, integrations)
+      Application.put_env(<%= inspect(@app) %>, Plaid, plaid)
+    end)
+
+    owner = user_fixture()
+    %{owner: owner, organization: organization_fixture(owner)}
+  end
+
+  defp metadata do
+    %{
+      "institution" => %{"name" => "First Platypus Bank", "institution_id" => "ins_109508"},
+      "accounts" => [
+        %{
+          "id" => "acc-1",
+          "name" => "Plaid Checking",
+          "mask" => "0000",
+          "type" => "depository",
+          "subtype" => "checking"
+        }
+      ]
+    }
+  end
+
+  defp records(source) do
+    Record
+    |> Ash.Query.filter(source_id == ^source.id)
+    |> Ash.Query.sort(:external_id)
+    |> Ash.read!(authorize?: false)
+  end
+
+  defp record(source, type, external_id) do
+    Enum.find(records(source), &(&1.type == type and &1.external_id == external_id))
+  end
+
+  test "connect exchanges the public token, stores the access token encrypted, registers the webhook and asks for a first sync",
+       %{owner: owner, organization: organization} do
+    {:ok, source} = Plaid.connect(organization.id, "public-sandbox-abc", metadata(), owner)
+
+    assert source.name == "First Platypus Bank"
+    assert source.config["item_id"] == "item-abc"
+
+    assert source.config["accounts"] == [
+             %{
+               "id" => "acc-1",
+               "name" => "Plaid Checking",
+               "mask" => "0000",
+               "type" => "depository",
+               "subtype" => "checking"
+             }
+           ]
+
+    assert source.pull
+
+    assert_received {:plaid, "/item/webhook/update",
+                     %{"access_token" => "access-sandbox-abc", "webhook" => url}}
+
+    assert url =~ "/webhooks/integrations/#{source.id}"
+
+    stored = Ash.get!(Source, source.id, authorize?: false)
+    refute stored.encrypted_credentials =~ "access-sandbox"
+
+    assert Ash.load!(stored, :credentials, authorize?: false).credentials == %{
+             "access_token" => "access-sandbox-abc"
+           }
+
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    assert [
+             {"account", "acc-1"},
+             {"transaction", "tx-1"},
+             {"transaction", "tx-2"},
+             {"transaction", "tx-3"},
+             {"transaction.modified", "tx-1@" <> _fingerprint},
+             {"transaction.removed", "tx-2"}
+           ] = records(source) |> Enum.map(&{&1.type, &1.external_id}) |> Enum.sort()
+
+    assert record(source, "transaction", "tx-3").occurred_at == ~U[2026-01-07 10:00:00Z]
+    assert record(source, "transaction", "tx-1").occurred_at == ~U[2026-01-05 00:00:00Z]
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.cursor == %{"cursor" => "fake-2"}
+    assert source.status == :active
+  end
+
+  test "a second sync adds nothing and keeps the cursor", %{
+    owner: owner,
+    organization: organization
+  } do
+    {:ok, source} = Plaid.connect(organization.id, "public-sandbox-abc", metadata(), owner)
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    Ash.update!(source, %{}, action: :request_sync, actor: owner)
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    assert length(records(source)) == 6
+    assert Ash.get!(Source, source.id, authorize?: false).cursor == %{"cursor" => "fake-2"}
+  end
+
+  test "a failed exchange leaves no source", %{owner: owner, organization: organization} do
+    assert Plaid.connect(organization.id, "public-sandbox-bad", metadata(), owner) ==
+             {:error,
+              %Error{code: "INVALID_PUBLIC_TOKEN", message: "the public token is invalid"}}
+
+    assert Ash.read!(Source, authorize?: false) == []
+  end
+
+  test "a member cannot connect, and the Item is removed again", %{organization: organization} do
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    assert {:error, %Ash.Error.Forbidden{}} =
+             Plaid.connect(organization.id, "public-sandbox-xyz", metadata(), member)
+
+    assert_received {:plaid, "/item/remove", %{"access_token" => "access-sandbox-xyz"}}
+    assert Ash.read!(Source, authorize?: false) == []
+  end
+
+  @tag :capture_log
+  test "an Item that needs a new login puts the source in error", %{
+    owner: owner,
+    organization: organization
+  } do
+    source =
+      plaid_source_fixture(organization, owner, %{
+        credentials: %{"access_token" => "access-sandbox-login-required"}
+      })
+
+    AshOban.Test.schedule_and_run_triggers({Source, :sync},
+      with_scheduled: true,
+      with_recursion: true
+    )
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.status == :error
+    assert source.last_error =~ "ITEM_LOGIN_REQUIRED"
+  end
+
+  test "disconnecting removes the Item; an Item already gone is fine; a Plaid outage keeps the source",
+       %{owner: owner, organization: organization} do
+    source = plaid_source_fixture(organization, owner)
+
+    assert Ash.destroy(source, actor: owner) == :ok
+    assert_received {:plaid, "/item/remove", %{"access_token" => "access-sandbox-fixture"}}
+
+    gone =
+      plaid_source_fixture(organization, owner, %{
+        credentials: %{"access_token" => "access-sandbox-gone"}
+      })
+
+    assert Ash.destroy(gone, actor: owner) == :ok
+
+    stuck =
+      plaid_source_fixture(organization, owner, %{
+        credentials: %{"access_token" => "access-sandbox-stuck"}
+      })
+
+    assert {:error, error} = Ash.destroy(stuck, actor: owner)
+    assert Exception.message(error) =~ "could not disconnect"
+    assert Exception.message(error) =~ "API_ERROR"
+    assert Ash.get!(Source, stuck.id, authorize?: false)
+  end
+
+  test "a member cannot disconnect a bank, and Plaid is not called", %{
+    owner: owner,
+    organization: organization
+  } do
+    source = plaid_source_fixture(organization, owner)
+    member = user_fixture()
+    membership_fixture(organization, member, :member)
+
+    assert {:error, %Ash.Error.Forbidden{}} = Ash.destroy(source, actor: member)
+    refute_received {:plaid, "/item/remove", _body}
+    assert Ash.get!(Source, source.id, authorize?: false)
+  end
+
+  @tag :capture_log
+  test "Plaid's SYNC_UPDATES_AVAILABLE webhook asks for a sync; anything unsigned, tampered or stale is refused",
+       %{owner: owner, organization: organization} do
+    source = plaid_source_fixture(organization, owner)
+    # Synced just now, so only the webhook's request makes the schedule sync it again.
+    source = Ash.update!(source, %{}, action: :touch, authorize?: false)
+
+    body =
+      Jason.encode!(%{
+        "webhook_type" => "TRANSACTIONS",
+        "webhook_code" => "SYNC_UPDATES_AVAILABLE",
+        "item_id" => "item-fixture",
+        "environment" => "sandbox"
+      })
+
+    delivery = fn headers -> %{headers: headers, raw_body: body, params: Jason.decode!(body)} end
+
+    assert Integrations.deliver(source, delivery.(Fake.sign_webhook(body))) ==
+             {:ok, %{created: 0, duplicates: 0}}
+
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+    assert records(source) != []
+
+    assert Integrations.deliver(source, delivery.([])) == {:error, :unauthorized}
+
+    assert Integrations.deliver(source, delivery.(Fake.sign_webhook(body <> " "))) ==
+             {:error, :unauthorized}
+
+    stale = Fake.sign_webhook(body, iat: System.os_time(:second) - 600)
+    assert Integrations.deliver(source, delivery.(stale)) == {:error, :unauthorized}
+
+    other_key = Fake.sign_webhook(body, kid: "other-kid")
+    assert Integrations.deliver(source, delivery.(other_key)) == {:error, :unauthorized}
+  end
+
+  test "link tokens need the keys", %{owner: owner} do
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Plaid,
+      Keyword.put(Application.get_env(<%= inspect(@app) %>, Plaid), :client_id, "replace_me")
+    )
+
+    refute Plaid.configured?()
+
+    assert Plaid.create_link_token(owner) ==
+             {:error, %Error{code: "NOT_CONFIGURED", message: "set PLAID_CLIENT_ID and PLAID_SECRET"}}
+
+    Application.put_env(
+      <%= inspect(@app) %>,
+      Plaid,
+      Keyword.put(Application.get_env(<%= inspect(@app) %>, Plaid), :client_id, "test-id")
+    )
+
+    assert Plaid.configured?()
+    assert Plaid.create_link_token(owner) == {:ok, "link-sandbox-fake"}
+
+    assert_received {:plaid, "/link/token/create",
+                     %{
+                       "products" => ["transactions"],
+                       "transactions" => %{"days_requested" => 90},
+                       "user" => %{"client_user_id" => _id}
+                     }}
+  end
+end

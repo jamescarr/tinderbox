@@ -1,0 +1,52 @@
+@moduledoc """
+The Plaid client that reaches Plaid: `PLAID_ENV`'s host (sandbox or production),
+the keys in the `PLAID-CLIENT-ID` and `PLAID-SECRET` headers. A Plaid error (HTTP
+400 with an `error_code`) and a failure to reach Plaid both come back as
+`<%= inspect(@plaid) %>.Error`.
+"""
+
+@behaviour <%= inspect(@plaid) %>.Client
+
+alias <%= inspect(@plaid) %>
+
+@hosts %{
+  "sandbox" => "https://sandbox.plaid.com",
+  "production" => "https://production.plaid.com"
+}
+
+@impl true
+def post(path, body) do
+  config = Plaid.config()
+
+  request =
+    Req.new(
+      url: Map.fetch!(@hosts, config[:env]) <> path,
+      json: body,
+      headers: [
+        {"plaid-client-id", config[:client_id]},
+        {"plaid-secret", config[:secret]},
+        {"plaid-version", "2020-09-14"}
+      ],
+      # The sync job and the delete retry on their own; a first sync can take a while.
+      retry: false,
+      receive_timeout: 30_000
+    )
+
+  case Req.post(request) do
+    {:ok, %{status: 200, body: %{} = response}} ->
+      {:ok, response}
+
+    {:ok, %{body: %{"error_code" => code} = error}} ->
+      {:error,
+       %Plaid.Error{
+         code: code,
+         message: error["display_message"] || error["error_message"] || code
+       }}
+
+    {:ok, %{status: status}} ->
+      {:error, %Plaid.Error{code: "HTTP_#{status}", message: "unexpected answer"}}
+
+    {:error, exception} ->
+      {:error, %Plaid.Error{code: "UNREACHABLE", message: Exception.message(exception)}}
+  end
+end

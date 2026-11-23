@@ -23,8 +23,8 @@ defmodule Tinderbox.Env do
 
   Options: `:app`, `:module` (base module, used in a comment), `:broker`, and
   optionally `:stack` (`"api"` | `"worker"` | `"saas"`, default `"api"`), `:db?`
-  (default `true`) and `:file_drop?` (the SaaS file drop's variables, default
-  `false`).
+  (default `true`), `:file_drop?` (the SaaS file drop's variables, default
+  `false`) and `:plaid?` (the SaaS Plaid connector's, default `false`).
   """
   @spec sections(keyword()) :: [section()]
   def sections(opts) do
@@ -76,7 +76,9 @@ defmodule Tinderbox.Env do
         []
       end
 
-    (postgres ++ shared ++ worker ++ saas(stack, app, app_dash) ++ file_drop(stack, opts))
+    (postgres ++
+       shared ++
+       worker ++ saas(stack, app, app_dash) ++ file_drop(stack, opts) ++ plaid(stack, opts))
     |> drop_repeated_names()
     |> validate!()
   end
@@ -149,6 +151,25 @@ defmodule Tinderbox.Env do
   end
 
   defp file_drop(_stack, _opts), do: []
+
+  # The Plaid connector's environment and keys (`--plaid`).
+  defp plaid("saas", opts) do
+    if Keyword.get(opts, :plaid?, false) do
+      [
+        {"Plaid (--plaid): PLAID_ENV is sandbox or production, the keys are at https://dashboard.plaid.com/developers/keys; put PLAID_CLIENT_ID and PLAID_SECRET in .mise.local.toml, never commit them",
+         [
+           {"PLAID_ENV", "sandbox"},
+           {"PLAID_CLIENT_ID", "replace_me"},
+           {"PLAID_SECRET", "replace_me"},
+           {"PLAID_COUNTRY_CODES", "US"}
+         ]}
+      ]
+    else
+      []
+    end
+  end
+
+  defp plaid(_stack, _opts), do: []
 
   @doc """
   Renders sections as `.env.example`: every assignment is an `export`.

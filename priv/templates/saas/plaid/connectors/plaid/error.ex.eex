@@ -1,0 +1,8 @@
+@moduledoc "A Plaid API error (`error_code` and the message Plaid gave), or one of reaching it."
+
+defexception [:code, :message]
+
+@type t :: %__MODULE__{code: String.t(), message: String.t()}
+
+@impl true
+def message(%{code: code, message: message}), do: "Plaid #{code}: #{message}"

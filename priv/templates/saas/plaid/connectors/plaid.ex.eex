@@ -1,0 +1,284 @@
+@moduledoc """
+Plaid: the transactions of an organization's linked banks and cards.
+
+Owners and admins link a bank through Plaid Link at `/integrations/plaid`
+(`<%= inspect(@web) %>.PlaidLive`): `create_link_token/1` opens Link, and `connect/4`
+exchanges what Link hands back for an access token (kept in the source's encrypted
+credentials), registers the source's webhook URL with Plaid and asks for a first
+sync. From then on the `:sync` trigger calls `sync/1` every 15 minutes, and Plaid's
+`SYNC_UPDATES_AVAILABLE` webhook (its signature checked by `.Webhook`) asks for one
+at once. Deleting the source removes the Item at Plaid first (`disconnect/1`), which
+ends Plaid's billing for it.
+
+Records, whose `data` is Plaid's object unchanged:
+
+  * `account` (`external_id` is the `account_id`), from `/accounts/get` on the first
+    sync: `data["balances"]` is the balance at link time,
+  * `transaction` (the `transaction_id`), a transaction Plaid added; `occurred_at` is
+    its `datetime`, else its `authorized_datetime`, else its `date` at midnight UTC,
+  * `transaction.modified` (`<transaction_id>@<fingerprint>`): a new revision of a
+    transaction already delivered, one record per distinct revision; update the
+    application's row by `data["transaction_id"]`,
+  * `transaction.removed` (the `transaction_id`): `%{"transaction_id", "account_id"}`
+    of a transaction Plaid withdrew.
+
+Configuration is in `config/runtime.exs` (`PLAID_ENV`, `PLAID_CLIENT_ID`,
+`PLAID_SECRET`, `PLAID_COUNTRY_CODES`); `client:` is `.Client.HTTP`, or `.Client.Fake`
+in tests. Link asks for 90 days of history, which cannot change for a bank already
+linked.
+"""
+
+@behaviour <%= inspect(@integrations) %>.Connector
+
+require Logger
+
+alias <%= inspect(@integrations) %>
+alias <%= inspect(@integrations) %>.Source
+alias __MODULE__.Client
+alias __MODULE__.Error
+alias __MODULE__.Webhook
+
+# History asked for at link time; Plaid cannot change it afterwards.
+@days_requested 90
+# The most `/transactions/sync` returns per page.
+@page 500
+@already_gone ["ITEM_NOT_FOUND", "INVALID_ACCESS_TOKEN"]
+
+@impl true
+def key, do: "plaid"
+
+@impl true
+def name, do: "Plaid"
+
+@impl true
+def description, do: "Bank and card transactions through Plaid Link"
+
+# Plaid's own webhooks are verified by `handle_webhook/2`, so no `:webhook` here: a
+# Plaid source gets no bearer token.
+@impl true
+def transports, do: [:api]
+
+@impl true
+def setup_path, do: "/integrations/plaid"
+
+@doc "`config <%= inspect(@app) %>, <%= inspect(@plaid) %>`, set in `config/runtime.exs`."
+@spec config() :: keyword()
+def config, do: Application.get_env(<%= inspect(@app) %>, __MODULE__, [])
+
+@doc "Whether `PLAID_CLIENT_ID` and `PLAID_SECRET` are set (not the local placeholders)."
+@spec configured?() :: boolean()
+def configured? do
+  config = config()
+  Enum.all?([config[:client_id], config[:secret]], &(is_binary(&1) and &1 not in ["", "replace_me"]))
+end
+
+# -- linking a bank -----------------------------------------------------------------
+
+@doc "A Link token for `user`, to open Plaid Link with in the browser."
+@spec create_link_token(map()) :: {:ok, String.t()} | {:error, Error.t()}
+def create_link_token(user) do
+  if configured?() do
+    body = %{
+      "client_name" => String.slice(<%= inspect(@prefix) %>.Concept.name(), 0, 30),
+      "language" => "en",
+      "country_codes" => config()[:country_codes] || ["US"],
+      "user" => %{"client_user_id" => to_string(user.id)},
+      "products" => ["transactions"],
+      "transactions" => %{"days_requested" => @days_requested}
+    }
+
+    case Client.post("/link/token/create", body) do
+      {:ok, %{"link_token" => token}} -> {:ok, token}
+      {:ok, _other} -> {:error, %Error{code: "UNEXPECTED", message: "no link token"}}
+      {:error, _error} = error -> error
+    end
+  else
+    {:error, %Error{code: "NOT_CONFIGURED", message: "set PLAID_CLIENT_ID and PLAID_SECRET"}}
+  end
+end
+
+@doc """
+Links the bank Plaid Link just connected: exchanges `public_token` for an access
+token, creates the organization's source as `actor` (an owner or admin), registers
+its webhook URL with Plaid and asks for a first sync. `metadata` is what Link's
+`onSuccess` gave (`institution`, `accounts`). When the source cannot be created
+the Item is removed at Plaid again.
+"""
+@spec connect(term(), String.t(), map(), map()) :: {:ok, Source.t()} | {:error, term()}
+def connect(organization_id, public_token, metadata, actor) do
+  with {:ok, %{"access_token" => access_token, "item_id" => item_id}} <-
+         Client.post("/item/public_token/exchange", %{"public_token" => public_token}) do
+    institution = metadata["institution"] || %{}
+
+    accounts =
+      for account <- List.wrap(metadata["accounts"]),
+          do: Map.take(account, ~w(id name mask type subtype))
+
+    params = %{
+      organization_id: organization_id,
+      connector: key(),
+      name: institution["name"],
+      config: %{
+        "item_id" => item_id,
+        "institution_id" => institution["institution_id"],
+        "institution_name" => institution["name"],
+        "accounts" => accounts
+      },
+      credentials: %{"access_token" => access_token}
+    }
+
+    case Ash.create(Source, params, actor: actor) do
+      {:ok, source} ->
+        register_webhook(source, access_token)
+        first_sync(source, actor)
+        {:ok, source}
+
+      {:error, error} ->
+        with {:error, reason} <- remove_item(access_token) do
+          Logger.warning("Plaid Item #{item_id} could not be removed: #{Exception.message(reason)}")
+        end
+
+        {:error, error}
+    end
+  end
+end
+
+# The schedule syncs without the webhook too, so a failure is only logged.
+defp register_webhook(source, access_token) do
+  body = %{"access_token" => access_token, "webhook" => Integrations.webhook_url(source)}
+
+  with {:error, error} <- Client.post("/item/webhook/update", body) do
+    Logger.warning("Plaid webhook for source #{source.id} not registered: #{Exception.message(error)}")
+  end
+end
+
+defp first_sync(source, actor) do
+  with {:error, error} <- Ash.update(source, %{}, action: :request_sync, actor: actor) do
+    Logger.warning("first sync of source #{source.id} not requested: #{inspect(error)}")
+  end
+end
+
+# -- the connector --------------------------------------------------------------------
+
+@impl true
+def sync(%{credentials: %{"access_token" => token}} = source) do
+  first? = source.cursor == %{}
+
+  with {:ok, accounts} <- if(first?, do: accounts(token), else: {:ok, []}),
+       {:ok, pages} <- pull(token, source.cursor["cursor"], []) do
+    entries = accounts ++ Enum.flat_map(pages, &entries/1)
+    next = pages |> List.last() |> Map.fetch!("next_cursor")
+    # "" means Plaid has not finished the Item's first pull: keep the old cursor and come back.
+    cursor = if next in [nil, ""], do: source.cursor, else: %{"cursor" => next}
+    {:ok, entries, cursor}
+  end
+end
+
+def sync(_source) do
+  {:error,
+   "this source has no Plaid access token: connect the bank at #{setup_path()} and delete this source"}
+end
+
+# A failure mid-pagination returns the error: the job retries from the stored cursor,
+# which is what Plaid asks for.
+defp pull(token, cursor, acc) do
+  body = %{
+    "access_token" => token,
+    "count" => @page,
+    "options" => %{"include_original_description" => true}
+  }
+
+  body = if cursor in [nil, ""], do: body, else: Map.put(body, "cursor", cursor)
+
+  case Client.post("/transactions/sync", body) do
+    {:ok, %{"has_more" => true, "next_cursor" => next} = page} -> pull(token, next, [page | acc])
+    {:ok, page} -> {:ok, Enum.reverse([page | acc])}
+    {:error, _reason} = error -> error
+  end
+end
+
+defp accounts(token) do
+  with {:ok, %{"accounts" => accounts}} <-
+         Client.post("/accounts/get", %{"access_token" => token}) do
+    {:ok, Enum.map(accounts, &%{type: "account", external_id: &1["account_id"], data: &1})}
+  end
+end
+
+defp entries(page) do
+  Enum.map(page["added"] || [], &transaction("transaction", &1["transaction_id"], &1)) ++
+    Enum.map(page["modified"] || [], &transaction("transaction.modified", revision(&1), &1)) ++
+    Enum.map(page["removed"] || [], &%{type: "transaction.removed", external_id: &1["transaction_id"], data: &1})
+end
+
+defp transaction(type, external_id, tx),
+  do: %{type: type, external_id: external_id, data: tx, occurred_at: occurred_at(tx)}
+
+# A record is never updated in place: each distinct revision of a transaction is its own.
+defp revision(tx) do
+  fingerprint =
+    :crypto.hash(:sha256, :erlang.term_to_binary(tx, [:deterministic]))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 12)
+
+  "#{tx["transaction_id"]}@#{fingerprint}"
+end
+
+defp occurred_at(tx) do
+  with nil <- datetime(tx["datetime"]),
+       nil <- datetime(tx["authorized_datetime"]) do
+    case Date.from_iso8601(tx["date"] || "") do
+      {:ok, date} -> DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+      {:error, _reason} -> nil
+    end
+  end
+end
+
+defp datetime(value) when is_binary(value) do
+  case DateTime.from_iso8601(value) do
+    {:ok, datetime, _offset} -> datetime
+    {:error, _reason} -> nil
+  end
+end
+
+defp datetime(_value), do: nil
+
+@impl true
+def disconnect(%{credentials: %{"access_token" => token}}), do: remove_item(token)
+def disconnect(_source), do: :ok
+
+# Ends Plaid's billing for the Item; one already gone is fine.
+defp remove_item(token) do
+  case Client.post("/item/remove", %{"access_token" => token}) do
+    {:ok, _response} -> :ok
+    {:error, %Error{code: code}} when code in @already_gone -> :ok
+    {:error, _error} = error -> error
+  end
+end
+
+@impl true
+def handle_webhook(source, %{headers: headers, raw_body: raw_body, params: params}) do
+  case Webhook.verify(headers, raw_body) do
+    :ok ->
+      if sync_updates?(params, source), do: request_sync(source)
+
+      # Other webhooks (ITEM errors, INITIAL_UPDATE…) are acknowledged; the sync job
+      # reports an Item's errors itself.
+      {:ok, []}
+
+    {:error, reason} ->
+      Logger.info("Plaid webhook refused for source #{source.id}: #{reason}")
+      {:error, :unauthorized}
+  end
+end
+
+defp sync_updates?(params, source) do
+  params["webhook_type"] == "TRANSACTIONS" and
+    params["webhook_code"] == "SYNC_UPDATES_AVAILABLE" and
+    params["item_id"] == source.config["item_id"]
+end
+
+defp request_sync(source) do
+  with {:error, error} <- Ash.update(source, %{}, action: :request_sync, authorize?: false) do
+    Logger.warning("Plaid webhook for source #{source.id}: #{inspect(error)}")
+  end
+end

@@ -1,0 +1,35 @@
+# Plaid (<%= inspect(@plaid) %>). PLAID_ENV is sandbox or production; the keys are at
+# https://dashboard.plaid.com/developers/keys. Locally the placeholders leave Plaid
+# unconfigured (the Bank accounts page says so); production refuses to start without them.
+plaid_env = System.get_env("PLAID_ENV", "sandbox")
+
+unless plaid_env in ["sandbox", "production"] do
+  raise "PLAID_ENV must be sandbox or production, got #{inspect(plaid_env)}"
+end
+
+# A placeholder counts as missing: production refuses to start on one.
+plaid_key = fn name ->
+  case System.get_env(name) do
+    value when value not in [nil, "", "replace_me"] ->
+      value
+
+    _missing ->
+      if config_env() == :prod,
+        do:
+          raise(
+            "environment variable #{name} is missing (https://dashboard.plaid.com/developers/keys)"
+          ),
+        else: "replace_me"
+  end
+end
+
+config <%= inspect(@app) %>, <%= inspect(@plaid) %>,
+  env: plaid_env,
+  client_id: plaid_key.("PLAID_CLIENT_ID"),
+  secret: plaid_key.("PLAID_SECRET"),
+  country_codes: "PLAID_COUNTRY_CODES" |> System.get_env("US") |> String.split(",", trim: true),
+  client:
+    if(config_env() == :test,
+      do: <%= inspect(@plaid) %>.Client.Fake,
+      else: <%= inspect(@plaid) %>.Client.HTTP
+    )

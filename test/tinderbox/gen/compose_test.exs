@@ -129,6 +129,14 @@ defmodule Tinderbox.Gen.ComposeTest do
     refute compose_content(:sqs, stack: "api", file_drop: true) =~ "clamav"
   end
 
+  test "--plaid adds its variables to .env.example and no service" do
+    igniter = compose(:nats, stack: "saas", plaid: true)
+
+    assert source(igniter, ".env.example") =~ "export PLAID_ENV=sandbox\n"
+    refute source(igniter, "docker-compose.yml") =~ "plaid"
+    refute source(compose(:nats, stack: "saas"), ".env.example") =~ "PLAID_"
+  end
+
   test "a running service waits for every bootstrap job to complete, so `up --wait` exits 0" do
     # Compose fails `up --wait` when a job container merely exits (even with
     # status 0) unless a running service depends on it completing.

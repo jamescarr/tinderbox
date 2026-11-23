@@ -1,0 +1,36 @@
+@doc """
+A linked Plaid source of `organization` created by `user` (an owner or admin), whose
+fake access token is `access-sandbox-fixture`; `attrs` override the name, config,
+credentials…
+"""
+def plaid_source_fixture(organization, user, attrs \\ %{}) do
+  <%= inspect(@integrations) %>.Source
+  |> Ash.Changeset.for_create(
+    :create,
+    Map.merge(
+      %{
+        organization_id: organization.id,
+        connector: "plaid",
+        name: "First Platypus Bank",
+        config: %{
+          "item_id" => "item-fixture",
+          "institution_id" => "ins_109508",
+          "institution_name" => "First Platypus Bank",
+          "accounts" => [
+            %{
+              "id" => "acc-1",
+              "name" => "Plaid Checking",
+              "mask" => "0000",
+              "type" => "depository",
+              "subtype" => "checking"
+            }
+          ]
+        },
+        credentials: %{"access_token" => "access-sandbox-fixture"}
+      },
+      attrs
+    ),
+    actor: user
+  )
+  |> Ash.create!(actor: user)
+end

@@ -1,0 +1,282 @@
+@moduledoc """
+The current organization's banks linked through Plaid (`<%= inspect(@plaid) %>`), at
+`/integrations/plaid`: owners and admins connect a bank through Plaid Link, see what
+each one delivered, sync it now and disconnect it (which removes it at Plaid). Plain
+members are sent to the dashboard; `/integrations` lists the sources to everyone.
+
+Plaid Link's script is loaded from cdn.plaid.com the first time "Connect a bank" is
+clicked (Plaid does not allow bundling it): the colocated `.PlaidLink` hook opens
+Link with the token this page pushes, and pushes back what Link returns.
+"""
+
+use <%= inspect(@web) %>, :live_view
+
+import <%= inspect(@web) %>.LiveHelpers
+
+require Ash.Query
+
+alias <%= inspect(@integrations) %>
+alias <%= inspect(@integrations) %>.Source
+alias <%= inspect(@plaid) %>
+
+on_mount {<%= inspect(@web) %>.LiveUserAuth, :live_user_required}
+on_mount {<%= inspect(@web) %>.LiveNotifications, :unread_count}
+on_mount {<%= inspect(@web) %>.LiveOrganization, :require_manager}
+
+@reload_after 500
+
+@impl true
+def mount(_params, _session, socket) do
+  organization = socket.assigns.current_organization
+
+  if connected?(socket), do: Integrations.subscribe(organization.id)
+
+  {:ok,
+   socket
+   |> assign(:page_title, "Bank accounts")
+   |> assign(:configured?, Plaid.configured?())
+   |> assign(:reload_pending?, false)
+   |> load()}
+end
+
+@impl true
+def handle_event("connect", _params, socket) do
+  case Plaid.create_link_token(socket.assigns.current_user) do
+    {:ok, token} -> {:noreply, push_event(socket, "plaid:open", %{token: token})}
+    {:error, error} -> {:noreply, put_flash(socket, :error, message(error))}
+  end
+end
+
+def handle_event("linked", %{"public_token" => public_token} = params, socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+
+  case Plaid.connect(organization.id, public_token, params["metadata"] || %{}, user) do
+    {:ok, source} ->
+      {:noreply,
+       socket
+       |> put_flash(:info, "#{source.name} connected; its transactions arrive within a few minutes")
+       |> load()}
+
+    {:error, error} ->
+      {:noreply, put_flash(socket, :error, message(error))}
+  end
+end
+
+def handle_event("exit", %{"error" => %{} = error}, socket) do
+  text = error["display_message"] || error["error_message"] || "Plaid Link was closed"
+  {:noreply, put_flash(socket, :error, text)}
+end
+
+# Closed without an error: the user changed their mind.
+def handle_event("exit", _params, socket), do: {:noreply, socket}
+
+def handle_event("sync", %{"id" => id}, socket) do
+  result =
+    with {:ok, source} <- find(Source, id, socket) do
+      Ash.update(source, %{}, action: :request_sync, actor: socket.assigns.current_user)
+    end
+
+  {:noreply, socket |> report(result, "Syncing") |> load()}
+end
+
+def handle_event("disconnect", %{"id" => id}, socket) do
+  # The source's delete removes the Item at Plaid first (`Changes.Disconnect`).
+  result =
+    with {:ok, source} <- find(Source, id, socket),
+         :ok <- Ash.destroy(source, actor: socket.assigns.current_user) do
+      {:ok, source}
+    end
+
+  socket =
+    case result do
+      {:ok, source} -> put_flash(socket, :info, "#{source.name} disconnected")
+      {:error, error} -> put_flash(socket, :error, message(error))
+    end
+
+  {:noreply, load(socket)}
+end
+
+@impl true
+def handle_info(:integrations_updated, %{assigns: %{reload_pending?: true}} = socket),
+  do: {:noreply, socket}
+
+def handle_info(:integrations_updated, socket) do
+  Process.send_after(self(), :reload, @reload_after)
+  {:noreply, assign(socket, :reload_pending?, true)}
+end
+
+def handle_info(:reload, socket) do
+  {:noreply, socket |> assign(:reload_pending?, false) |> load()}
+end
+
+def handle_info(_message, socket), do: {:noreply, socket}
+
+defp load(socket) do
+  %{current_user: user, current_organization: organization} = socket.assigns
+  key = Plaid.key()
+
+  sources =
+    Source
+    |> Ash.Query.filter(organization_id == ^organization.id and connector == ^key)
+    |> Ash.Query.load([:record_count, :pending_count, :failed_count, :latest_failure])
+    |> Ash.Query.sort(:inserted_at)
+    |> Ash.read!(actor: user)
+
+  assign(socket, :sources, sources)
+end
+
+defp message(%Plaid.Error{} = error), do: Exception.message(error)
+defp message(error), do: error_message(error)
+
+defp accounts(source) do
+  source.config["accounts"]
+  |> List.wrap()
+  |> Enum.map_join(", ", fn account ->
+    [account["name"], account["mask"] && "••#{account["mask"]}"]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end)
+end
+
+defp status_color(:active), do: "success"
+defp status_color(:error), do: "error"
+defp status_color(_disabled), do: "neutral"
+
+@impl true
+def render(assigns) do
+  ~H"""
+  <Layouts.app
+    flash={@flash}
+    current_user={@current_user}
+    current_organization={@current_organization}
+    organizations={@organizations}
+    unread_count={@unread_count}
+    current_page={:integrations}
+    wide
+  >
+    <.page_header>
+      Bank accounts
+      <:subtitle>Accounts linked through Plaid for {@current_organization.name}</:subtitle>
+      <:actions>
+        <.button id="plaid-connect" variant="primary" phx-click="connect" disabled={not @configured?}>
+          Connect a bank
+        </.button>
+      </:actions>
+    </.page_header>
+
+    <div class="space-y-6">
+      <.link navigate={~p"/integrations"} class="link">All integrations</.link>
+
+      <.alert :if={not @configured?} kind="warning" title="Plaid is not configured">
+        Set PLAID_CLIENT_ID and PLAID_SECRET (sandbox keys from the Plaid dashboard) in
+        .mise.local.toml; in production they are secrets.
+      </.alert>
+
+      <div id="plaid-link" phx-hook=".PlaidLink"></div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".PlaidLink">
+        export default {
+          mounted() {
+            this.handleEvent("plaid:open", ({token}) => this.open(token))
+          },
+          open(token) {
+            this.load()
+              .then(() => {
+                window.Plaid.create({
+                  token,
+                  onSuccess: (public_token, metadata) => this.pushEvent("linked", {public_token, metadata}),
+                  onExit: (error, _metadata) => this.pushEvent("exit", {error}),
+                }).open()
+              })
+              .catch(() => this.pushEvent("exit", {error: {display_message: "Plaid Link could not be loaded"}}))
+          },
+          // Plaid requires its script to come from cdn.plaid.com, never a bundle: load it on first use.
+          load() {
+            if (window.Plaid) return Promise.resolve()
+            if (!this.loading) {
+              this.loading = new Promise((resolve, reject) => {
+                const script = document.createElement("script")
+                script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js"
+                script.onload = resolve
+                script.onerror = () => {
+                  this.loading = null
+                  reject()
+                }
+                document.head.appendChild(script)
+              })
+            }
+            return this.loading
+          }
+        }
+      </script>
+
+      <.card padded={@sources == []}>
+        <:title>Linked banks</:title>
+        <div :if={@sources != []} class="overflow-x-auto">
+          <table class="table" id="plaid-sources">
+            <thead class="bg-base-200/60 text-xs tracking-wide text-base-content/60 uppercase">
+              <tr>
+                <th scope="col">Institution</th>
+                <th scope="col">Accounts</th>
+                <th scope="col">Status</th>
+                <th scope="col">Last sync</th>
+                <th scope="col">Records</th>
+                <th scope="col">Last error</th>
+                <th scope="col"><span class="sr-only">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={source <- @sources} id={"plaid-source-#{source.id}"}>
+                <td class="font-medium">{source.name}</td>
+                <td class="text-sm">{accounts(source)}</td>
+                <td>
+                  <.badge color={status_color(source.status)}>{humanize(source.status)}</.badge>
+                </td>
+                <td>{relative_time(source.last_synced_at)}</td>
+                <td class="tabular-nums">
+                  {source.pending_count} of {source.record_count}
+                  <div :if={source.failed_count > 0}>
+                    <.badge color="error">{source.failed_count} failed</.badge>
+                  </div>
+                </td>
+                <td class="text-sm">
+                  <div
+                    class="max-w-xs line-clamp-3 wrap-anywhere text-error"
+                    title={source.last_error || source.latest_failure}
+                  >
+                    {source.last_error || source.latest_failure}
+                  </div>
+                </td>
+                <td class="text-right whitespace-nowrap">
+                  <.button
+                    :if={source.status != :disabled}
+                    class="btn btn-ghost btn-sm"
+                    phx-click="sync"
+                    phx-value-id={source.id}
+                  >
+                    Sync now
+                  </.button>
+                  <.button
+                    class="btn btn-ghost btn-sm text-error"
+                    phx-click="disconnect"
+                    phx-value-id={source.id}
+                    data-confirm={"Disconnect #{source.name}? Plaid stops updating it and its records are deleted."}
+                  >
+                    Disconnect
+                  </.button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <.empty_state
+          :if={@sources == []}
+          icon="hero-building-library"
+          title="No bank linked yet"
+        >
+          Connect a bank to pull its transactions.
+        </.empty_state>
+      </.card>
+    </div>
+  </Layouts.app>
+  """
+end

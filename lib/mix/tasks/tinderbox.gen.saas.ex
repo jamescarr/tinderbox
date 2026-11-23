@@ -28,7 +28,11 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
     ClamAV scanning, a handler), and `--integrations`, a connector framework on top
     of it (sources, a record inbox, webhooks for n8n, Zapier or Make,
     `/integrations`). `mix tinderbox.gen.file_drop` and
-    `mix tinderbox.gen.integrations` add them to an existing project.
+    `mix tinderbox.gen.integrations` add them to an existing project,
+  * opt-in: `--plaid`, the Plaid connector on top of integrations (banks linked
+    through Plaid Link at `/integrations/plaid`, transactions synced every 15
+    minutes and on Plaid's webhook); `mix tinderbox.gen.plaid` adds it to an
+    existing project.
 
   The Ash packages are fetched and their installers are run by igniter, so this
   task must be run through `mix igniter.install`/`mix igniter.new`:
@@ -55,7 +59,8 @@ defmodule Mix.Tasks.Tinderbox.Gen.Saas do
         themepack: :string,
         deploy: :string,
         file_drop: :boolean,
-        integrations: :boolean
+        integrations: :boolean,
+        plaid: :boolean
       ],
       defaults: [compose: true, mise: true, deploy: "fly"],
       composes: [

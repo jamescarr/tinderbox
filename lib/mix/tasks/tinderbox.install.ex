@@ -44,6 +44,9 @@ defmodule Mix.Tasks.Tinderbox.Install do
   * `--file-drop` and `--integrations` (SaaS only, off by default): the file drop
     at `/drop`, and the integrations framework at `/integrations`, which brings
     the file drop with it. compose gets a ClamAV service in the `scan` profile.
+  * `--plaid` (SaaS only, off by default): the Plaid connector at
+    `/integrations/plaid`, which brings integrations with it; the `PLAID_*`
+    variables go in `.env.example`, `.mise.toml` and `fly.toml`.
 
   The `ui` stack generates neither `docker-compose.yml` nor `.mise.toml`: it
   only adds the UI kit to the Phoenix project.
@@ -77,7 +80,8 @@ defmodule Mix.Tasks.Tinderbox.Install do
         themepack: :string,
         deploy: :string,
         file_drop: :boolean,
-        integrations: :boolean
+        integrations: :boolean,
+        plaid: :boolean
       ],
       defaults: [broker: "sqs", compose: true, mise: true, demo: true, deploy: "fly"],
       required: [:stack],
@@ -114,15 +118,20 @@ defmodule Mix.Tasks.Tinderbox.Install do
 
   defp compose_services(igniter, opts) do
     broker = broker(opts)
-    # The ClamAV service and the FILE_DROP_* variables come with either block.
-    file_drop = if opts[:file_drop] || opts[:integrations], do: ["--file-drop"], else: []
+    # The ClamAV service and the FILE_DROP_* variables come with any of the three blocks.
+    file_drop =
+      if opts[:file_drop] || opts[:integrations] || opts[:plaid],
+        do: ["--file-drop"],
+        else: []
+
+    plaid = if opts[:plaid], do: ["--plaid"], else: []
 
     igniter =
       if opts[:compose] do
         Igniter.compose_task(
           igniter,
           "tinderbox.gen.compose",
-          ["--stack", opts[:stack], "--broker", broker] ++ file_drop
+          ["--stack", opts[:stack], "--broker", broker] ++ file_drop ++ plaid
         )
       else
         igniter
@@ -133,7 +142,7 @@ defmodule Mix.Tasks.Tinderbox.Install do
         igniter,
         "tinderbox.gen.mise",
         ["--stack", opts[:stack], "--broker", broker, "--deploy", opts[:deploy] || "fly"] ++
-          if(opts[:compose], do: [], else: ["--no-compose"]) ++ file_drop
+          if(opts[:compose], do: [], else: ["--no-compose"]) ++ file_drop ++ plaid
       )
     else
       igniter

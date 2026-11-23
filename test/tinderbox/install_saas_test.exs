@@ -129,7 +129,27 @@ defmodule Tinderbox.InstallSaasTest do
     assert_file_drop_settings(igniter)
   end
 
-  test "without either flag there is no file drop, ClamAV or scanner setting", %{
+  test "--plaid brings integrations, the file drop and the Plaid settings" do
+    igniter = install(["--stack", "saas", "--plaid"])
+
+    assert_creates(igniter, "lib/test/integrations/connectors/plaid.ex")
+    assert_creates(igniter, "lib/test/integrations.ex")
+    assert_creates(igniter, "lib/test/file_drop.ex")
+    assert_file_drop_settings(igniter)
+
+    assert source(igniter, ".env.example") =~ "export PLAID_ENV=sandbox\n"
+    assert source(igniter, ".mise.toml") =~ ~s(PLAID_ENV = "sandbox"\n)
+    assert source(igniter, ".mise.toml") =~ ~s(PLAID_SECRET = "replace_me")
+
+    fly = source(igniter, "fly.toml")
+    assert fly =~ ~s(  PLAID_ENV = "sandbox"\n)
+    # In the secrets comment: the release refuses to boot without them.
+    assert fly =~ "SSO_CLIENT_SECRET, PLAID_CLIENT_ID, PLAID_SECRET and the STRIPE_* keys"
+
+    refute source(igniter, "docker-compose.yml") =~ "plaid"
+  end
+
+  test "without any of the flags there is no file drop, ClamAV, scanner or Plaid setting", %{
     igniter: igniter
   } do
     refute_creates(igniter, "lib/test/file_drop.ex")
@@ -137,6 +157,10 @@ defmodule Tinderbox.InstallSaasTest do
     refute source(igniter, ".env.example") =~ "FILE_DROP_SCANNER"
     refute source(igniter, ".mise.toml") =~ "FILE_DROP_SCANNER"
     refute source(igniter, "fly.toml") =~ "FILE_DROP_SCANNER"
+    refute source(igniter, ".env.example") =~ "PLAID_ENV"
+    refute source(igniter, ".mise.toml") =~ "PLAID_ENV"
+    refute source(igniter, "fly.toml") =~ "PLAID_"
+    refute_creates(igniter, "lib/test/integrations/connectors/plaid.ex")
   end
 
   defp assert_file_drop_settings(igniter) do
