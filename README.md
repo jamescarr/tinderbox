@@ -278,11 +278,12 @@ Ash packages the other stacks use, then adds:
   `SYNC_UPDATES_AVAILABLE` webhook (an ES256 JWT over the body's sha256, checked
   against Plaid's key) asks for a sync at once. Records reach the handler as `account`,
   `transaction`, `transaction.modified` (one record per revision) and
-  `transaction.removed`. Deleting a source calls `/item/remove` first (the
-  connector's `disconnect/1`; an error keeps the source). Tests run against
-  `Plaid.Client.Fake`, never plaid.com; production refuses to boot without
-  `PLAID_CLIENT_ID` and `PLAID_SECRET`. `mix tinderbox.gen.plaid` adds it (with
-  integrations and the file drop when missing) to an existing project.
+  `transaction.removed`, each numbered in delivery order (`data["seq"]`, continued
+  across syncs) so a handler can drop a stale one. Deleting a source calls
+  `/item/remove` first (the connector's `disconnect/1`; an error keeps the source).
+  Tests run against `Plaid.Client.Fake`, never plaid.com; production refuses to boot
+  without `PLAID_CLIENT_ID` and `PLAID_SECRET`. `mix tinderbox.gen.plaid` adds it
+  (with integrations and the file drop when missing) to an existing project.
 * **Organizations** — `<App>.Accounts.Organization`, `Membership` (`owner`, `admin`,
   `member`) and `Invitation` (email, role, token link). The creator becomes the
   owner; the last owner cannot be removed or demoted. Re-inviting an address updates

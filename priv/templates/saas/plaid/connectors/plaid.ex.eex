@@ -10,7 +10,8 @@ sync. From then on the `:sync` trigger calls `sync/1` every 15 minutes, and Plai
 at once. Deleting the source removes the Item at Plaid first (`disconnect/1`), which
 ends Plaid's billing for it.
 
-Records, whose `data` is Plaid's object unchanged:
+Records, whose `data` is Plaid's object plus `seq`, the record's position in delivery
+order (increasing across syncs of the source):
 
   * `account` (`external_id` is the `account_id`), from `/accounts/get` on the first
     sync: `data["balances"]` is the balance at link time,
@@ -21,6 +22,14 @@ Records, whose `data` is Plaid's object unchanged:
     application's row by `data["transaction_id"]`,
   * `transaction.removed` (the `transaction_id`): `%{"transaction_id", "account_id"}`
     of a transaction Plaid withdrew.
+
+Each record is processed by its own job, so the records of one transaction can be
+handled in any order (a retried `transaction` after its `transaction.removed`, two
+revisions reversed). The handler keeps the latest state by upserting the row by
+`data["transaction_id"]` only when `data["seq"]` is above the `seq` the row stored (a
+row without one is older than any record with one), and on `transaction.removed` by
+flagging the row removed, with the record's `seq`, rather than deleting it, so a late
+`transaction` or `transaction.modified` cannot bring it back.
 
 Configuration is in `config/runtime.exs` (`PLAID_ENV`, `PLAID_CLIENT_ID`,
 `PLAID_SECRET`, `PLAID_COUNTRY_CODES`); `client:` is `.Client.HTTP`, or `.Client.Fake`
@@ -163,14 +172,16 @@ end
 @impl true
 def sync(%{credentials: %{"access_token" => token}} = source) do
   first? = source.cursor == %{}
+  last_seq = source.cursor["seq"] || 0
 
   with {:ok, accounts} <- if(first?, do: accounts(token), else: {:ok, []}),
        {:ok, pages} <- pull(token, source.cursor["cursor"], []) do
-    entries = accounts ++ Enum.flat_map(pages, &entries/1)
+    entries = numbered(accounts ++ Enum.flat_map(pages, &entries/1), last_seq)
     next = pages |> List.last() |> Map.fetch!("next_cursor")
-    # "" means Plaid has not finished the Item's first pull: keep the old cursor and come back.
-    cursor = if next in [nil, ""], do: source.cursor, else: %{"cursor" => next}
-    {:ok, entries, cursor}
+    # "" means Plaid has not finished the Item's first pull: keep the old cursor and come
+    # back; what was delivered (the accounts) keeps its numbers.
+    cursor = if next in [nil, ""], do: source.cursor, else: Map.put(source.cursor, "cursor", next)
+    {:ok, entries, Map.put(cursor, "seq", last_seq + length(entries))}
   end
 end
 
@@ -208,6 +219,16 @@ defp entries(page) do
   Enum.map(page["added"] || [], &transaction("transaction", &1["transaction_id"], &1)) ++
     Enum.map(page["modified"] || [], &transaction("transaction.modified", revision(&1), &1)) ++
     Enum.map(page["removed"] || [], &%{type: "transaction.removed", external_id: &1["transaction_id"], data: &1})
+end
+
+# Delivery order, continued across syncs: each record is processed by its own job, so
+# `data["seq"]` is how the handler tells a stale record from a newer one. The cursor and
+# its seq are stored in the same transaction as the records (`ingest/3`), so a retried
+# sync stored nothing and numbers from the same seq again.
+defp numbered(entries, last_seq) do
+  entries
+  |> Enum.with_index(last_seq + 1)
+  |> Enum.map(fn {entry, seq} -> put_in(entry, [:data, "seq"], seq) end)
 end
 
 defp transaction(type, external_id, tx),

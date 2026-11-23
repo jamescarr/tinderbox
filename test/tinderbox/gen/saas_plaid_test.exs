@@ -153,6 +153,7 @@ defmodule Tinderbox.Gen.SaasPlaidTest do
 
       assert_has_notice(igniter, &(&1 =~ "Plaid added"))
       refute Enum.any?(igniter.warnings, &(&1 =~ "predates"))
+      refute Enum.any?(igniter.warnings, &(&1 =~ "stores the cursor after the records"))
     end
 
     test "on a project without integrations, adds all three blocks with one migration" do
@@ -170,7 +171,7 @@ defmodule Tinderbox.Gen.SaasPlaidTest do
       assert_has_notice(igniter, &(&1 =~ "Plaid added"))
     end
 
-    test "a project whose integrations predate setup pages gets the callbacks, the destroy change, the form guard and quiet deliveries" do
+    test "a project whose integrations predate setup pages gets the callbacks, the destroy change, the form guard and quiet deliveries, and a warning about the cursor" do
       old =
         saas_project()
         |> Saas.apply(integrations: true)
@@ -204,6 +205,10 @@ defmodule Tinderbox.Gen.SaasPlaidTest do
           "lib/test_web/integrations_live.ex",
           &Regex.replace(~r/^.*setup_path.*\n/m, &1, "")
         )
+        |> rewrite(
+          "lib/test/integrations/changes/sync.ex",
+          &String.replace(&1, "ingest(source, records, cursor)", "ingest(source, records)")
+        )
         |> Igniter.rm("lib/test/integrations/changes/disconnect.ex")
 
       refute_has(source(old, @source), "Changes.Disconnect")
@@ -236,6 +241,9 @@ defmodule Tinderbox.Gen.SaasPlaidTest do
 
       assert [_warning] =
                Enum.filter(igniter.warnings, &(&1 =~ ~r/predates connector setup pages/))
+
+      assert [_warning] =
+               Enum.filter(igniter.warnings, &(&1 =~ ~r/stores the cursor after the records/))
 
       refute Enum.any?(igniter.warnings, &(&1 =~ ~r/Could not/))
     end

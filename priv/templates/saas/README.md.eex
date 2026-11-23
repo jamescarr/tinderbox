@@ -105,10 +105,13 @@ Plaid (`/integrations/plaid`, `<%= inspect(@prefix) %>.Integrations.Connectors.P
 through Plaid Link and pulls its transactions every 15 minutes (`Sync now` and Plaid's
 `SYNC_UPDATES_AVAILABLE` webhook, verified with Plaid's signature, run it sooner).
 Records reach `<%= inspect(@prefix) %>.Integrations.Handler` as `account`, `transaction`,
-`transaction.modified` (a new record per revision; `data["transaction_id"]` is the key
-to update by) and `transaction.removed`. `PLAID_ENV` is `sandbox` or `production`;
-`PLAID_CLIENT_ID` and `PLAID_SECRET` come from https://dashboard.plaid.com/developers/keys
-and go in `.mise.local.toml` (production refuses to start without them);
+`transaction.modified` (a new record per revision) and `transaction.removed`, each with
+`data["seq"]`, its place in delivery order across syncs: records are processed by
+independent jobs, so update the row keyed by `data["transaction_id"]` only when `seq`
+is above the stored one, and keep a removed transaction as a tombstone. `PLAID_ENV` is
+`sandbox` or `production`; `PLAID_CLIENT_ID` and `PLAID_SECRET` come from
+https://dashboard.plaid.com/developers/keys and go in `.mise.local.toml` (production
+refuses to start without them);
 `PLAID_COUNTRY_CODES` is a comma-separated list (`US`). In the sandbox, Link accepts
 any institution with `user_good` / `pass_good`. Plaid posts webhooks to
 `/webhooks/integrations/<source id>`, so locally they need a public URL (a tunnel) or
