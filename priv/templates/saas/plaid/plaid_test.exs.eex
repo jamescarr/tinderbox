@@ -105,26 +105,27 @@ defmodule <%= inspect(@integrations) %>.PlaidTest do
     AshOban.Test.schedule_and_run_triggers({Source, :sync})
 
     assert [
-             {"account", "acc-1"},
-             {"transaction", "tx-1"},
-             {"transaction", "tx-2"},
-             {"transaction", "tx-3"},
-             {"transaction.modified", "tx-1@" <> _fingerprint},
-             {"transaction.removed", "tx-2"}
-           ] = records(source) |> Enum.map(&{&1.type, &1.external_id}) |> Enum.sort()
+             {"account", "acc-1", 1},
+             {"transaction", "tx-1", 2},
+             {"transaction", "tx-2", 3},
+             {"transaction", "tx-3", 4},
+             {"transaction.modified", "tx-1@" <> _fingerprint, 5},
+             {"transaction.removed", "tx-2", 6}
+           ] =
+             records(source)
+             |> Enum.sort_by(& &1.data["seq"])
+             |> Enum.map(&{&1.type, &1.external_id, &1.data["seq"]})
 
     assert record(source, "transaction", "tx-3").occurred_at == ~U[2026-01-07 10:00:00Z]
     assert record(source, "transaction", "tx-1").occurred_at == ~U[2026-01-05 00:00:00Z]
 
     source = Ash.get!(Source, source.id, authorize?: false)
-    assert source.cursor == %{"cursor" => "fake-2"}
+    assert source.cursor == %{"cursor" => "fake-2", "seq" => 6}
     assert source.status == :active
   end
 
-  test "a second sync adds nothing and keeps the cursor", %{
-    owner: owner,
-    organization: organization
-  } do
+  test "a later sync delivers what changed, numbered after the earlier records, and then nothing",
+       %{owner: owner, organization: organization} do
     {:ok, source} = Plaid.connect(organization.id, "public-sandbox-abc", metadata(), owner)
     AshOban.Test.schedule_and_run_triggers({Source, :sync})
 
@@ -132,8 +133,46 @@ defmodule <%= inspect(@integrations) %>.PlaidTest do
     Ash.update!(source, %{}, action: :request_sync, actor: owner)
     AshOban.Test.schedule_and_run_triggers({Source, :sync})
 
-    assert length(records(source)) == 6
-    assert Ash.get!(Source, source.id, authorize?: false).cursor == %{"cursor" => "fake-2"}
+    assert length(records(source)) == 7
+
+    assert %{
+             type: "transaction.modified",
+             data: %{"transaction_id" => "tx-3", "amount" => 10.99, "seq" => 7}
+           } = Enum.max_by(records(source), & &1.data["seq"])
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.cursor == %{"cursor" => "fake-3", "seq" => 7}
+
+    Ash.update!(source, %{}, action: :request_sync, actor: owner)
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    assert length(records(source)) == 7
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.cursor == %{"cursor" => "fake-3", "seq" => 7}
+  end
+
+  test "while Plaid prepares the Item, the accounts are stored and the cursor waits", %{
+    owner: owner,
+    organization: organization
+  } do
+    source =
+      plaid_source_fixture(organization, owner, %{
+        credentials: %{"access_token" => "access-sandbox-not-ready"}
+      })
+
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    assert [%{type: "account", external_id: "acc-1", data: %{"seq" => 1}}] = records(source)
+
+    source = Ash.get!(Source, source.id, authorize?: false)
+    assert source.cursor == %{"seq" => 1}
+    assert source.status == :active
+
+    Ash.update!(source, %{}, action: :request_sync, actor: owner)
+    AshOban.Test.schedule_and_run_triggers({Source, :sync})
+
+    assert length(records(source)) == 1
+    assert Ash.get!(Source, source.id, authorize?: false).cursor == %{"seq" => 1}
   end
 
   test "a failed exchange leaves no source", %{owner: owner, organization: organization} do

@@ -8,8 +8,11 @@ What it answers, by the token it is given:
   * `public-sandbox-<x>` exchanges for `access-sandbox-<x>` and `item-<x>`;
     `public-sandbox-bad` is refused (`INVALID_PUBLIC_TOKEN`),
   * `/transactions/sync` from no cursor: two pages (three transactions added, one
-    modified, one removed) ending at cursor `fake-2`, then nothing new;
-    `access-sandbox-login-required` fails with `ITEM_LOGIN_REQUIRED`,
+    modified, one removed) ending at cursor `fake-2`; from `fake-2` one more
+    modification (of `tx-3`) ending at `fake-3`; then nothing new.
+    `access-sandbox-login-required` fails with `ITEM_LOGIN_REQUIRED`;
+    `access-sandbox-not-ready` answers an empty page with `next_cursor` `""` (the
+    Item's first pull is not finished),
   * `/item/remove`: `access-sandbox-stuck` fails (`API_ERROR`),
     `access-sandbox-gone` is already removed (`ITEM_NOT_FOUND`).
 
@@ -59,6 +62,9 @@ defp answer("/transactions/sync", %{"access_token" => "access-sandbox-login-requ
    %Error{code: "ITEM_LOGIN_REQUIRED", message: "the login details of this item have changed"}}
 end
 
+defp answer("/transactions/sync", %{"access_token" => "access-sandbox-not-ready"}),
+  do: {:ok, page([], [], [], false, "")}
+
 defp answer("/transactions/sync", body), do: {:ok, sync_page(body["cursor"])}
 
 defp answer("/item/remove", %{"access_token" => "access-sandbox-stuck"}),
@@ -98,6 +104,16 @@ defp sync_page("fake-1") do
     [%{"transaction_id" => "tx-2", "account_id" => "acc-1"}],
     false,
     "fake-2"
+  )
+end
+
+defp sync_page("fake-2") do
+  page(
+    [],
+    [tx("tx-3", "2026-01-07", 10.99, "Music") |> Map.put("datetime", "2026-01-07T10:00:00Z")],
+    [],
+    false,
+    "fake-3"
   )
 end
 

@@ -83,12 +83,14 @@ end
 Stores `records` for `source`: every `(type, external_id)` the source does not
 have yet becomes a `:pending` record (each with its `:process` job), the others
 are counted as duplicates. One transaction, which also marks the source as
-active just now; its events and one `:integrations_updated` go out once it has
-committed.
+active just now and, given a sync's `cursor`, stores it: the records and where
+the next sync starts commit together, so a sync retried after a failure pulls
+again only what was not stored. Its events and one `:integrations_updated` go
+out once it has committed.
 """
-@spec ingest(Source.t(), [<%= inspect(@integrations) %>.Connector.entry()]) ::
+@spec ingest(Source.t(), [<%= inspect(@integrations) %>.Connector.entry()], map() | nil) ::
         {:ok, summary()} | {:error, term()}
-def ingest(source, records) when is_list(records) do
+def ingest(source, records, cursor \\ nil) when is_list(records) do
   <%= inspect(@repo) %>.transaction(fn ->
     known = known_keys(source, records)
 
@@ -105,11 +107,11 @@ def ingest(source, records) when is_list(records) do
       end)
 
     # Sent once the transaction has committed, below.
-    case Ash.update(source, %{},
-           action: :touch,
-           authorize?: false,
-           return_notifications?: true
-         ) do
+    source
+    |> Ash.Changeset.for_update(:touch, %{}, authorize?: false)
+    |> keep_cursor(cursor)
+    |> Ash.update(authorize?: false, return_notifications?: true)
+    |> case do
       {:ok, _source, notifications} ->
         {%{created: created, duplicates: duplicates}, notifications}
 
@@ -127,6 +129,11 @@ def ingest(source, records) when is_list(records) do
       {:error, error}
   end
 end
+
+defp keep_cursor(changeset, nil), do: changeset
+
+defp keep_cursor(changeset, cursor),
+  do: Ash.Changeset.force_change_attribute(changeset, :cursor, cursor)
 
 defp known_keys(_source, []), do: MapSet.new()
 

@@ -92,6 +92,7 @@ defmodule Tinderbox.Gen.Saas.Plaid do
     |> ensure_setup_guard(assigns)
     |> ensure_quiet_delivery(assigns)
     |> check_integrations_live(assigns)
+    |> check_sync_cursor(assigns)
     |> add_fixture(assigns)
     |> add_tests(assigns)
   end
@@ -346,6 +347,26 @@ defmodule Tinderbox.Gen.Saas.Plaid do
           "#{inspect(live)} predates connector setup pages: its Add-a-source form still " <>
             "lists Plaid (such a source is refused). To hide it and link /integrations/plaid " <>
             "instead, copy the @addable handling from tinderbox's integrations_live.ex.eex."
+        )
+    end
+  end
+
+  # Plaid numbers its records from the `seq` stored with the cursor: a Sync change that
+  # stores the cursor after the records lets a sync retried in between number again.
+  defp check_sync_cursor(igniter, assigns) do
+    sync = Module.concat([assigns[:integrations], "Changes", "Sync"])
+
+    case Edits.source_contains?(igniter, sync, "ingest(source, records, cursor)") do
+      {igniter, true} ->
+        igniter
+
+      {igniter, false} ->
+        Igniter.add_warning(
+          igniter,
+          "#{inspect(sync)} stores the cursor after the records: a sync retried in " <>
+            "between numbers Plaid's records from the old seq again, so a handler can " <>
+            "drop a newer revision. To store both in one transaction, copy ingest/3 " <>
+            "from tinderbox's integrations.ex.eex and its call from changes/sync.ex.eex."
         )
     end
   end
